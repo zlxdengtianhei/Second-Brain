@@ -107,7 +107,7 @@ def create_server(root: Path, *, writer: bool = False):
             """
             from . import config
             from .executors.factory import build
-            producer, reviewer = build(config.current(), executor)
+            producer, reviewer = build(config.current(), executor, vault=str(service.root))
             return service.job_advance(job, producer=producer, reviewer=reviewer, apply=not proposal_only)
     return server
 

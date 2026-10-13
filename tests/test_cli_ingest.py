@@ -40,7 +40,7 @@ def test_host_flow_through_the_cli(tmp_path, capsys):
     def answer(handoff, payload, model):
         path = tmp_path / f"{handoff['run_id']}.json"
         path.write_text(json.dumps(payload), encoding='utf-8')
-        assert handoff['submit_cmd'].startswith(f'sb --vault {root} job submit {job_id}')
+        assert f'sb --vault {root} job submit {job_id}' in handoff['submit_cmd']
         code, submitted, err = run(capsys, root, 'job', 'submit', job_id, '--role', handoff['role'],
                                    '--run-id', handoff['run_id'], '--file', str(path), '--model', model)
         assert code == 0, err
@@ -190,3 +190,26 @@ def test_rerunning_a_partial_source_reports_unchanged_without_an_executor(tmp_pa
     code, out, err = run(capsys, root, 'ingest', str(copy))
     assert code == 0, err
     assert out[0]['status'] == 'unchanged' and out[0]['result'] == 'partial' and out[0]['pending'] == 1
+
+
+def test_submit_commands_reach_the_same_config_and_state(tmp_path, capsys, monkeypatch):
+    import shlex
+    import subprocess
+    import sys
+    root = build_ingest_vault(tmp_path / 'vault')
+    cfg = tmp_path / 'sb config.toml'
+    cfg.write_text(f'vault = "{root}"\n[cards]\ndiagrams = false\n', encoding='utf-8')
+    assert cli.main(['--config', str(cfg), 'ingest', '--all', '--executor', 'host']) == 0
+    [state] = json.loads(capsys.readouterr().out)
+    handoff = state['handoffs'][0]
+    cmd = handoff['submit_cmd']
+    assert f'--vault {shlex.quote(str(root))}' in cmd and f'--config {shlex.quote(str(cfg))}' in cmd
+    assert cmd.startswith('SECONDBRAIN_STATE_DIR=')  # the tests set the state dir by environment
+    path = tmp_path / 'answer.json'
+    path.write_text(json.dumps(first_candidate()), encoding='utf-8')
+    runnable = cmd.replace('<model id>', 'gpt-test').replace(' sb ', f' {shlex.quote(sys.executable)} -m secondbrain ', 1)
+    runnable = runnable.replace(shlex.quote(handoff['output_path']), shlex.quote(str(path)))
+    env = {'PATH': '/usr/bin:/bin', 'SECONDBRAIN_CONFIG': str(tmp_path / 'other.toml')}
+    done = subprocess.run(runnable, shell=True, capture_output=True, text=True, env=env)
+    assert done.returncode == 0, done.stderr
+    assert json.loads(done.stdout)['run_id'] == handoff['run_id']

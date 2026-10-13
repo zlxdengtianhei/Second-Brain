@@ -150,8 +150,7 @@ def parser():
 def make_executors(args, root: Path):
     """Return ``(producer, reviewer)`` executors for this invocation."""
     from .executors.factory import build
-    return build(config.current(), getattr(args, 'executor', None),
-                 vault=str(root) if args.vault else None)
+    return build(config.current(), getattr(args, 'executor', None), vault=str(root))
 
 
 def _ingest(args, root: Path) -> list:
@@ -208,7 +207,7 @@ def _job(args, root: Path):
     if args.job_command == 'reset':
         return jobs.archive(root, args.id, reason=args.reason)
     if args.job_command == 'packet':
-        return service.job_packet(args.id, args.role, args.chunk, vault_arg=str(root) if args.vault else None)
+        return service.job_packet(args.id, args.role, args.chunk)
     producer, reviewer = make_executors(args, root)
     return service.job_advance(args.id, producer=producer, reviewer=reviewer, apply=not args.proposal_only)
 

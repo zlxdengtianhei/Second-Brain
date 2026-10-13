@@ -44,10 +44,10 @@ class Service:
             return state
         return {**state, 'run_records': jobs.list_runs(self.root, job_id)}
 
-    def job_packet(self, job_id: str, role: str, chunk: str | None = None, *, vault_arg: str | None = None) -> dict:
+    def job_packet(self, job_id: str, role: str, chunk: str | None = None) -> dict:
         """Create the next run for ``role`` and return its hand-off (packet file, run id, submit command)."""
         from .executors.host import HostExecutor
-        host = HostExecutor(vault=vault_arg)
+        host = HostExecutor.for_vault(self.root)
         if jobs.load(self.root, job_id)['kind'] == 'ingest':
             from .pipelines.ingest import packet_for
             return packet_for(self.root, job_id, role=role, chunk=chunk, executor=host)

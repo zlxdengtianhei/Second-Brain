@@ -9,7 +9,7 @@ def build(settings: Settings, mode: str | None = None, *, vault: str | None = No
     mode = mode or settings.executor_default
     if mode == 'host':
         from .host import HostExecutor
-        executor = HostExecutor(vault=vault)
+        executor = HostExecutor.for_vault(vault) if vault else HostExecutor()
         return executor, executor
     if mode != 'api':
         raise ValueError(f'unknown executor mode {mode!r}')
