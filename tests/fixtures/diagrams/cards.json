@@ -1,0 +1,54 @@
+[
+  {
+    "ref": "networking/etag-revalidation",
+    "title": "浏览器用 ETag 协商缓存",
+    "kind": "mechanism",
+    "domain": "networking",
+    "essence": "缓存过期后，浏览器带上 ETag 询问服务器资源是否变化，未变化时服务器只回 304。",
+    "propositions": [
+      "首次请求时，服务器在响应头中返回资源的 ETag，浏览器把资源和 ETag 一起存入缓存。",
+      "缓存过期后，浏览器发送带 If-None-Match（值为 ETag）的条件请求。",
+      "若资源未变化，服务器返回 304 Not Modified 且不带响应体，浏览器继续使用缓存副本。",
+      "若资源已变化，服务器返回 200 和新资源及新 ETag。"
+    ],
+    "related_titles": ["HTTP 强缓存与 Cache-Control", "Last-Modified 协商缓存"]
+  },
+  {
+    "ref": "operating-systems/segmented-paging",
+    "title": "段页式地址变换",
+    "kind": "mechanism",
+    "domain": "operating-systems",
+    "essence": "段页式系统把逻辑地址分成段号、段内页号、页内偏移三段，先查段表再查页表得到物理地址。",
+    "propositions": [
+      "逻辑地址由段号、段内页号和页内偏移三部分组成。",
+      "用段号查段表，得到该段页表的起始地址。",
+      "用段内页号查该段的页表，得到物理块号。",
+      "物理块号与页内偏移拼接成物理地址；不计快表时共需访问内存 3 次。"
+    ],
+    "related_titles": ["分页存储管理", "分段存储管理", "快表 TLB"]
+  },
+  {
+    "ref": "algorithms/binary-search",
+    "title": "二分查找在有序数组上定位目标",
+    "kind": "mechanism",
+    "domain": "algorithms",
+    "essence": "二分查找每轮把有序区间减半，直到命中或区间为空。",
+    "propositions": [
+      "二分查找每轮取区间中点 mid，比较 a[mid] 与目标值。",
+      "若 a[mid] 小于目标值，则令 lo = mid + 1；若大于目标值，则令 hi = mid - 1；相等时返回 mid。",
+      "当 lo > hi 时区间为空，返回 -1 表示未找到。"
+    ],
+    "related_titles": ["有序数组", "二分答案"]
+  },
+  {
+    "ref": "operating-systems/process-vs-thread",
+    "title": "进程与线程的资源归属",
+    "kind": "contrast",
+    "domain": "operating-systems",
+    "essence": "进程拥有资源，线程只负责被调度执行。",
+    "propositions": [
+      "进程是资源分配的基本单位，拥有独立地址空间；线程是调度的基本单位，同一进程内的线程共享地址空间。"
+    ],
+    "related_titles": ["进程", "线程"]
+  }
+]
