@@ -1,10 +1,12 @@
 # Review registry
 
+[中文](review-registry.zh-CN.md)
+
 The review registry records every review of every card as an append-only event
 log. Scheduling state (due date, stability, difficulty) is never stored in card
 files. Every reader rebuilds it by replaying the log with FSRS.
 
-Three writers share one format:
+Four writers share one format. Each writes one `mode`:
 
 | Writer | Mode | Where |
 |---|---|---|
