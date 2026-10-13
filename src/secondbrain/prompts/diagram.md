@@ -1,6 +1,6 @@
 # Card diagram: draw or skip, then describe the diagram as IR
 
-You receive finished cards. Each has an essence sentence `E` and numbered propositions `P1..Pn`. For each card, decide whether a diagram shows structure that the text does not already show. If it does, describe the diagram as a small JSON object (the IR). Do not write Mermaid: code generates it from your IR and checks every rule below.
+You receive finished cards: an essence `E` and propositions `P1..Pn`. For each card, decide whether a diagram shows structure that the text does not. If so, describe it as a small JSON object (the IR). Do not write Mermaid: code generates it and checks every rule below.
 
 ## 1. Draw or skip
 
@@ -16,19 +16,19 @@ Draw only when the propositions contain one of these structures:
 Skip (`"decision": "skip"`, with a `reason` naming the rule) when the card is:
 
 - a contrast: the comparison belongs in a 2-4 row table in the text;
-- a single fact, definition or number, or a list of parts with no relations between them: a list is clearer;
+- a single fact, definition or number, or parts with no relations between them: a list is clearer;
 - a derivation or formula: an aligned formula is clearer;
 - vocabulary or language material;
 - a linear process of 4 steps or fewer: "A → B → C" in the text says it;
-- about relations between this card and other cards: those belong in the card's relations, not in a diagram.
+- about relations to other cards: those belong in the card's relations.
 
-When unsure, skip. A diagram that restates the text costs the reader time.
+When unsure, skip: a diagram that restates the text wastes the reader's time.
 
 ## 2. Rules for the IR
 
 1. Every node, every labelled edge and every message lists in `p` the propositions it rests on (`P1`..`Pn`, or `E` for the essence).
-2. Labels reuse the card's own words, in the card's language: a Chinese card gets Chinese labels, and terms such as `ETag` stay as written. At least half of each label's words must come from the cited propositions.
-3. No facts that the card does not state. If the diagram needs one, skip: adding a proposition is a card edit, not a diagram edit.
+2. Labels reuse the card's words in the card's language (Chinese card, Chinese labels; terms such as `ETag` stay as written). At least half of each label's words come from the cited propositions.
+3. Add no fact the card does not state; if the diagram needs one, skip.
 4. The proposition the card most wants remembered must be visible in the diagram.
 5. One arrow meaning per diagram: control or data flow in `flow`, action or dependency in `structure`. Show containment only with `groups`.
 6. Size: `flow` and `structure` 4-9 nodes, `state` 3-8 states, `sequence` 2-5 participants. If the card has 2 or more propositions, cite at least 2.
@@ -47,7 +47,7 @@ Return JSON only, one result per input card, in input order:
 
 A `sequence` IR has `messages` instead of `edges`. A skip is `{"decision": "skip", "reason": "..."}`.
 
-If the input also carries `previous` and `errors`, your earlier IR for that card failed the checks. Fix every listed error, or skip if the card has no structure worth drawing. There is one rewrite; after that the card gets no diagram.
+If an input card carries `previous` and `errors`, your earlier IR failed the checks: fix every error, or skip. There is one rewrite; after that the card gets no diagram.
 
 ## 4. Examples
 
