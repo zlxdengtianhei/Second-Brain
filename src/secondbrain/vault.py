@@ -14,6 +14,7 @@ import hashlib
 import json
 import os
 import re
+import stat
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -34,15 +35,13 @@ class VaultError(ValueError):
 # --------------------------------------------------------------------------
 # Safe loader that rejects duplicate mapping keys.
 #
-# PyYAML 6.x default safe_load silently keeps the *last* duplicate key. The
-# interface contract requires duplicate keys to be rejected, so add a loader
-# that raises on them while otherwise behaving exactly like SafeLoader (so
-# multi-line block scalars, flow values, CRLF and non-ASCII keys still load).
+# PyYAML's safe_load silently keeps the *last* duplicate key; the vault
+# contract rejects duplicates, so this loader raises on them while otherwise
+# behaving exactly like the safe loader. The C (libyaml) base is about 9x
+# faster on a large vault and produces identical results; the pure-Python base
+# is used when libyaml is missing or SECONDBRAIN_PURE_YAML=1 is set (the CI
+# matrix runs both and compares).
 # --------------------------------------------------------------------------
-class _NoDupLoader(yaml.SafeLoader):
-    pass
-
-
 def _construct_unique_mapping(loader, node, deep=False):
     mapping = {}
     for key_node, value_node in node.value:
@@ -55,9 +54,30 @@ def _construct_unique_mapping(loader, node, deep=False):
     return mapping
 
 
-_NoDupLoader.add_constructor(
+class _NoDupPyLoader(yaml.SafeLoader):
+    pass
+
+
+_NoDupPyLoader.add_constructor(
     yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, _construct_unique_mapping
 )
+
+if hasattr(yaml, "CSafeLoader"):
+    class _NoDupCLoader(yaml.CSafeLoader):
+        pass
+
+    _NoDupCLoader.add_constructor(
+        yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, _construct_unique_mapping
+    )
+else:  # pragma: no cover - depends on the PyYAML build
+    _NoDupCLoader = None
+
+if _NoDupCLoader is not None and os.environ.get("SECONDBRAIN_PURE_YAML") != "1":
+    _NoDupLoader = _NoDupCLoader
+    LOADER_NAME = "libyaml"
+else:
+    _NoDupLoader = _NoDupPyLoader
+    LOADER_NAME = "python"
 
 
 def _safe_load_unique(text):
@@ -193,6 +213,11 @@ def parse_note(raw: bytes):
     ``body`` is the full text after the frontmatter (including any spaced
     repetition section), decoded as UTF-8.
     """
+    fm, body, _start = _parse_note(raw)
+    return fm, body
+
+
+def _parse_note(raw: bytes):
     if not isinstance(raw, (bytes, bytearray)):
         raise VaultError("raw must be bytes")
     raw = bytes(raw)
@@ -209,7 +234,7 @@ def parse_note(raw: bytes):
         body = body_bytes.decode("utf-8")
     except UnicodeDecodeError as exc:
         raise VaultError("body is not valid UTF-8: %s" % (exc,)) from exc
-    return data, body
+    return data, body, body_start
 
 
 def patch_frontmatter(raw: bytes, updates: dict) -> bytes:
@@ -354,6 +379,48 @@ def _walk_md(root: str, issues: list):
             yield rel, raw
 
 
+def _scan_md(root: str, issues: list):
+    """Yield ``(relpath, fullpath, stat)`` for every regular ``.md`` card file.
+
+    Same traversal, order and issue codes as :func:`_walk_md`, but only stats
+    the files; bytes are read later, and only on a parse-cache miss.
+    """
+    root = os.path.normpath(str(root))
+    base = os.path.join(root, KNOWLEDGE_RELPATH)
+    if not os.path.isdir(base):
+        issues.append({"code": "knowledge_dir_missing", "path": KNOWLEDGE_RELPATH,
+                       "detail": "10_Knowledge does not exist"})
+        return
+    cut = len(root) + 1
+    for dirpath, dirnames, filenames in os.walk(base):
+        dirnames.sort()
+        filenames.sort()
+        prefix = dirpath + os.sep
+        for name in filenames:
+            full = prefix + name
+            rel = full[cut:].replace(os.sep, "/") if os.sep != "/" else full[cut:]
+            try:
+                st = os.lstat(full)
+            except OSError as exc:
+                issues.append({"code": "read_error", "path": rel, "detail": str(exc)})
+                continue
+            if stat.S_ISLNK(st.st_mode):
+                issues.append({"code": "unsafe_symlink", "path": rel,
+                               "detail": "symbolic links are not read"})
+                continue
+            if not name.endswith(".md"):
+                continue
+            if not _path_is_safe(rel):
+                issues.append({"code": "unsafe_path", "path": rel,
+                               "detail": "path escapes knowledge root"})
+                continue
+            if not stat.S_ISREG(st.st_mode):
+                issues.append({"code": "read_error", "path": rel,
+                               "detail": "not a regular file"})
+                continue
+            yield rel, full, st
+
+
 # --------------------------------------------------------------------------
 # Snapshot
 # --------------------------------------------------------------------------
@@ -459,13 +526,21 @@ def _load_taxonomies(root, issues):
     return taxonomies, raw_hashes
 
 
-def read_snapshot(root, *, catalog=None) -> Snapshot:
+def read_snapshot(root, *, catalog=None, use_cache=None) -> Snapshot:
     """Read a deterministic snapshot of the vault rooted at ``root``.
 
     ``catalog`` may be supplied explicitly (used for initialization and
     isolated tests); otherwise ``_data/secondbrain/catalog.json`` is read if
     present (a missing file is recorded as an explicit issue, not an error).
+
+    Card parsing goes through the parse cache in the vault's external state
+    root (``use_cache``; default on unless ``SECONDBRAIN_NO_CACHE=1``): only
+    files whose (size, mtime, ctime, inode) changed are read and parsed. The
+    cache only speeds up reads; every write re-checks real file hashes.
     """
+    from . import cache as parse_cache
+    if use_cache is None:
+        use_cache = os.environ.get("SECONDBRAIN_NO_CACHE") != "1"
     root = os.fspath(root)
     issues = []
     if not os.path.isdir(root):
@@ -505,13 +580,31 @@ def read_snapshot(root, *, catalog=None) -> Snapshot:
     root_path = _Path(root)
     cards = {}
     card_sha_by_rel = {}
-    for rel, raw in _walk_md(root, issues):
-        try:
-            fm, body = parse_note(raw)
-        except VaultError as exc:
-            issues.append({"code": "parse_failure", "path": rel,
-                           "detail": str(exc)})
-            continue
+    cached = parse_cache.load(root, LOADER_NAME) if use_cache else {}
+    entries = {}
+    parsed = 0
+    for rel, full, st in _scan_md(root, issues):
+        key = (st.st_size, st.st_mtime_ns, st.st_ctime_ns, st.st_ino)
+        hit = cached.get(rel)
+        if hit is not None and hit[0] == key:
+            _key, sha, fm, raw, body_start = hit
+            body = raw[body_start:].decode("utf-8")
+        else:
+            try:
+                with open(full, "rb") as handle:
+                    raw = handle.read()
+            except OSError as exc:
+                issues.append({"code": "read_error", "path": rel, "detail": str(exc)})
+                continue
+            try:
+                fm, body, body_start = _parse_note(raw)
+            except VaultError as exc:
+                issues.append({"code": "parse_failure", "path": rel,
+                               "detail": str(exc)})
+                continue
+            sha = _sha256(raw)
+            parsed += 1
+        entries[rel] = (key, sha, fm, raw, body_start)
         card_id = fm.get("id")
         if not isinstance(card_id, str) or not card_id:
             issues.append({"code": "missing_id", "path": rel,
@@ -527,7 +620,6 @@ def read_snapshot(root, *, catalog=None) -> Snapshot:
             domain = ""
         elif not isinstance(domain, str):
             domain = str(domain)
-        sha = _sha256(raw)
         card_sha_by_rel[rel] = sha
 
         if rel in cards:
@@ -555,7 +647,7 @@ def read_snapshot(root, *, catalog=None) -> Snapshot:
 
     # Registry notes whose declared file was not found or not parsed.
     for npath in reg_by_path:
-        if not npath.startswith(KNOWLEDGE_RELPATH + "/"):
+        if not npath.startswith(KNOWLEDGE_RELPATH + "/") or npath in card_sha_by_rel:
             continue
         exists = os.path.exists(root_path.joinpath(*npath.split("/")))
         if not exists:
@@ -575,6 +667,8 @@ def read_snapshot(root, *, catalog=None) -> Snapshot:
                     issues.append({"code": "missing_taxonomy", "path": PILLARS_RELPATH,
                                    "detail": "no taxonomy for catalog domain %r (MOC %r)" % (slug, moc)})
 
+    if use_cache and (parsed or set(entries) != set(cached)):
+        parse_cache.save(root, LOADER_NAME, entries)
     fingerprint = _compute_fingerprint(cards, registry_raw, catalog_data, taxonomies)
     read_hashes.update(taxonomy_hashes)
     read_hashes.update(card_sha_by_rel)

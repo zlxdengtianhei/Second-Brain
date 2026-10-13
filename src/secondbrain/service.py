@@ -58,10 +58,10 @@ class Service:
         raise ValueError('part须为overview/cards/taxonomy/catalog/neighbors/candidate/review')
 
     def search(self, query: str, limit: int = 12):
-        from .search import search
+        from .index import search
         if not query.strip() or not 1 <= limit <= 50:
             raise ValueError('query不能为空，limit须为1–50')
-        return search(self.snapshot(), query, limit=limit)
+        return search(self.root, self.snapshot(), query, limit=limit)
 
     def submit(self, job_id: str, payload: dict, *, role: str, run_id: str,
                model: str | None = None):
