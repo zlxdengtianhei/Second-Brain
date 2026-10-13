@@ -90,6 +90,7 @@ def parser():
     ingest = sub.add_parser('ingest', help='Turn sources into reviewed cards (S1-S9)')
     ingest.add_argument('paths', nargs='*', type=Path)
     ingest.add_argument('--all', action='store_true', help='Every new or unfinished inbox item')
+    ingest.add_argument('--retry', metavar='JOB', help='Redo only the pending items of a partial job (child job)')
     ingest.add_argument('--executor', choices=['api', 'host'], help='Override [executor].default')
     ingest.add_argument('--prepare-only', action='store_true', help='Freeze input and chunks; no model call')
     ingest.add_argument('--proposal-only', action='store_true', help='Produce and review, but do not write')
@@ -157,15 +158,24 @@ def _ingest(args, root: Path) -> list:
     from . import inbox
     from .pipelines import ingest
     paths = list(args.paths)
+    if args.max_rounds is not None:
+        if args.max_rounds < 0:
+            raise ValueError('--max-rounds must be 0 or more')
+        config.set_review_policy(replace(config.review_policy(), max_repair_rounds=args.max_rounds))
+    if args.retry:
+        if paths or args.all:
+            raise ValueError('--retry takes a job id instead of paths or --all')
+        child = ingest.retry(root, args.retry)
+        if args.prepare_only or child['status'] in {'applied', 'partial', 'failed'}:
+            return [child]
+        producer, reviewer = make_executors(args, root)
+        return [ingest.advance(root, child['job_id'], producer=producer, reviewer=reviewer,
+                               apply=not args.proposal_only)]
     if args.all:
         lay_items = [i for i in inbox.scan(root) if i['status'] in {'new', 'in_progress'}]
         paths += [root / i['path'] for i in lay_items]
     if not paths:
         raise ValueError('Give source paths or --all')
-    if args.max_rounds is not None:
-        if args.max_rounds < 0:
-            raise ValueError('--max-rounds must be 0 or more')
-        config.set_review_policy(replace(config.review_policy(), max_repair_rounds=args.max_rounds))
     results = []
     executors = None
     for path in paths:

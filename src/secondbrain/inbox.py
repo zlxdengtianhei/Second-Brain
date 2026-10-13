@@ -98,6 +98,10 @@ def scan(root: Path) -> list[dict]:
         status = _job_status(root, item['job_id'])
         if record and record['status'] == 'skipped':
             item.update(status='skipped', reason=record.get('reason'))
+        elif record and record['status'] == 'partial':
+            item.update(status='partial', via=record['via'], job_id=record.get('job_id') or item['job_id'],
+                        pending=record.get('pending'),
+                        note=f'some cards are pending; sb ingest --retry {record.get("job_id") or item["job_id"]}')
         elif record:
             item.update(status='done', via=record['via'], result=record['status'])
         elif status in TERMINAL_DONE:

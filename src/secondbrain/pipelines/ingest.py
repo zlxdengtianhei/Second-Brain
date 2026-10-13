@@ -40,7 +40,7 @@ from ..store import Change, Conflict, digest, read_bytes
 from ..vault import Card, parse_note, patch_frontmatter, read_snapshot
 from . import card_diagrams
 from .chunking import chunk_text
-from .routing import route
+from .routing import essence, route
 
 KIND = 'ingest'
 METHOD = 'ingest/3'
@@ -164,6 +164,61 @@ def prepare(root: Path, source: Path, *, settings: config.Settings | None = None
             'inbox_path': inbox_path}
 
 
+def retry(root: Path, job_id: str, *, settings: config.Settings | None = None) -> dict:
+    """Start a child job that redoes only the pending items of a ``partial`` ingest job.
+
+    The child (``<first job>-retry<N>``) reads the same frozen source and
+    chunks, but a fresh catalog, taxonomy and routing from the vault as it is
+    now; its packets carry the open items with the reviewer's reasons and the
+    cards of each chunk that are already written. It has its own transaction,
+    so it can be rolled back on its own. Calling it again on the same parent
+    returns the existing child.
+    """
+    settings = settings or config.current()
+    root = Path(root)
+    parent = jobs.load(root, job_id)
+    if parent['kind'] != KIND or parent['status'] != 'partial':
+        raise IngestError(f'Only a partial ingest job can be retried; {job_id} is {parent["status"]}')
+    if parent.get('retried_by'):
+        return {**jobs.load(root, parent['retried_by']), 'resumed': True}
+    old = jobs.read_input(root, job_id)
+    lineage = old.get('retry') or {}
+    first, number = lineage.get('root', job_id), lineage.get('round', 0) + 1
+    open_items: dict = {}
+    for item in list(parent.get('pending') or []) + list(parent.get('needs_taxonomy') or []):
+        open_items.setdefault(item['chunk'], []).append(item)
+    if not open_items:
+        raise IngestError(f'{job_id} has no pending items to retry')
+    written = {cid: list(cards) for cid, cards in (lineage.get('written') or {}).items()}
+    for card in parent.get('produced') or []:
+        written.setdefault(card['chunk'], []).append({'id': card['id'], 'title': card['title'], 'slug': card.get('slug')})
+    snapshot = read_snapshot(root)
+    writable_snapshot(snapshot)
+    validate_catalog(snapshot.catalog)
+    chunks = []
+    for cid in [c['chunk_id'] for c in effective_chunks(old, parent) if c['chunk_id'] in open_items]:
+        chunk = {k: v for k, v in _chunk(old, cid).items() if k not in {'candidate_domains', 'neighbors', 'routing'}}
+        routed = route(root, snapshot, old['source']['text'][chunk['start']:chunk['end']],
+                       domains=settings.ingest.candidate_domains)
+        chunks.append({**chunk, 'candidate_domains': routed['domains'], 'neighbors': routed['neighbors'],
+                       'routing': {'votes': routed['votes'], 'passages': routed['passages']}})
+    for card_list in written.values():
+        for card in card_list:
+            if card['id'] in snapshot.cards:
+                card['essence'] = essence(snapshot.cards[card['id']])
+    domains = sorted(snapshot.catalog['domains'])
+    packet = {**old, 'chunks': chunks, 'catalog': snapshot.catalog,
+              'taxonomy': taxonomy_packet(snapshot, domains), 'taxonomy_sha256': taxonomy_fingerprint(snapshot),
+              'topic_counts': _topic_counts(snapshot), 'snapshot_fingerprint': snapshot.fingerprint,
+              'retry': {'of': job_id, 'root': first, 'round': number,
+                        'pending': {cid: open_items[cid] for cid in open_items},
+                        'written': written}}
+    child = f'{first}-retry{number}'
+    state = jobs.create(root, child, KIND, packet)
+    jobs._internal_update(root, job_id, retried_by=child)
+    return {**state, 'retry_of': job_id, 'chunks': [c['chunk_id'] for c in chunks]}
+
+
 # --------------------------------------------------------------------------
 # Packets (S3 producer, S6 reviewer)
 # --------------------------------------------------------------------------
@@ -233,6 +288,12 @@ def _legal_pairs(packet: dict, domain: str) -> set:
     tax = _taxonomy_of(packet, domain)
     return {(p['name'], t) for p in tax.get('pillars', []) if isinstance(p, dict)
             for t in p.get('topics', []) if isinstance(t, str)}
+
+
+def _written_slugs(packet: dict) -> dict:
+    """slug -> id of the cards earlier jobs of this source wrote (retry jobs only)."""
+    written = (packet.get('retry') or {}).get('written') or {}
+    return {c['slug']: c['id'] for cards in written.values() for c in cards if c.get('slug')}
 
 
 def _legal_listing(packet: dict, domain: str) -> str:
@@ -305,6 +366,9 @@ def producer_packet(root: Path, state: dict, packet: dict, slot: str) -> dict:
            'other_chunks_cards': _other_cards(root, state, packet, base),
            'rules': {'new_topics_per_source': packet['settings']['new_topics_per_source'],
                      'flashcards_per_card': [2, 4], 'id_prefix': packet['settings']['id_prefix']}}
+    if packet.get('retry'):
+        out['retry'] = {'findings': packet['retry']['pending'].get(base, []),
+                        'written_cards': packet['retry']['written'].get(base, [])}
     if rnd:
         prev_slot = _slot_name(base, rnd - 1)
         previous = jobs.artifact(root, state, 'candidate', prev_slot)
@@ -367,6 +431,8 @@ def review_packet(root: Path, state: dict, packet: dict, slot: str) -> dict:
     if rnd:
         kept = _accepted_so_far(root, state, base, rnd)
         out['already_accepted_cards'] = [withhold_reasons(c) for c in kept.values()]
+    if packet.get('retry'):
+        out['already_written_cards'] = packet['retry']['written'].get(base, [])
     return out
 
 
@@ -533,6 +599,7 @@ def validate_candidate(packet: dict, payload: dict, *, slot: str, other_cards: l
             target = r.get('target')
             if not isinstance(target, str) or target == slug or not (
                     target in existing_ids or target in other_slugs or target in kept_slugs
+                    or target in _written_slugs(packet)
                     or any(isinstance(x, dict) and x.get('slug') == target for x in cards)):
                 errors.append(f'{where}.relations: target {target!r} is neither an existing card id '
                               'nor a slug of this source')
@@ -783,6 +850,8 @@ def _step(root: Path, job_id: str, action: tuple, producer, reviewer) -> None:
                       output_schema=schemas.REVIEW_CARDS, chunk=slot)
         return
     text = _prompt('produce_cards.md', state)
+    if packet.get('retry'):
+        text += '\n' + _prompt_only('retry_cards.md')
     if kind == 'repair':
         text += '\n' + _prompt_only('repair_cards.md')
     base = _base(slot)
@@ -1080,6 +1149,8 @@ def apply_job(root: Path, job_id: str, settled: list[dict] | None = None) -> dic
                 tid = target
             elif target in ids:
                 tid = ids[target]
+            elif target in _written_slugs(packet) and _written_slugs(packet)[target] in snapshot.cards:
+                tid = _written_slugs(packet)[target]
             else:
                 skipped_relations.append({'from': ids[slug], 'type': r['type'], 'target_slug': target,
                                           'reason': 'target card was not written'})
