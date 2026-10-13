@@ -126,6 +126,19 @@ describe("ReviewService", () => {
 		expect(stateToDict(again.state("ex_binary_search")!)).toEqual(incremental);
 		expect(a.files.get("_data/review/events-obs-svc.jsonl")).toContain('"rating":2');
 	});
+	it("caches queue and summary until events, cards or the day change", async () => {
+		const { svc, setNow } = setup();
+		await svc.reload();
+		const q1 = svc.queue();
+		expect(svc.queue()).toBe(q1);
+		await svc.record({ card: "ex_tls", mode: "flip", rating: 3 });
+		const q2 = svc.queue();
+		expect(q2).not.toBe(q1);
+		expect(q2.new.map((c) => c.id)).not.toContain("ex_tls");
+		setNow("2026-03-11T12:00:00.000+01:00");
+		expect(svc.queue()).not.toBe(q2);
+		expect(svc.summary().today).toBe("2026-03-11");
+	});
 	it("falls back to a full replay when a recorded event is older than the newest one", async () => {
 		const { svc } = setup();
 		await svc.reload();

@@ -14,6 +14,7 @@ import {
 	replay,
 	type ReplayResult,
 	emptyResult,
+	learningDay,
 	type ReviewEvent,
 	type Stamp,
 	summarize,
@@ -42,6 +43,9 @@ export class ReviewService {
 	private lastKey: ReviewEvent | null = null;
 	private ranked: { version: string; cards: IndexedCard[] } | null = null;
 	private listeners = new Set<() => void>();
+	/** Bumped whenever events or the taxonomy change; keys the queue and summary caches. */
+	private version = 0;
+	private cache = new Map<string, { key: string; value: unknown }>();
 	taxonomy: Taxonomy = emptyTaxonomy();
 	loaded = false;
 
@@ -66,6 +70,7 @@ export class ReviewService {
 
 	setTaxonomy(tax: Taxonomy): void {
 		this.taxonomy = tax;
+		this.version++;
 		this.ranked = null;
 		this.notify();
 	}
@@ -79,6 +84,7 @@ export class ReviewService {
 		const ordered = orderEvents(events);
 		this.lastKey = ordered[ordered.length - 1] ?? null;
 		this.loaded = true;
+		this.version++;
 		this.notify();
 	}
 
@@ -104,15 +110,27 @@ export class ReviewService {
 		return this.result;
 	}
 
+	/** Same inputs (events, cards, settings, learning day) give the same answer: compute once. */
+	private memo<T>(name: string, now: Stamp, compute: () => T): T {
+		const key = [this.version, this.cards.version, this.opts.newPerDay(), this.opts.studyDomains().join(","), learningDay(now), now.offsetMin].join("|");
+		const hit = this.cache.get(name);
+		if (hit && hit.key === key) return hit.value as T;
+		const value = compute();
+		this.cache.set(name, { key, value });
+		return value;
+	}
+
 	summary(now: Stamp = this.now()): Summary {
-		return summarize(this.cards.all(), this.result, now);
+		return this.memo("summary", now, () => summarize(this.cards.all(), this.result, now));
 	}
 
 	queue(now: Stamp = this.now()): Queue<IndexedCard> {
-		return buildQueue(this.rankedCards(), this.result, now, {
-			newPerDay: this.opts.newPerDay(),
-			domains: this.opts.studyDomains(),
-		});
+		return this.memo("queue", now, () =>
+			buildQueue(this.rankedCards(), this.result, now, {
+				newPerDay: this.opts.newPerDay(),
+				domains: this.opts.studyDomains(),
+			}),
+		);
 	}
 
 	domainTitles(): Map<string, string> {
@@ -139,6 +157,7 @@ export class ReviewService {
 		this.result.issues = issues;
 		const ordered = orderEvents(this.events);
 		this.lastKey = ordered[ordered.length - 1] ?? null;
+		this.version++;
 		this.notify();
 		return objs.length;
 	}
@@ -161,6 +180,7 @@ export class ReviewService {
 			const ordered = orderEvents(this.events);
 			this.lastKey = ordered[ordered.length - 1] ?? null;
 		}
+		this.version++;
 		this.notify();
 		return this.result.states.get(ev.card);
 	}
