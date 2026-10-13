@@ -139,6 +139,12 @@ def _directory_counts(root, final_paths, removed=()):
     return counts
 
 
+def current_day() -> date:
+    """The day the generated pages are for: the current review day (starts at 04:00), else the calendar date."""
+    from .reviews import learning_date
+    return learning_date()
+
+
 def review_time(today: date) -> datetime:
     """The moment the daily review page is computed for: noon of ``today``, local time."""
     return datetime.combine(today, time(12), tzinfo=datetime.now().astimezone().tzinfo)
@@ -175,7 +181,8 @@ def review_projection(snapshot, today: date, *, extra_targets=(), generated_at=N
         if not rows:
             lines.append(T['none'])
         lines.append('')
-    lines.extend([T['new_left'].format(available=queue['new_available'], n=len(new)), ''])
+    lines.extend([T['new_left'].format(available=queue['new_available'], n=len(new), date=today.isoformat(),
+                                       hour=reviews.day_start_hour()), ''])
     trend = []
     for i in range(6, -1, -1):
         rel = f'{lay.projections}/review_state_{(today - timedelta(days=i)).isoformat()}.json'
@@ -228,10 +235,17 @@ def entry_projection(snapshot, today: date, *, final_paths=(), removed_paths=(),
     rows += [f'| `{d}/` | {directory_counts[d]:,} |' for d in directory_counts]
     rows += ['', T['stats_note']]
     stats = '\n'.join(rows)
+    from .reviews import available as reviews_available
     page = review_page(lay, today)
-    # link today's review page only when it exists or this write makes it, so the link resolves
+    # link the day's review page only when it exists or this write makes it, so the link resolves;
+    # otherwise name the command that makes the page and rewrites this line (`sb daily`)
     made = page in set(final_paths) or (snapshot.root is not None and (snapshot.root / page).is_file())
-    review_line = T['review_link'].format(review=page[:-3]) if made else T['review_missing']
+    if made:
+        review_line = T['review_link'].format(review=page[:-3], date=today.isoformat())
+    elif reviews_available():
+        review_line = T['review_missing'].format(date=today.isoformat())
+    else:
+        review_line = T['review_no_extra']
     home = [line.format(inbox=lay.inbox, review_link=review_line) for line in T['home']] + ['']
     if lay.entry_docs:
         home += [' · '.join(f'[[{name[:-3]}]]' for name in lay.entry_docs), '']
@@ -402,7 +416,8 @@ def generate(root: Path, *, job_id: str, apply: bool = False, today: date | None
 
     s = read_snapshot(root)
     writable_snapshot(s)
-    today = today or date.today()
+    # one day for every generated page: the review day, as `sb review queue` counts it
+    today = today or current_day()
     generated_at = generated_at or datetime.now().astimezone().isoformat(timespec='seconds')
     refresh_mocs = bool(refresh_mocs)
     sub_kind = 'daily' if reviews and entries else ('today' if reviews else 'docs')

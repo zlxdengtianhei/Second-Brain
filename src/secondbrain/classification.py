@@ -320,10 +320,9 @@ def apply(root: Path, job_id: str) -> dict:
     affected = {snapshot.cards[r['id']].domain for r in rows if r['id'] not in {x['id'] for x in pending}}
     projection = build_mocs(projected, affected_domains=affected)
     changes.extend(projection_changes(root, projection))
-    from datetime import date
-    from .projections import entry_projection, planned_paths
+    from .projections import current_day, entry_projection, planned_paths
     written, removed = planned_paths(changes)
-    changes.extend(projection_changes(root, entry_projection(projected, date.today(), final_paths=written,
+    changes.extend(projection_changes(root, entry_projection(projected, current_day(), final_paths=written,
                                                              removed_paths=removed)))
     return jobs.finish_transaction(root, job_id,
         {'status': 'partial' if pending else 'applied', 'pending': pending,

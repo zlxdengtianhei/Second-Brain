@@ -17,8 +17,9 @@ from . import layout as layouts
 from .store import state_root
 from .vault import read_snapshot
 
-__all__ = ['ReviewExtraMissing', 'available', 'cache_dir', 'card_metas', 'import_sr', 'local_day', 'log',
-           'now_local', 'parse_item', 'queue', 'review_dir', 'status', 'taxonomy']
+__all__ = ['ReviewExtraMissing', 'available', 'cache_dir', 'card_metas', 'day_start_hour', 'import_sr',
+           'learning_date', 'local_day', 'log', 'now_local', 'parse_item', 'queue', 'review_dir', 'status',
+           'taxonomy']
 
 
 class ReviewExtraMissing(ValueError):
@@ -106,6 +107,24 @@ def queue(root: Path, now: datetime, *, new_per_day: int | None = None, domains=
                            domains=tuple(domains or ()), read_card=read_card if questions else None,
                            limit=limit, section=section or default_section(), taxonomy=taxonomy(snapshot),
                            cache_dir=cache_dir(root))
+
+
+def day_start_hour() -> int:
+    """The hour a review day starts (the registry's ``DAY_START_HOUR``)."""
+    return _registry().DAY_START_HOUR
+
+
+def learning_date(now: datetime | None = None):
+    """The review day ``now`` falls in, as `sb review queue` counts it (days start at 04:00).
+
+    Without the review extra there is no review day; the calendar date is used.
+    """
+    now = now or now_local()
+    try:
+        rr = _registry()
+    except ReviewExtraMissing:
+        return now.date()
+    return rr.day_to_date(rr.learning_day(now))
 
 
 def local_day(timestamp: str, tz) -> str:

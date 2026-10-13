@@ -106,7 +106,7 @@ def test_home_points_daily_review_to_the_plugin_and_names_current_commands(tmp_p
         assert stale not in home, stale
     # without the plugin: a link to today's review page once it exists, else how to make it
     block_end = home.index('```secondbrain-review\n```\n') + len('```secondbrain-review\n```\n')
-    assert home[block_end:].lstrip('\n').startswith(labels.pages(language)['review_missing'])
+    assert home[block_end:].lstrip('\n').startswith(labels.pages(language)['review_missing'].format(date=DAY))
     page = projections.review_page(ENTRY_DOCS_LAYOUT, DAY)
     root = tmp_path / 'with-page'
     build_vault(root, lay=ENTRY_DOCS_LAYOUT)
@@ -117,7 +117,7 @@ def test_home_points_daily_review_to_the_plugin_and_names_current_commands(tmp_p
         made = projections.entry_projection(read_snapshot(root), DAY, final_paths=[page] if planned else [])
         linked = made.files['HOME.md'].decode('utf-8')
         assert linked[linked.index('```secondbrain-review\n```\n'):].split('\n\n')[1].startswith(f'[[{page[:-3]}|')
-        assert '`sb today --apply`' in linked
+        assert '`sb daily --apply`' in linked
     commands = sb_commands(home) + sb_commands(files['使用指南.md'])
     assert ['docs', '--apply'] in commands and ['review', 'queue'] in commands
     for argv in commands:
@@ -151,7 +151,7 @@ def test_review_page_name_and_text_follow_the_language(tmp_path, language, name,
     T = labels.pages(language)
     for key in ('due_cards', 'new_today'):
         assert f'## {T[key]}\n' in text, key
-    assert T['new_left'].format(available=1, n=1) in text and '`sb review queue`' in text
+    assert T['new_left'].format(available=1, n=1, date=DAY, hour=4) in text and '`sb review queue`' in text
     # the one card of the fixture is new (no registry events); its title is content, not page text
     [card] = read_snapshot(root).cards.values()
     assert f'[[{card.path[:-3]}|{card.title}]]' in text

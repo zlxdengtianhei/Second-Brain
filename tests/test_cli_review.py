@@ -105,8 +105,52 @@ def test_the_daily_review_page_shows_the_review_queue(vault, capsys):
     listed = re.findall(r'^- \[\[([^|\]]+)\|', page, re.M)
     assert listed == [c['path'][:-3] for c in queue['cards']]  # same cards, same order
     assert f"New cards not started yet: {queue['new_available']}; {queue['new_count']} of them" in page
-    assert "[[50_Reviews/Daily review 2026-10-13|Open today's review page]]" in (vault / 'HOME.md').read_text(
+    assert '[[50_Reviews/Daily review 2026-10-13|Open the review page of 2026-10-13]]' in (vault / 'HOME.md').read_text(
         encoding='utf-8')  # written in the same transaction, so HOME links it
+
+
+def sb_commands(text):
+    import re
+    import shlex
+    return [shlex.split(c)[1:] for c in re.findall(r'`(sb [^`]+)`', text)]
+
+
+def test_the_command_homes_hint_names_makes_the_page_and_links_it(vault, capsys):
+    from secondbrain import labels, projections, reviews
+    day = reviews.learning_date()
+    page = projections.review_page(layouts.of(vault), day)
+    assert not (vault / page).exists()
+    code, _, err = run(capsys, vault, 'docs', '--apply')
+    assert code == 0, err
+    home = (vault / 'HOME.md').read_text(encoding='utf-8')
+    hint = labels.pages('en')['review_missing'].format(date=day.isoformat())
+    assert hint in home and f'[[{page[:-3]}|' not in home
+    [command] = sb_commands(hint)  # do what HOME says
+    code, _, err = run(capsys, vault, *command)
+    assert code == 0, err
+    home = (vault / 'HOME.md').read_text(encoding='utf-8')
+    assert (vault / page).is_file() and f'[[{page[:-3]}|Open the review page of {day}]]' in home and hint not in home
+
+
+def test_a_page_made_after_midnight_is_the_review_day_of_sb_review_queue(vault, capsys, monkeypatch):
+    import re
+    from datetime import datetime
+    from secondbrain import reviews
+    night = datetime.fromisoformat('2026-10-14T01:00:00+02:00')  # before the 04:00 start of the next review day
+    real = reviews.now_local
+    monkeypatch.setattr(reviews, 'now_local', lambda value=None: night if value is None else real(value))
+    code, queue, err = run(capsys, vault, 'review', 'queue', '--now', night.isoformat())
+    assert code == 0 and queue['today'] == '2026-10-13', err
+    studied = queue['cards'][0]['id']
+    run(capsys, vault, 'review', 'log', '--card', studied, '--rating', '1', '--device', 'cli-test',
+        '--now', '2026-10-13T21:00:00+02:00')
+    code, queue, _ = run(capsys, vault, 'review', 'queue', '--now', night.isoformat())
+    code, result, err = run(capsys, vault, 'daily', '--apply')  # no --date: the current review day
+    assert code == 0 and result['date'] == '2026-10-13', err
+    page = (vault / '50_Reviews/Daily review 2026-10-13.md').read_text(encoding='utf-8')
+    listed = re.findall(r'^- \[\[([^|\]]+)\|', page, re.M)
+    assert listed == [c['path'][:-3] for c in queue['cards']]
+    assert 'review day 2026-10-13 (days start at 04:00)' in page
 
 
 def test_without_the_review_extra_daily_writes_home_and_today_explains(vault, capsys, monkeypatch):

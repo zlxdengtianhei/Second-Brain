@@ -107,7 +107,8 @@ PAGES = {
         'due_cards': '到期卡',
         'new_today': '今日新卡',
         'none': '本项暂无。',
-        'new_left': '未开始的新卡共 {available} 张，今天排入 {n} 张。这一页与 `sb review queue` 是同一个队列。',
+        'new_left': '未开始的新卡共 {available} 张，排入 {n} 张。这一页是 {date} 这个复习日（{hour:02d}:00 起算）的队列，'
+                    '与这个复习日里 `sb review queue` 给出的相同。',
         'inventory': '当前库存（{date} 现算）：**{cards:,} 张概念卡**，{domains} 个域；空分类字段 {missing:,} 张。',
         'track_table': ['| 轨 | 域（卡数） |', '|---|---|'],
         'domain_sep': '、',
@@ -128,8 +129,11 @@ PAGES = {
             '2. 新资料放进 `{inbox}/`，运行 `sb inbox list`，再 `sb ingest <文件>`。',
             '3. 未完成的任务：`sb job list`；部分写入的源：`sb ingest --retry <任务>`。',
         ],
-        'review_link': '[[{review}|打开今日复习]]：不依赖插件的今日复习页；页面缺失时运行 `sb today --apply`。',
-        'review_missing': '今日复习页还没有生成：运行 `sb today --apply`（不依赖插件）。',
+        'review_link': '[[{review}|打开 {date} 的复习页]]：不依赖插件；`sb daily --apply` 生成当天的复习页，'
+                       '并把这里改成当天的链接。',
+        'review_missing': '{date} 的复习页还没有生成：运行 `sb daily --apply`，它生成复习页并在这里加上链接'
+                          '（不依赖插件）。',
+        'review_no_extra': '复习页需要 review 扩展：`pip install "secondbrain[review]"`，然后运行 `sb daily --apply`。',
         'domains_title': '## 领域入口',
         'map_line': '- [[{path}|{title}]] · {n} 张',
         'stats_title': '## 库存',
@@ -163,8 +167,9 @@ PAGES = {
         'due_cards': 'Due cards',
         'new_today': "Today's new cards",
         'none': 'Nothing here.',
-        'new_left': "New cards not started yet: {available}; {n} of them are in today's queue. "
-                    'This page shows the same queue as `sb review queue`.',
+        'new_left': "New cards not started yet: {available}; {n} of them are in this day's queue. "
+                    'This page is the queue of review day {date} (days start at {hour:02d}:00), '
+                    'the same as `sb review queue` gives during that day.',
         'inventory': 'Counted on {date}: **cards: {cards:,}** · domains: {domains} · '
                      'without pillar or topic: {missing:,}.',
         'track_table': ['| Track | Domains (cards) |', '|---|---|'],
@@ -187,10 +192,12 @@ PAGES = {
             '2. Put new material into `{inbox}/`, run `sb inbox list`, then `sb ingest <file>`.',
             '3. Unfinished jobs: `sb job list`; sources with pending cards: `sb ingest --retry <job>`.',
         ],
-        'review_link': "[[{review}|Open today's review page]]: works without the plugin; if the page is "
-                       'missing, run `sb today --apply`.',
-        'review_missing': "Today's review page has not been made yet: run `sb today --apply` "
-                          '(works without the plugin).',
+        'review_link': "[[{review}|Open the review page of {date}]]: works without the plugin; "
+                       "`sb daily --apply` makes each day's page and points this link to it.",
+        'review_missing': 'The review page of {date} has not been made yet: run `sb daily --apply`; it makes '
+                          'the page and adds the link here (works without the plugin).',
+        'review_no_extra': 'The review page needs the review extra: `pip install "secondbrain[review]"`, '
+                           'then run `sb daily --apply`.',
         'domains_title': '## Maps',
         'map_line': '- [[{path}|{title}]] · cards: {n}',
         'stats_title': '## Inventory',

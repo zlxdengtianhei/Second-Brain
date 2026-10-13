@@ -19,7 +19,6 @@ import os
 import posixpath
 import re
 from dataclasses import replace
-from datetime import date
 from pathlib import Path
 from urllib.parse import unquote
 
@@ -141,7 +140,7 @@ def _packet_pairs(packet, domain):
 def apply(root_, job_id):
     """Move only accepted, ``assigned`` cards whose move breaks no link; the rest stay pending with the files that refer to them."""
     from .moc import build_mocs
-    from .projections import entry_projection, planned_paths, review_projection
+    from .projections import current_day, entry_projection, planned_paths, review_projection
     from .reviews import available as reviews_available
     state = jobs.load(root_, job_id)
     if state['kind'] != 'relocation':
@@ -178,10 +177,11 @@ def apply(root_, job_id):
         changes, projected, moved, affected = _stage_moves(root_, snapshot, packet, active)
         projection = build_mocs(projected, affected_domains=affected)
         written, removed = planned_paths(changes)
-        entries = entry_projection(projected, date.today(), final_paths=written | set(projection.files),
+        day = current_day()
+        entries = entry_projection(projected, day, final_paths=written | set(projection.files),
                                    removed_paths=removed)
         # the daily review page reads the review registry, which needs the review extra
-        reviews = (review_projection(projected, date.today(), extra_targets=entries.files)
+        reviews = (review_projection(projected, day, extra_targets=entries.files)
                    if reviews_available() else None)
         replacements = {**projection.files, **entries.files, **(reviews.files if reviews else {})}
         obstacles = link_obstacles(root_, {c.id: c for c, _ in moved},

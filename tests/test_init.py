@@ -23,10 +23,17 @@ def test_init_writes_the_registry_and_folders_and_names_the_missing_taxonomy_fil
     assert result['created_folders'] == ['10_Knowledge', '20_MOCs/_pillars', '00_Inbox']
     assert result['taxonomy_files_missing'] == [f'20_MOCs/_pillars/{MOC}.yaml']
     assert json.loads((root / '_data/notes_registry.json').read_text(encoding='utf-8')) == {'notes': []}
+    # before any taxonomy exists, an ingest stops before the model call and names the files to write
+    (root / '00_Inbox/notes.md').write_text('# Notes\n\nAttention routes tokens.\n', encoding='utf-8')
+    code, [refused], err = run(capsys, '--vault', str(root), 'ingest', str(root / '00_Inbox/notes.md'),
+                               '--executor', 'host')
+    assert code == 0 and refused['status'] == 'failed', err
+    assert f'20_MOCs/_pillars/{MOC}.yaml' in refused['error'] and 'nothing was sent to a model' in refused['error']
+    listed = run(capsys, '--vault', str(root), 'job', 'list')[1]
+    assert [j['job_id'] for j in listed] == ['initialize-catalog']  # no ingest job was made
     (root / f'20_MOCs/_pillars/{MOC}.yaml').write_text(json.dumps(TAXONOMY), encoding='utf-8')
     code, status, _ = run(capsys, '--vault', str(root), 'status')
     assert code == 0 and status['issues'] == []
-    (root / '00_Inbox/notes.md').write_text('# Notes\n\nAttention routes tokens.\n', encoding='utf-8')
     code, [prepared], err = run(capsys, '--vault', str(root), 'ingest', str(root / '00_Inbox/notes.md'),
                                 '--prepare-only')
     assert code == 0 and prepared['status'] == 'prepared', err

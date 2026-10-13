@@ -136,6 +136,7 @@ def prepare(root: Path, source: Path, *, settings: config.Settings | None = None
     if not snapshot.catalog:
         raise IngestError('The vault has no catalog; run `sb init` first')
     validate_catalog(snapshot.catalog)
+    _require_some_taxonomy(snapshot, lay)
     chunks = []
     for chunk in chunk_text(text, settings.ingest.chunk_chars):
         routed = route(root, snapshot, text[chunk['start']:chunk['end']], domains=settings.ingest.candidate_domains)
@@ -163,6 +164,22 @@ def prepare(root: Path, source: Path, *, settings: config.Settings | None = None
     state = jobs.create(root, job_id, KIND, packet)
     return {**state, 'source_sha256': sha, 'chunks': [c['chunk_id'] for c in chunks],
             'inbox_path': inbox_path}
+
+
+def _require_some_taxonomy(snapshot, lay) -> None:
+    """Refuse an ingest no card could come out of: no domain has a pillar with a topic yet.
+
+    A card must be filed under a domain, pillar and topic, so the producer's
+    model call would be wasted (a vault right after `sb init`).
+    """
+    domains = snapshot.catalog.get('domains', {})
+    if any(category_pairs(snapshot, d) for d in domains):
+        return
+    files = sorted({lay.taxonomy_path(meta['moc']) for meta in domains.values()})
+    shown = ', '.join(files[:5]) + (f' (and {len(files) - 5} more)' if len(files) > 5 else '')
+    raise IngestError(f'No domain has a taxonomy with a topic yet, so no card could be filed; nothing was sent to '
+                      f'a model. Write the taxonomy files first: {shown} (docs/new-vault.md, step 3), then run '
+                      '`sb status`.')
 
 
 def retry(root: Path, job_id: str, *, settings: config.Settings | None = None) -> dict:
@@ -1189,7 +1206,7 @@ def _current_taxonomy(snapshot, domain: str) -> dict:
 
 def apply_job(root: Path, job_id: str, settled: list[dict] | None = None) -> dict:
     from ..moc import build_mocs
-    from ..projections import entry_projection, planned_paths
+    from ..projections import current_day, entry_projection, planned_paths
     state = jobs.load(root, job_id)
     if state.get('commit_intent'):
         return jobs.resume_transaction(root, job_id) or jobs.load(root, job_id)
@@ -1400,7 +1417,7 @@ def apply_job(root: Path, job_id: str, settled: list[dict] | None = None) -> dic
     if affected:
         # last, so its folder table counts the vault as this transaction leaves it
         written, removed = planned_paths(changes)
-        changes.extend(projection_changes(root, entry_projection(projected, today, final_paths=written,
+        changes.extend(projection_changes(root, entry_projection(projected, current_day(), final_paths=written,
                                                                  removed_paths=removed)))
     result = {'status': status, 'new_card_count': len(produced), 'produced': produced,
               'pending': pending, 'needs_taxonomy': needs_taxonomy,

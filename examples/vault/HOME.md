@@ -5,7 +5,7 @@
 ```secondbrain-review
 ```
 
-Today's review page has not been made yet: run `sb today --apply` (works without the plugin).
+The review page of 2026-10-13 has not been made yet: run `sb daily --apply`; it makes the page and adds the link here (works without the plugin).
 
 The dashboard comes from the SecondBrain Review plugin; in a terminal use `sb review status` for progress and `sb review queue` for today's cards.
 

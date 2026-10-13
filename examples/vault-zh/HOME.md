@@ -5,7 +5,7 @@
 ```secondbrain-review
 ```
 
-今日复习页还没有生成：运行 `sb today --apply`（不依赖插件）。
+2026-10-13 的复习页还没有生成：运行 `sb daily --apply`，它生成复习页并在这里加上链接（不依赖插件）。
 
 面板由 SecondBrain Review 插件显示；终端里用 `sb review status` 看进度，`sb review queue` 看今天的卡。
 
