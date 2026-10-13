@@ -37,7 +37,7 @@ from ..evidence import check_verbatim
 from ..executors.base import CHUNK_TOO_LARGE, INVALID_OUTPUT, ExecutorFailure
 from ..locks import job_lock
 from ..store import Change, Conflict, digest, read_bytes
-from ..vault import Card, parse_note, patch_frontmatter, read_snapshot
+from ..vault import Card, append_list_items, parse_note, read_snapshot
 from . import card_diagrams
 from .chunking import chunk_text
 from .routing import essence, route
@@ -1216,7 +1216,7 @@ def apply_job(root: Path, job_id: str, settled: list[dict] | None = None) -> dic
         added = [e for e in to_add[target] if (e['type'], e['target']) not in present]
         if not added:
             continue
-        raw2 = patch_frontmatter(existing.raw, {'relations': new_list + added})
+        raw2 = append_list_items(existing.raw, 'relations', added)
         fm2, body2 = parse_note(raw2)
         if body2 != existing.body:
             maintenance.append({'target': target, 'reason': 'patch would change the body; inverse edge not added'})

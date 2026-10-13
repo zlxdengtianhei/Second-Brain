@@ -52,6 +52,10 @@ def run_default(root, lay, **kwargs):
     return prepared, result, seen
 
 
+def folders(root):
+    return {p.relative_to(root).as_posix() for p in root.rglob('*') if p.is_dir()}
+
+
 def moc_files(root, lay, moc):
     return {p: b for p, b in tree(root).items()
             if p == f'{lay.mocs}/{moc}.md' or p.startswith(f'{lay.mocs}/{moc}/')}
@@ -66,6 +70,7 @@ def test_ingest_acceptance_list(tmp_path, lay, language):
     other_moc_before = moc_files(root, lay, OTHER_MOC)
     assert other_moc_before
     before = tree(root)
+    folders_before = folders(root)
     original = before[f'{lay.inbox}/{SOURCE_NAME}']
     source_text = original.decode('utf-8')
 
@@ -184,9 +189,12 @@ def test_ingest_acceptance_list(tmp_path, lay, language):
     again = ingest.prepare(root, root / source_rel)
     assert again['status'] == 'unchanged'
     assert inbox.scan(root) == []
-    # 8. rollback restores every byte (including the inbox original)
+    # 8. rollback restores every byte (including the inbox original) and removes the folders it created
+    assert (root / source_rel).parent.is_dir()
     assert recover(root, job_id, 'rollback')['status'] == 'rolled_back'
     assert tree(root) == before
+    assert not (root / source_rel).parent.exists()
+    assert folders(root) == folders_before
 
 
 def _strip_breadcrumbs_field(root, lay):

@@ -238,6 +238,65 @@ def _parse_note(raw: bytes):
     return data, body, body_start
 
 
+def append_list_items(raw: bytes, key: str, items: list) -> bytes:
+    """Append mapping ``items`` to the block-style list under top-level ``key``.
+
+    Existing bytes stay as they are: the new items are inserted after the
+    last line of the list, with the same indentation as its first item. When
+    the list is absent, empty, written inline, or the result does not parse
+    back to exactly the old list plus ``items``, it falls back to
+    :func:`patch_frontmatter` with the whole new list.
+    """
+    import yaml
+    fm, body = parse_note(raw)
+    old = fm.get(key)
+    if not items:
+        return raw
+    whole = (list(old) if isinstance(old, list) else []) + list(items)
+    fm_start, closer, _body_start = _locate_frontmatter(raw)
+    fm_bytes = raw[fm_start:closer]
+    nl = b"\r\n" if b"\r\n" in raw else b"\n"
+    lines = list(_top_level_ranges(fm_bytes))
+    head = next((i for i, (_s, _e, content, top) in enumerate(lines)
+                 if top and _key_of_top_line(content) == key), None)
+    if not isinstance(old, list) or not old or head is None or lines[head][2].split(b":", 1)[1].strip():
+        return patch_frontmatter(raw, {key: whole})
+    block = []
+    for start, end, content, top in lines[head + 1:]:
+        if top:
+            break
+        block.append((start, end, content))
+    item_lines = [c for _s, _e, c in block if c.lstrip(b" ").startswith(b"- ")]
+    if not item_lines:
+        return patch_frontmatter(raw, {key: whole})
+    indent = item_lines[0][:len(item_lines[0]) - len(item_lines[0].lstrip(b" "))]
+    following = [c for _s, _e, c in block if c.strip() and not c.lstrip(b" ").startswith(b"- ")]
+    inner = (following[0][:len(following[0]) - len(following[0].lstrip(b" "))] if following
+             else indent + b"  ")
+    last = max(i for i, (_s, _e, c) in enumerate(block) if c.strip())
+    insert_at = block[last][1]
+    text = b""
+    if not fm_bytes[:insert_at].endswith(b"\n"):
+        text += nl
+    for item in items:
+        if not isinstance(item, dict) or not item:
+            return patch_frontmatter(raw, {key: whole})
+        for n, (k, v) in enumerate(item.items()):
+            rendered = yaml.safe_dump({k: v}, allow_unicode=True, default_flow_style=True, width=10 ** 6)
+            pair = rendered.strip()[1:-1].strip().encode("utf-8")  # "{k: v}" -> "k: v"
+            text += (indent + b"- " if n == 0 else inner) + pair + nl
+    new_fm = fm_bytes[:insert_at] + text + fm_bytes[insert_at:]
+    out = raw[:fm_start] + new_fm + raw[closer:]
+    try:
+        new_fm_parsed, new_body = parse_note(out)
+    except VaultError:
+        return patch_frontmatter(raw, {key: whole})
+    if new_fm_parsed.get(key) != whole or new_body != body or \
+            {k: v for k, v in new_fm_parsed.items() if k != key} != {k: v for k, v in fm.items() if k != key}:
+        return patch_frontmatter(raw, {key: whole})
+    return out
+
+
 def patch_frontmatter(raw: bytes, updates: dict) -> bytes:
     """Return ``raw`` with only the top-level ``updates`` keys changed.
 

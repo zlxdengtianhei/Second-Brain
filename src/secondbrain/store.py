@@ -452,10 +452,25 @@ def apply_changes(root: Path, job_id: str, changes: list[Change], *, checks: dic
         _validate_moves(rows, layouts.of(root))
         version = 2 if checks or any(r["after"] is None for r in rows) else 1
         journal = {"schema": f"secondbrain-transaction/{version}", "job_id": job_id, "status": "prepared", "changes": rows, "checks": checks}
+        created = _missing_dirs(root, [c.relative_path for c in changes if c.after is not None])
+        if created:
+            journal["created_dirs"] = created
         if operation is not None:
             journal['operation'] = operation
         write_json(root, _journal_path(job_id), journal)
         return _resume_locked(root, journal, crash_after=_crash_after)
+
+
+def _missing_dirs(root: Path, paths: list[str]) -> list[str]:
+    """Folders the transaction will create, deepest first, so a rollback can remove them again."""
+    missing = set()
+    for rel in paths:
+        parts = relative(rel).parts[:-1]
+        for i in range(1, len(parts) + 1):
+            folder = "/".join(parts[:i])
+            if not os.path.lexists(os.path.join(root, folder)):
+                missing.add(folder)
+    return sorted(missing, key=lambda d: (-d.count("/"), d))
 
 
 def recover(root: Path, job_id: str, action: str = "resume") -> dict:
@@ -486,6 +501,12 @@ def recover(root: Path, job_id: str, action: str = "resume") -> dict:
                     os.fsync(fd)
             else:
                 _atomic(root, row["path"], before)
+        for directory in journal.get("created_dirs", []):  # deepest first; left alone if not empty
+            try:
+                with _parent(root, relative(directory).as_posix()) as (fd, name):
+                    os.rmdir(name, dir_fd=fd)
+            except OSError:
+                pass
         journal["status"] = "rolled_back"
         write_json(root, _journal_path(job_id), journal)
         return {"status": "rolled_back", "job_id": job_id, "paths": [r["path"] for r in journal["changes"]]}
