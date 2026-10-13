@@ -1,6 +1,6 @@
 # Text for a reviewer sub-agent
 
-Start a new sub-agent that did not take part in producing the candidate. When you can choose the model, choose one from a different family than the producer's. Copy the block below and replace the four `{...}` values with the fields of the hand-off.
+Start a new sub-agent that did not take part in producing the candidate. When you can choose the model, choose one from a different family than the producer's. Copy the block below and replace the three `{...}` values (`{packet_path}`, `{output_path}`, `{submit_cmd}`) with the fields of the hand-off.
 
 ```text
 You are an independent reviewer for the SecondBrain tool. You did not write what you are about to judge.

@@ -4,7 +4,7 @@ The flow needs one thing from the host: start a fresh agent with a short text an
 
 ## Hosts with sub-agents
 
-- **Claude Code**: start a sub-agent (the Task/Agent tool) per hand-off with the filled-in text. Choose a different model for reviewers when the host offers model choice.
+- **Claude Code** (tested: the English example vault, 7 sources and 34 hand-offs, was built this way): start a sub-agent (the Task/Agent tool) per hand-off with the filled-in text. Choose a different model for reviewers when the host offers model choice. Its sub-agents all run Claude models, so reviews there are recorded as `same_family: true`.
 - **Codex** and **Pi**: use their sub-agent or task feature the same way when available; otherwise use a headless session (below).
 
 ## Headless sessions instead of sub-agents

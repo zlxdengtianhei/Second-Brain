@@ -60,3 +60,28 @@ def test_every_command_in_the_skill_exists():
             flag = token.split('=')[0]
             if flag.startswith('--'):
                 assert flag in options, (where, command, flag)
+
+
+def test_subagent_texts_use_exactly_the_hand_off_values(tmp_path):
+    from secondbrain.executors.base import Task
+    from secondbrain.executors.host import HostExecutor
+    packet = tmp_path / 'job' / 'packets' / 'run.md'
+    packet.parent.mkdir(parents=True)
+    handoff = HostExecutor().run(Task(job_id='j', run_id='r', role='producer', step='produce', prompt='',
+                                      packet={}, packet_sha256='', output_schema={}, chunk='c01',
+                                      packet_path=str(packet))).handoff
+    for name in ('subagent-producer.md', 'subagent-reviewer.md'):
+        text = (SKILL / 'references' / name).read_text(encoding='utf-8')
+        block = text.split('```text\n', 1)[1].split('```', 1)[0]
+        values = set(re.findall(r'\{([a-z_]+)\}', block))
+        assert values == {'packet_path', 'output_path', 'submit_cmd'} and values <= set(handoff), name
+        assert f'the {len(values)} ' in text.replace('three', '3'), name
+    assert 'Fill in the three values' in (SKILL / 'SKILL.md').read_text(encoding='utf-8')
+
+
+def test_every_inbox_status_is_listed():
+    source = (Path(cli.__file__).parent / 'inbox.py').read_text(encoding='utf-8')
+    statuses = set(re.findall(r"status='([a-z_]+)'", source)) | {'new', 'failed'}
+    line = next(x for x in (SKILL / 'SKILL.md').read_text(encoding='utf-8').splitlines()
+                if x.startswith('Each item has `status`'))
+    assert statuses <= set(re.findall(r'`([a-z_]+)`', line)), statuses

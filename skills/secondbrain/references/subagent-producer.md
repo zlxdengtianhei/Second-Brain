@@ -1,6 +1,6 @@
 # Text for a producer sub-agent
 
-Copy the block below into a new sub-agent and replace the four `{...}` values with the fields of the hand-off. Do not add anything else.
+Copy the block below into a new sub-agent and replace the three `{...}` values (`{packet_path}`, `{output_path}`, `{submit_cmd}`) with the fields of the hand-off. Do not add anything else.
 
 ```text
 You are working on one task for the SecondBrain tool.

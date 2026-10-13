@@ -7,7 +7,11 @@ description: Turn new material in an Obsidian vault's inbox into reviewed atomic
 
 You coordinate. Sub-agents write and review the cards; the `sb` program checks every answer, runs the review gate and writes the vault in one transaction. All `sb` commands print JSON. Exit codes: 0 ok, 2 input error, 3 conflict, 4 executor failure.
 
-The instructions for producers and reviewers live in the task files that `sb` writes. Do not rewrite them, summarize them, or add your own opinion of the material to what a sub-agent gets. A sub-agent gets only the short text from `references/subagent-producer.md` or `references/subagent-reviewer.md`, filled in with the paths from a hand-off.
+The instructions for producers and reviewers live in the task files that `sb` writes. Do not rewrite them, summarize them, or add your own opinion of the material to what a sub-agent gets. A sub-agent gets only the short text from `references/subagent-producer.md` or `references/subagent-reviewer.md`, filled in with the values from a hand-off.
+
+## Before you start
+
+Your own `sb` must find the vault. It uses, in this order: `--vault <folder>`, the `SECONDBRAIN_VAULT` environment variable, then `vault` in the config file. The config file is `--config <file>`, else `$SECONDBRAIN_CONFIG`, else `$XDG_CONFIG_HOME/secondbrain/config.toml` (usually `~/.config/secondbrain/config.toml`). Run `sb status` once; if it prints `No vault`, ask the user which folder is the vault and pass it with `--vault` on every command. You do not need to pass anything to sub-agents: every `submit_cmd` already names the vault, the config file and the program by absolute path.
 
 ## 1. See what is waiting
 
@@ -15,7 +19,7 @@ The instructions for producers and reviewers live in the task files that `sb` wr
 sb inbox list
 ```
 
-Each item has `status` (`new`, `in_progress`, `done`, `skipped`, `failed`) and a `job_id`. Continue `in_progress` items first (see section 5).
+Each item has `status` (`new`, `in_progress`, `partial`, `done`, `skipped`, `failed`) and a `job_id`. First continue `in_progress` items with section 4 (`sb job advance <job_id> --executor host`). A `partial` item wrote some cards and kept others pending; retry it as described in section 5. A `failed` item has a `reason`; report it.
 
 For each `new` item decide with `references/triage.md`:
 
@@ -29,16 +33,16 @@ For each `new` item decide with `references/triage.md`:
 sb ingest <path> --executor host
 ```
 
-This freezes the source, splits it into chunks and returns `handoffs`: one per chunk, each with `role`, `step`, `packet_path`, `output_path` and `submit_cmd`. Several sources can run at the same time.
+This freezes the source and splits it into chunks. It prints a JSON **list** with one job object per source (also for one source). In each job object read `job_id`, `status` and `handoffs`: one hand-off per chunk, each with `role`, `step`, `chunk`, `packet_path`, `output_path` and `submit_cmd`. Several sources can run at the same time.
 
 ## 3. Hand off every packet to a fresh sub-agent
 
 For each hand-off start a **new** sub-agent (no shared history with you or other sub-agents):
 
 - `role: producer` (steps `produce`, `repair`, `diagram`) → text from `references/subagent-producer.md`;
-- `role: reviewer` (step `review`) → text from `references/subagent-reviewer.md`. When the host lets you choose, use a model from a different family than the producer. Same-family reviews are accepted in host mode but marked `same_family: true` in the job.
+- `role: reviewer` (step `review`) → text from `references/subagent-reviewer.md`. When the host lets you choose, use a model from a different family than the producer. When the host offers only one family (for example, all sub-agents run models of one vendor), still start a new sub-agent for each review: `sb` accepts it in host mode, marks the job `same_family: true`, and you report that (section 5).
 
-Fill in the four values from the hand-off and nothing else. The sub-agent submits its own answer with `sb job submit`; `sb` checks it on the spot and returns errors to the sub-agent, not to you.
+Fill in the three values from the hand-off (`packet_path`, `output_path`, `submit_cmd`) and nothing else. The sub-agent submits its own answer with `sb job submit`; `sb` checks it on the spot and returns errors to the sub-agent, not to you. `submit_cmd` starts with the absolute path of the `sb` program you are running, so it works in a sub-agent shell that does not have `sb` on its `PATH`. The sub-agent must be able to read and write files and run that command on the same machine.
 
 ## 4. Advance until the job is written
 
@@ -46,7 +50,9 @@ Fill in the four values from the hand-off and nothing else. The sub-agent submit
 sb job advance <job_id> --executor host
 ```
 
-It runs every deterministic step that can run and returns either new `handoffs` (reviews, one repair round for rejected cards, the diagram request) or the final state. Repeat sections 3 and 4 until `status` is `applied` or `partial`. Then the cards, the source copy, the registries and the maps are written in one transaction, and the inbox file is archived when the vault is configured to do so.
+It runs every deterministic step that can run and prints **one** job object. Its `handoffs` are the next tasks: reviews, one repair round for rejected cards (chunk `c01.r1` …), the diagram request for the accepted cards (chunk `dg01` …), and at most one diagram rewrite (chunk `dg01.r1` …). Every one goes to a new sub-agent as in section 3; diagram tasks use the producer text. When `handoffs` is empty, read `status`. Repeat sections 3 and 4 until `status` is `applied` or `partial`.
+
+Then `sb` writes the cards, a copy of the source, the registries and the maps in one transaction. By default (`[ingest] after_ingest = "move"`) the inbox file then leaves the inbox; its bytes stay in the sources folder (by default `40_Sources/<hash>/<file>`). With `after_ingest = "keep"` the inbox file stays where it is.
 
 Useful while a job runs:
 
@@ -62,6 +68,7 @@ From the final state report:
 - cards still pending, with the reviewer's reasons (`pending`);
 - material that needs a new pillar or domain (`needs_taxonomy`);
 - duplicates of existing cards (`duplicates`) and skipped passages (`out_of_scope`);
+- whether reviews were done by the producer's model family (`same_family: true` in `sb job show <job_id>`);
 - inbox items you skipped, with reasons.
 
 A `partial` job wrote the accepted cards and kept the rest pending. `sb ingest --retry <job_id> --executor host` starts a child job for the pending items only (same hand-off loop as above); `sb inbox list` shows such sources as `partial`.

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 from secondbrain import cli, jobs
 from tests.ingest_helpers import (ALL_REASONS, DIMMING_IR, SOURCE_NAME, build_ingest_vault, diagram_answer,
@@ -207,8 +208,11 @@ def test_submit_commands_reach_the_same_config_and_state(tmp_path, capsys, monke
     assert cmd.startswith('SECONDBRAIN_STATE_DIR=')  # the tests set the state dir by environment
     path = tmp_path / 'answer.json'
     path.write_text(json.dumps(first_candidate()), encoding='utf-8')
-    runnable = cmd.replace('<model id>', 'gpt-test').replace(' sb ', f' {shlex.quote(sys.executable)} -m secondbrain ', 1)
+    program = shlex.split(cmd)[1]
+    assert Path(program).is_absolute() and Path(program).parent == Path(sys.executable).parent
+    runnable = cmd.replace('<model id>', 'gpt-test')
     runnable = runnable.replace(shlex.quote(handoff['output_path']), shlex.quote(str(path)))
+    # a sub-agent shell without the coordinator's environment and without `sb` on its PATH
     env = {'PATH': '/usr/bin:/bin', 'SECONDBRAIN_CONFIG': str(tmp_path / 'other.toml')}
     done = subprocess.run(runnable, shell=True, capture_output=True, text=True, env=env)
     assert done.returncode == 0, done.stderr
