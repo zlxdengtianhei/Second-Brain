@@ -3,10 +3,9 @@
 The daily entry point for reviewing a Second Brain vault. It shows what is due today,
 runs flip and question-and-answer reviews, and explains a card with a language model.
 Every review is appended to an event log in the vault; scheduling (FSRS) is replayed
-from that log, so card files are never modified. The Python package writes and reads
-the same log (`secondbrain.review_registry`: `log_review`, `status_report`,
-`queue_report`), so reviews a terminal agent logs through it count too. A `sb review`
-command for that is planned; it does not exist yet.
+from that log, so card files are never modified. The `sb review` commands of the
+Python package (`status`, `queue`, `log`, `import-sr`) read and write the same log, so
+reviews a terminal agent logs with `sb review log` count too.
 
 The interface is in Chinese. Strings live in `src/i18n.ts` if you want to add a locale.
 
@@ -109,9 +108,13 @@ vault, once on desktop and once on a phone. Keep the developer console open
 10. **Two devices.** Review a few cards on each device, let sync finish, reopen.
     Expect: both show the same due counts and card states. With Obsidian Sync, turn on
     "Sync all other types" first, or switch the log format to `md`.
-11. **Spaced Repetition import** (only if your cards have `<!--SR:...-->` comments).
-    Run the import command. Expect: a confirmation with the number of cards; after
-    it, those cards are in review with their old due dates; card files are unchanged.
+11. **Spaced Repetition import** (only if your cards have `<!--SR:...-->` comments or
+    `sr-*` front matter). For an existing vault, prefer the CLI before installing the
+    plugin: `sb review import-sr --dry-run`, then `sb review import-sr`. In the plugin,
+    run the import command. Expect: a confirmation with the number of cards; cards whose
+    SR data cannot be read are named in a notice and listed in the console, and are not
+    imported; after it, the imported cards are in review with their old due dates; card
+    files are unchanged; running it again imports nothing.
 
 ## Development
 

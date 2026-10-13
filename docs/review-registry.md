@@ -10,13 +10,12 @@ Three writers share one format:
 |---|---|---|
 | Obsidian plugin, flip mode | `flip` | `obsidian-plugin/` |
 | Obsidian plugin, question-and-answer mode (LLM grading) | `qa` | `obsidian-plugin/` |
-| Terminal agent through the Python API (`log_review`) | `agent` | `src/secondbrain/review_registry.py` |
-| One-time import of Spaced Repetition plugin data | `import` | both |
+| Terminal agent through `sb review log` | `agent` | `src/secondbrain/review_registry.py` |
+| One-time import of Spaced Repetition plugin data (`sb review import-sr`, or the plugin command) | `import` | both |
 
-There is no `sb review` command yet. Today the Python side is an API:
+The CLI commands `sb review status | queue | log | import-sr` call
 `status_report`, `queue_report`, `log_review` and `import_sr` in
-`secondbrain.review_registry` return JSON-ready data; a CLI subcommand will call
-them.
+`secondbrain.review_registry`, which return JSON-ready data.
 
 Two implementations replay the log: Python (`review_registry.py`, py-fsrs) and
 TypeScript (`obsidian-plugin/src/registry/`, ts-fsrs). Both must produce the same
@@ -144,8 +143,41 @@ the old due date meaningful.
 Converting cards: when a card has several Spaced Repetition schedules (one per
 question line, or the note-level `sr-due`/`sr-interval`/`sr-ease` fields), the
 importer takes the earliest due date, the smallest interval and the smallest
-ease, and writes one event for the card. Cards that already have events are
-not imported again.
+ease, and writes one event for the card.
+
+Reading Spaced Repetition data (both implementations, shared cases in
+`vectors.json` under `sr_import` and `sr_plan`):
+
+- A comment `<!--SR:...-->` holds one or more schedules, each starting with `!`:
+  SM-2 `!YYYY-MM-DD,interval,ease`, or FSRS `!fsrs,due,interval,stability,difficulty,...`
+  (10 fields; interval, stability and difficulty are plain ASCII decimals).
+- Front matter: if any of `sr-due`, `sr-interval`, `sr-ease` is set, all three
+  must be. `sr-due` is a `YYYY-MM-DD` date (a YAML date value is accepted);
+  `sr-interval` and `sr-ease` are whole numbers, written as numbers or as
+  strings of ASCII digits.
+- Digits are ASCII only. Anything else (full-width digits, `5.7` as an
+  interval, an unknown segment, a comment without a schedule, a seed the event
+  rules reject such as ease 0 or a bad timestamp) makes the card's SR data
+  unreadable.
+
+Running the import:
+
+1. Cards without SR data are ignored.
+2. Cards that already have events are skipped, so running the import again
+   adds nothing.
+3. Cards whose SR data cannot be read are reported (card id, path, reason) and
+   not imported; the other cards are imported. Fix the reported cards and run
+   the import again to import only them.
+4. All import events of one run are written with one append; card files are
+   never changed. `sb review import-sr --dry-run` shows the plan without
+   writing.
+
+For a vault that already has Spaced Repetition progress, run the CLI first:
+`sb review import-sr --dry-run`, check the `invalid` list, then
+`sb review import-sr`. It works before the plugin is installed and prints the
+full report. The plugin command does the same for users who already run the
+plugin; it shows the counts and logs the unreadable cards to the developer
+console.
 
 ## 3. Scheduler
 

@@ -1081,35 +1081,73 @@ def append_events(review_dir: Path, events: Sequence[Mapping[str, Any]], *, fmt:
 # --------------------------------------------------------------------------
 _SR_BLOCK_RE = re.compile(r"<!--SR:(.*?)-->", re.S)
 _SM2_RE = re.compile(r"!(\d{4}-\d{2}-\d{2}),(\d+),(\d+)", re.ASCII)
+_SR_NUM_RE = re.compile(r"[0-9]+(?:\.[0-9]+)?", re.ASCII)
+_SR_INT_RE = re.compile(r"[0-9]+", re.ASCII)
+SR_FRONTMATTER_KEYS = ("sr-due", "sr-interval", "sr-ease")
+
+
+class SrDataError(ValueError):
+    """A card has Spaced Repetition data that cannot be read (docs section 2.2)."""
+
+
+def _sr_int(value: Any, key: str) -> int:
+    if isinstance(value, bool):
+        raise SrDataError(f"{key} is not a whole number: {value!r}")
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    if isinstance(value, str) and _SR_INT_RE.fullmatch(value.strip()):
+        return int(value.strip())
+    raise SrDataError(f"{key} is not a whole number: {value!r}")
+
+
+def _sr_date(value: Any, key: str) -> str:
+    if isinstance(value, datetime):
+        value = value.date()
+    if isinstance(value, date):
+        return value.isoformat()
+    if isinstance(value, str) and _DATE_RE.fullmatch(value.strip()):
+        try:
+            return date.fromisoformat(value.strip()).isoformat()
+        except ValueError:
+            pass
+    raise SrDataError(f"{key} is not a YYYY-MM-DD date: {value!r}")
 
 
 def sr_schedule(text: str, frontmatter: Mapping[str, Any] | None = None) -> dict[str, Any] | None:
-    """Merge the Spaced Repetition schedules found in a card into one import seed."""
+    """Merge the Spaced Repetition schedules found in a card into one import seed.
+
+    Returns None when the card has no SR data. Raises ``SrDataError`` when it has SR data
+    that cannot be read, so the caller can report the card instead of losing its progress.
+    """
     sm2: list[tuple[str, int, int]] = []
     fsrs_rows: list[dict[str, Any]] = []
     for block in _SR_BLOCK_RE.findall(text):
-        for seg in block.split("!")[1:]:
+        segments = block.split("!")
+        if segments[0].strip() or len(segments) < 2:
+            raise SrDataError(f"unreadable SR comment: <!--SR:{block[:60]}-->")
+        for seg in segments[1:]:
             parts = seg.split(",")
-            if parts[0] == "fsrs" and len(parts) >= 10:
-                if not all(p.isascii() for p in parts[1:10]):
-                    continue  # float() would read non-ASCII digits; the plugin does not
-                try:
-                    fsrs_rows.append({"due": parts[1], "interval": int(float(parts[2])),
-                                      "stability": float(parts[3]), "difficulty": float(parts[4]),
-                                      "last_review": "" if parts[9].strip() == "-" else parts[9].strip()})
-                except ValueError:
-                    continue
+            if parts[0] == "fsrs":
+                if len(parts) < 10 or not all(_SR_NUM_RE.fullmatch(parts[i].strip()) for i in (2, 3, 4)):
+                    raise SrDataError(f"unreadable SR fsrs schedule: !{seg[:80]}")
+                fsrs_rows.append({"due": parts[1], "interval": int(float(parts[2])),
+                                  "stability": float(parts[3]), "difficulty": float(parts[4]),
+                                  "last_review": "" if parts[9].strip() == "-" else parts[9].strip()})
                 continue
             m = _SM2_RE.match("!" + seg)
-            if m:
-                sm2.append((m.group(1), int(m.group(2)), int(m.group(3))))
+            if not m:
+                raise SrDataError(f"unreadable SR schedule: !{seg[:80]}")
+            sm2.append((m.group(1), int(m.group(2)), int(m.group(3))))
     fm = frontmatter or {}
-    due, ivl, ease = fm.get("sr-due"), fm.get("sr-interval"), fm.get("sr-ease")
-    if due and ivl is not None and ease is not None:
-        try:
-            sm2.append((str(due)[:10], int(ivl), int(ease)))
-        except (TypeError, ValueError):
-            pass
+    present = [k for k in SR_FRONTMATTER_KEYS if fm.get(k) is not None and fm.get(k) != ""]
+    if present:
+        if len(present) < len(SR_FRONTMATTER_KEYS):
+            missing = ", ".join(k for k in SR_FRONTMATTER_KEYS if k not in present)
+            raise SrDataError(f"incomplete SR front matter: missing {missing}")
+        sm2.append((_sr_date(fm["sr-due"], "sr-due"), _sr_int(fm["sr-interval"], "sr-interval"),
+                    _sr_int(fm["sr-ease"], "sr-ease")))
     if fsrs_rows:
         rows = sorted(fsrs_rows, key=lambda r: (r["due"], r["interval"]))
         first = rows[0]
@@ -1125,31 +1163,48 @@ def sr_schedule(text: str, frontmatter: Mapping[str, Any] | None = None) -> dict
     return None
 
 
+@dataclass
+class SrImportPlan:
+    found: list[tuple[CardMeta, dict[str, Any]]]
+    skipped: int  # cards with SR data that already have events (never imported twice)
+    invalid: list[dict[str, str]]  # {"card", "path", "reason"}: SR data that cannot be read
+
+
 def plan_sr_import(cards: Iterable[tuple[CardMeta, str, Mapping[str, Any] | None]],
-                   result: ReplayResult) -> tuple[list[tuple[CardMeta, dict[str, Any]]], int]:
-    """Cards with Spaced Repetition data and no events yet, plus the count skipped for having events."""
-    found: list[tuple[CardMeta, dict[str, Any]]] = []
-    skipped = 0
+                   result: ReplayResult) -> SrImportPlan:
+    """Sort cards into importable, already imported (has events) and unreadable. Never raises for one card."""
+    plan = SrImportPlan(found=[], skipped=0, invalid=[])
     for meta, text, frontmatter in cards:
-        seed = sr_schedule(text, frontmatter)
-        if seed is None:
+        try:
+            seed, error = sr_schedule(text, frontmatter), None
+            if seed is not None:
+                _parse_import(seed)  # the same check the event writer applies
+        except Exception as exc:  # one card's data must never stop the others
+            seed, error = None, str(exc)
+        if seed is None and error is None:
             continue
         if meta.id in result.states:
-            skipped += 1
+            plan.skipped += 1
+        elif error is not None:
+            plan.invalid.append({"card": meta.id, "path": meta.path, "reason": error})
         else:
-            found.append((meta, seed))
-    return found, skipped
+            plan.found.append((meta, seed))
+    return plan
 
 
 def import_sr(review_dir: Path, cards: Iterable[tuple[CardMeta, str, Mapping[str, Any] | None]], *,
               device: str, now: datetime, fmt: str = "jsonl", dry_run: bool = False,
               cache_dir: Path | None = None) -> dict[str, Any]:
-    """One-time import of Spaced Repetition schedules as ``import`` events. Card files are not changed."""
-    found, skipped = plan_sr_import(cards, load(review_dir, cache_dir=cache_dir))
-    events = [make_import_event(m.id, seed, device=device, now=now) for m, seed in found]
+    """One-time import of Spaced Repetition schedules as ``import`` events. Card files are not changed.
+
+    Idempotent: cards that already have events are skipped, so a second run imports nothing.
+    Cards whose SR data cannot be read are listed under ``invalid`` and not imported.
+    """
+    plan = plan_sr_import(cards, load(review_dir, cache_dir=cache_dir))
+    events = [make_import_event(m.id, seed, device=device, now=now) for m, seed in plan.found]
     path = append_events(review_dir, events, fmt=fmt) if events and not dry_run else None
-    return {"imported": 0 if dry_run else len(events), "found": len(events), "skipped": skipped,
-            "written": str(path) if path else None}
+    return {"imported": 0 if dry_run else len(events), "found": len(events), "skipped": plan.skipped,
+            "invalid": plan.invalid, "written": str(path) if path else None}
 
 
 def make_import_event(card: str, seed: Mapping[str, Any], *, device: str, now: datetime) -> dict[str, Any]:
@@ -1160,7 +1215,7 @@ def make_import_event(card: str, seed: Mapping[str, Any], *, device: str, now: d
 
 
 # --------------------------------------------------------------------------
-# Helpers for a future `sb review status | queue | log` command (not wired yet)
+# Helpers behind `sb review status | queue | log | import-sr`
 # --------------------------------------------------------------------------
 def status_report(review_dir: Path, cards: Iterable[CardMeta], now: datetime, *,
                   cache_dir: Path | None = None) -> dict[str, Any]:

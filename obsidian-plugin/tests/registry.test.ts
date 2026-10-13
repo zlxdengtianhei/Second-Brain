@@ -10,6 +10,7 @@ import {
 	type CardMeta,
 	type Issue,
 	type ReviewEvent,
+	SrDataError,
 	srSchedule,
 	stateToDict,
 	summarize,
@@ -83,9 +84,14 @@ describe("question ids, review items, Spaced Repetition import", () => {
 	}
 	for (const c of VECTORS.sr_import) {
 		it(`sr import ${c.name}`, () => {
-			expect(srSchedule(c.text, c.frontmatter)).toEqual(c.seed);
+			if (c.error) expect(() => srSchedule(c.text, c.frontmatter)).toThrow(SrDataError);
+			else expect(srSchedule(c.text, c.frontmatter)).toEqual(c.seed);
 		});
 	}
+	it("sr import accepts YAML date objects for sr-due", () => {
+		const fm = { "sr-due": new Date(Date.UTC(2026, 3, 2)), "sr-interval": 12, "sr-ease": 290 };
+		expect(srSchedule("body", fm)).toEqual({ from: "sr-sm2", due: "2026-04-02", interval: 12, ease: 290 });
+	});
 });
 
 function queueCards(): CardMeta[] {

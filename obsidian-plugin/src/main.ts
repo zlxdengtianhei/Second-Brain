@@ -207,8 +207,12 @@ export default class SecondBrainReviewPlugin extends Plugin {
 			hasEvents: (c) => this.service.state(c.id) !== undefined,
 		});
 		scanning.hide();
+		if (plan.invalid.length) {
+			console.warn("[secondbrain-review] SR data that cannot be read (not imported):", plan.invalid.map((i) => ({ card: i.card.id, path: i.card.path, reason: i.reason })));
+			new Notice(t("import.invalid", { n: plan.invalid.length, first: plan.invalid.slice(0, 3).map((i) => i.card.title).join("、") }), 15_000);
+		}
 		if (!plan.found.length) return void new Notice(t("import.none"));
-		new ConfirmModal(this.app, t("import.confirm", { n: plan.found.length, skipped: plan.skipped }), t("import.go"), async () => {
+		new ConfirmModal(this.app, t("import.confirm", { n: plan.found.length, skipped: plan.skipped, invalid: plan.invalid.length }), t("import.go"), async () => {
 			const n = await this.service.recordBatch(plan.found.map((f) => ({ card: f.card.id, mode: "import", importSeed: f.seed })));
 			new Notice(t("import.done", { n }));
 		}).open();

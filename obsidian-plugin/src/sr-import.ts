@@ -1,13 +1,18 @@
 // One-time import of Spaced Repetition plugin schedules (<!--SR:...--> comments, sr-* front matter).
-import { type ImportSeed, srSchedule } from "./registry";
+import { type ImportSeed, srSchedule, validateImportSeed } from "./registry";
 
 export interface ImportPlan<C> {
 	found: { card: C; seed: ImportSeed }[];
-	/** Cards that have SR data but already have events (not imported again). */
+	/** Cards that have SR data but already have events: never imported twice. */
 	skipped: number;
+	/** Cards whose SR data cannot be read; reported, not imported. */
+	invalid: { card: C; reason: string }[];
 }
 
-/** Find cards with Spaced Repetition data. Reads every card once (Obsidian serves cached text). */
+/**
+ * Sort cards into importable, already imported and unreadable (the Python twin is `plan_sr_import`).
+ * Reads every card once (Obsidian serves cached text); one card's bad data never stops the others.
+ */
 export async function planSrImport<C extends { id: string }>(
 	cards: C[],
 	deps: {
@@ -16,20 +21,21 @@ export async function planSrImport<C extends { id: string }>(
 		hasEvents: (card: C) => boolean;
 	},
 ): Promise<ImportPlan<C>> {
-	const plan: ImportPlan<C> = { found: [], skipped: 0 };
+	const plan: ImportPlan<C> = { found: [], skipped: 0, invalid: [] };
 	for (const card of cards) {
-		const fm = deps.frontmatter(card);
-		let text = "";
+		let seed: ImportSeed | null = null;
+		let error: string | null = null;
 		try {
-			text = await deps.read(card);
-		} catch {
-			continue;
+			seed = srSchedule(await deps.read(card), deps.frontmatter(card));
+			if (seed) validateImportSeed(seed);
+		} catch (e) {
+			seed = null;
+			error = e instanceof Error ? e.message : String(e);
 		}
-		if (!text.includes("<!--SR:") && !(fm && "sr-due" in fm)) continue;
-		const seed = srSchedule(text, fm);
-		if (!seed) continue;
+		if (!seed && error === null) continue;
 		if (deps.hasEvents(card)) plan.skipped++;
-		else plan.found.push({ card, seed });
+		else if (error !== null) plan.invalid.push({ card, reason: error });
+		else plan.found.push({ card, seed: seed! });
 	}
 	return plan;
 }

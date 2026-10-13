@@ -1271,8 +1271,228 @@
       "name": "non-ascii-digits",
       "text": "Q::A <!--SR:!２０２６-03-20,5,250-->\nQ2::A2 <!--SR:!fsrs,2026-03-25T07:00:00.000Z,１０,9.5,6.2,2,4,0,0,2026-03-15T07:00:00.000Z-->",
       "frontmatter": {},
+      "error": true
+    },
+    {
+      "name": "fm-string-numbers",
+      "text": "body",
+      "frontmatter": {
+        "sr-due": "2026-04-02",
+        "sr-interval": "12",
+        "sr-ease": " 290 "
+      },
+      "seed": {
+        "from": "sr-sm2",
+        "due": "2026-04-02",
+        "interval": 12,
+        "ease": 290
+      }
+    },
+    {
+      "name": "fm-integral-float",
+      "text": "body",
+      "frontmatter": {
+        "sr-due": "2026-04-02",
+        "sr-interval": 12.0,
+        "sr-ease": 290
+      },
+      "seed": {
+        "from": "sr-sm2",
+        "due": "2026-04-02",
+        "interval": 12,
+        "ease": 290
+      }
+    },
+    {
+      "name": "fm-fullwidth-interval",
+      "text": "body",
+      "frontmatter": {
+        "sr-due": "2026-04-02",
+        "sr-interval": "５",
+        "sr-ease": 250
+      },
+      "error": true
+    },
+    {
+      "name": "fm-fullwidth-ease",
+      "text": "body",
+      "frontmatter": {
+        "sr-due": "2026-04-02",
+        "sr-interval": 5,
+        "sr-ease": "２５０"
+      },
+      "error": true
+    },
+    {
+      "name": "fm-decimal-string",
+      "text": "body",
+      "frontmatter": {
+        "sr-due": "2026-04-02",
+        "sr-interval": "5.7",
+        "sr-ease": 250
+      },
+      "error": true
+    },
+    {
+      "name": "fm-decimal-number",
+      "text": "body",
+      "frontmatter": {
+        "sr-due": "2026-04-02",
+        "sr-interval": 5.7,
+        "sr-ease": 250
+      },
+      "error": true
+    },
+    {
+      "name": "fm-fullwidth-due",
+      "text": "body",
+      "frontmatter": {
+        "sr-due": "２０２６-04-02",
+        "sr-interval": 5,
+        "sr-ease": 250
+      },
+      "error": true
+    },
+    {
+      "name": "fm-impossible-date",
+      "text": "body",
+      "frontmatter": {
+        "sr-due": "2026-02-30",
+        "sr-interval": 5,
+        "sr-ease": 250
+      },
+      "error": true
+    },
+    {
+      "name": "fm-boolean",
+      "text": "body",
+      "frontmatter": {
+        "sr-due": "2026-04-02",
+        "sr-interval": true,
+        "sr-ease": 250
+      },
+      "error": true
+    },
+    {
+      "name": "fm-incomplete",
+      "text": "body",
+      "frontmatter": {
+        "sr-due": "2026-04-02"
+      },
+      "error": true
+    },
+    {
+      "name": "fm-empty-values-mean-none",
+      "text": "body",
+      "frontmatter": {
+        "sr-due": "",
+        "sr-interval": null
+      },
       "seed": null
+    },
+    {
+      "name": "comment-garbage",
+      "text": "Q::A <!--SR:nonsense-->",
+      "frontmatter": {},
+      "error": true
+    },
+    {
+      "name": "comment-bad-segment",
+      "text": "Q::A <!--SR:!2026-03-20,5,250!tomorrow-->",
+      "frontmatter": {},
+      "error": true
+    },
+    {
+      "name": "fsrs-too-short",
+      "text": "Q::A <!--SR:!fsrs,2026-03-25T07:00:00.000Z,10-->",
+      "frontmatter": {},
+      "error": true
+    },
+    {
+      "name": "fsrs-hex-number",
+      "text": "Q::A <!--SR:!fsrs,2026-03-25T07:00:00.000Z,0x10,9.5,6.2,2,4,0,0,2026-03-15T07:00:00.000Z-->",
+      "frontmatter": {},
+      "error": true
+    },
+    {
+      "name": "fsrs-infinity",
+      "text": "Q::A <!--SR:!fsrs,2026-03-25T07:00:00.000Z,10,Infinity,6.2,2,4,0,0,-->",
+      "frontmatter": {},
+      "error": true
     }
   ],
-  "rules_version": 2
+  "rules_version": 2,
+  "sr_import_note": "sr_import: 'seed' is the merged seed (null = no SR data); 'error': true means the card has SR data that cannot be read and must be reported, not imported. sr_plan: one vault, run through the import planner of both implementations.",
+  "sr_plan": {
+    "cards": [
+      {
+        "id": "ex_sr_ok",
+        "text": "Q::A <!--SR:!2026-03-20,5,250-->",
+        "frontmatter": {}
+      },
+      {
+        "id": "ex_sr_fm",
+        "text": "Q::A",
+        "frontmatter": {
+          "sr-due": "2026-03-22",
+          "sr-interval": "7",
+          "sr-ease": "270"
+        }
+      },
+      {
+        "id": "ex_sr_bad_fm",
+        "text": "Q::A",
+        "frontmatter": {
+          "sr-due": "2026-03-22",
+          "sr-interval": "５",
+          "sr-ease": 270
+        }
+      },
+      {
+        "id": "ex_sr_bad_comment",
+        "text": "Q::A <!--SR:!2026-3-2,5,250-->",
+        "frontmatter": {}
+      },
+      {
+        "id": "ex_sr_bad_seed_ts",
+        "text": "Q::A <!--SR:!fsrs,yesterday,10,9.5,6.2,2,4,0,0,--->",
+        "frontmatter": {}
+      },
+      {
+        "id": "ex_sr_zero_ease",
+        "text": "Q::A <!--SR:!2026-03-20,5,0-->",
+        "frontmatter": {}
+      },
+      {
+        "id": "ex_sr_has_events",
+        "text": "Q::A <!--SR:!2026-03-21,2,230-->",
+        "frontmatter": {},
+        "has_events": true
+      },
+      {
+        "id": "ex_sr_has_events_bad",
+        "text": "Q::A <!--SR:garbage-->",
+        "frontmatter": {},
+        "has_events": true
+      },
+      {
+        "id": "ex_no_sr",
+        "text": "Q::A",
+        "frontmatter": {
+          "title": "x"
+        }
+      }
+    ],
+    "found": [
+      "ex_sr_ok",
+      "ex_sr_fm"
+    ],
+    "skipped": 2,
+    "invalid": [
+      "ex_sr_bad_fm",
+      "ex_sr_bad_comment",
+      "ex_sr_bad_seed_ts",
+      "ex_sr_zero_ease"
+    ]
+  }
 }

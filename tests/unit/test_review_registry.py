@@ -122,7 +122,59 @@ def test_extract_review_items(case: dict) -> None:
 
 @pytest.mark.parametrize("case", VECTORS["sr_import"], ids=lambda c: c["name"])
 def test_sr_schedule(case: dict) -> None:
-    assert rr.sr_schedule(case["text"], case["frontmatter"]) == case["seed"]
+    if case.get("error"):
+        with pytest.raises(rr.SrDataError):
+            rr.sr_schedule(case["text"], case["frontmatter"])
+    else:
+        assert rr.sr_schedule(case["text"], case["frontmatter"]) == case["seed"]
+
+
+def test_sr_schedule_accepts_yaml_dates() -> None:
+    from datetime import date as _date
+    fm = {"sr-due": _date(2026, 4, 2), "sr-interval": 12, "sr-ease": 290}  # what PyYAML gives for 2026-04-02
+    assert rr.sr_schedule("body", fm) == {"from": "sr-sm2", "due": "2026-04-02", "interval": 12, "ease": 290}
+    fm["sr-due"] = datetime(2026, 4, 2, 9, 30)
+    assert rr.sr_schedule("body", fm)["due"] == "2026-04-02"
+
+
+def _sr_plan_rows() -> tuple[list, rr.ReplayResult]:
+    plan = VECTORS["sr_plan"]
+    rows = [(rr.CardMeta(id=c["id"], path=f"{c['id']}.md"), c["text"], c["frontmatter"]) for c in plan["cards"]]
+    with_events = rr.ReplayResult(states={}, issues=[])
+    for c in plan["cards"]:
+        if c.get("has_events"):
+            ev = rr.parse_event({"v": 1, "ts": "2026-03-01T09:00:00.000+01:00", "device": "obs-a",
+                                 "card": c["id"], "mode": "flip", "rating": 3})
+            with_events.states[c["id"]] = rr.replay([ev]).states[c["id"]]
+    return rows, with_events
+
+
+def test_sr_plan_matches_shared_expectations() -> None:
+    rows, result = _sr_plan_rows()
+    plan = rr.plan_sr_import(rows, result)
+    want = VECTORS["sr_plan"]
+    assert [m.id for m, _ in plan.found] == want["found"]
+    assert plan.skipped == want["skipped"]
+    assert [i["card"] for i in plan.invalid] == want["invalid"]
+    assert all(i["reason"] and i["path"].endswith(".md") for i in plan.invalid)
+
+
+def test_import_sr_reports_bad_cards_and_is_idempotent(tmp_path: Path) -> None:
+    rows, _ = _sr_plan_rows()
+    rows = [r for r in rows if not any(c["id"] == r[0].id and c.get("has_events") for c in VECTORS["sr_plan"]["cards"])]
+    now = datetime(2026, 3, 15, 10, tzinfo=timezone(timedelta(hours=1)))
+    dry = rr.import_sr(tmp_path, rows, device="cli-1", now=now, dry_run=True)
+    assert (dry["found"], dry["imported"], dry["written"]) == (2, 0, None)
+    assert not list(tmp_path.glob("events-*"))
+    first = rr.import_sr(tmp_path, rows, device="cli-1", now=now)
+    assert first["imported"] == 2 and len(first["invalid"]) == 4
+    log = (tmp_path / "events-cli-1.jsonl").read_text(encoding="utf-8")
+    second = rr.import_sr(tmp_path, rows, device="cli-1", now=now + timedelta(minutes=5))
+    assert (second["imported"], second["found"], second["skipped"]) == (0, 0, 2)
+    assert second["invalid"] == first["invalid"]  # still reported until fixed
+    assert (tmp_path / "events-cli-1.jsonl").read_text(encoding="utf-8") == log  # nothing added
+    states = rr.load(tmp_path).states
+    assert sorted(states) == ["ex_sr_fm", "ex_sr_ok"] and states["ex_sr_fm"].stability == 7.0
 
 
 def test_import_event_round_trip(tmp_path: Path) -> None:
@@ -145,7 +197,7 @@ def test_import_sr_skips_cards_with_events_and_writes_once(tmp_path: Path) -> No
         (rr.CardMeta(id="ex_d"), "Q::A <!--SR:!2026-03-21,2,230-->", None),
     ]
     dry = rr.import_sr(tmp_path, cards, device="cli-1", now=now, dry_run=True)
-    assert dry == {"imported": 0, "found": 2, "skipped": 1, "written": None}
+    assert dry == {"imported": 0, "found": 2, "skipped": 1, "invalid": [], "written": None}
     out = rr.import_sr(tmp_path, cards, device="cli-1", now=now)
     assert out["imported"] == 2
     result = rr.load(tmp_path)

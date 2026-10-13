@@ -212,6 +212,11 @@ function parseImport(seed: unknown): ImportSeed {
 	return { ...(seed as unknown as ImportSeed) };
 }
 
+/** Check an import seed with the same rules the event parser applies. Throws EventError. */
+export function validateImportSeed(seed: unknown): ImportSeed {
+	return parseImport(seed);
+}
+
 /** Validate one decoded JSON value and return an event. Throws EventError. */
 export function parseEvent(obj: unknown, source = "", line = 0): ReviewEvent {
 	if (!isObject(obj)) throw new EventError("event must be a JSON object");

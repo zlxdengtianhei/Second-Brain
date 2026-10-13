@@ -81,35 +81,64 @@ export function stripFrontmatter(markdown: string): string {
 
 const SR_BLOCK_RE = /<!--SR:([\s\S]*?)-->/g;
 const SM2_RE = /^!(\d{4}-\d{2}-\d{2}),(\d+),(\d+)/;
+const SR_NUM_RE = /^[0-9]+(?:\.[0-9]+)?$/;
+const SR_INT_RE = /^[0-9]+$/;
+const DATE_ONLY_RE = /^\d{4}-\d{2}-\d{2}$/;
+export const SR_FRONTMATTER_KEYS = ["sr-due", "sr-interval", "sr-ease"] as const;
 
-/** Merge the Spaced Repetition schedules of one card into one import seed (or null). */
+/** A card has Spaced Repetition data that cannot be read (docs section 2.2). */
+export class SrDataError extends Error {}
+
+function srInt(value: unknown, key: string): number {
+	if (typeof value === "number" && Number.isInteger(value)) return value;
+	if (typeof value === "string" && SR_INT_RE.test(value.trim())) return Number(value.trim());
+	throw new SrDataError(`${key} is not a whole number: ${JSON.stringify(value)}`);
+}
+
+function srDate(value: unknown, key: string): string {
+	if (value instanceof Date && !Number.isNaN(value.getTime())) return value.toISOString().slice(0, 10);
+	if (typeof value === "string" && DATE_ONLY_RE.test(value.trim())) {
+		const v = value.trim();
+		const [y, mo, d] = v.split("-").map(Number);
+		const dt = new Date(Date.UTC(y, mo - 1, d));
+		if (dt.getUTCFullYear() === y && dt.getUTCMonth() === mo - 1 && dt.getUTCDate() === d) return v;
+	}
+	throw new SrDataError(`${key} is not a YYYY-MM-DD date: ${JSON.stringify(value)}`);
+}
+
+/**
+ * Merge the Spaced Repetition schedules of one card into one import seed. Returns null when the card
+ * has no SR data; throws SrDataError when it has SR data that cannot be read (the caller reports it).
+ */
 export function srSchedule(text: string, frontmatter: Record<string, unknown> | null | undefined): ImportSeed | null {
 	const sm2: [string, number, number][] = [];
 	const fsrsRows: { due: string; interval: number; stability: number; difficulty: number; last_review: string }[] = [];
 	for (const m of text.matchAll(SR_BLOCK_RE)) {
-		for (const seg of m[1].split("!").slice(1)) {
+		const segments = m[1].split("!");
+		if (segments[0].trim() || segments.length < 2) throw new SrDataError(`unreadable SR comment: <!--SR:${m[1].slice(0, 60)}-->`);
+		for (const seg of segments.slice(1)) {
 			const parts = seg.split(",");
-			if (parts[0] === "fsrs" && parts.length >= 10) {
-				const interval = Math.trunc(Number(parts[2]));
-				const stability = Number(parts[3]);
-				const difficulty = Number(parts[4]);
-				if ([interval, stability, difficulty].some((n) => !Number.isFinite(n)) || parts[2].trim() === "") continue;
+			if (parts[0] === "fsrs") {
+				if (parts.length < 10 || ![2, 3, 4].every((i) => SR_NUM_RE.test(parts[i].trim()))) {
+					throw new SrDataError(`unreadable SR fsrs schedule: !${seg.slice(0, 80)}`);
+				}
 				const lr = parts[9].trim();
-				fsrsRows.push({ due: parts[1], interval, stability, difficulty, last_review: lr === "-" ? "" : lr });
+				fsrsRows.push({ due: parts[1], interval: Math.trunc(Number(parts[2])), stability: Number(parts[3]), difficulty: Number(parts[4]), last_review: lr === "-" ? "" : lr });
 				continue;
 			}
 			const sm = SM2_RE.exec("!" + seg);
-			if (sm) sm2.push([sm[1], Number(sm[2]), Number(sm[3])]);
+			if (!sm) throw new SrDataError(`unreadable SR schedule: !${seg.slice(0, 80)}`);
+			sm2.push([sm[1], Number(sm[2]), Number(sm[3])]);
 		}
 	}
 	const fm = frontmatter ?? {};
-	const due = fm["sr-due"];
-	const ivl = fm["sr-interval"];
-	const ease = fm["sr-ease"];
-	if (due && ivl !== undefined && ivl !== null && ease !== undefined && ease !== null) {
-		const i = Math.trunc(Number(ivl));
-		const e = Math.trunc(Number(ease));
-		if (Number.isFinite(i) && Number.isFinite(e)) sm2.push([String(due).slice(0, 10), i, e]);
+	const present = SR_FRONTMATTER_KEYS.filter((k) => fm[k] !== undefined && fm[k] !== null && fm[k] !== "");
+	if (present.length) {
+		if (present.length < SR_FRONTMATTER_KEYS.length) {
+			const missing = SR_FRONTMATTER_KEYS.filter((k) => !present.includes(k)).join(", ");
+			throw new SrDataError(`incomplete SR front matter: missing ${missing}`);
+		}
+		sm2.push([srDate(fm["sr-due"], "sr-due"), srInt(fm["sr-interval"], "sr-interval"), srInt(fm["sr-ease"], "sr-ease")]);
 	}
 	if (fsrsRows.length) {
 		const rows = [...fsrsRows].sort((a, b) => (a.due < b.due ? -1 : a.due > b.due ? 1 : a.interval - b.interval));
