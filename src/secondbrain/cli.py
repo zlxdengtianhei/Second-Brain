@@ -76,11 +76,42 @@ def parser():
     daily.add_argument('--refresh-mocs', action='store_true')
     daily.add_argument('--date', help='ISO date (default: today)')
     recover = sub.add_parser('recover', help='Resume or roll back a frozen transaction')
-    recover.add_argument('--job', required=True); recover.add_argument('--action', choices=['resume', 'rollback'], default='resume')
-    job = sub.add_parser('job', help='Inspect jobs and runs')
+    recover.add_argument('id', nargs='?', help='Job id')
+    recover.add_argument('--job', help='Job id (older spelling)')
+    mode = recover.add_mutually_exclusive_group()
+    mode.add_argument('--resume', action='store_const', const='resume', dest='action')
+    mode.add_argument('--rollback', action='store_const', const='rollback', dest='action')
+    mode.add_argument('--action', choices=['resume', 'rollback'], dest='action')
+    inbox = sub.add_parser('inbox', help='Inbox items and their status (S0)')
+    inbox_sub = inbox.add_subparsers(dest='inbox_command')
+    inbox_sub.add_parser('list')
+    ishow = inbox_sub.add_parser('show'); ishow.add_argument('item'); ishow.add_argument('--head', type=int, default=40)
+    iskip = inbox_sub.add_parser('skip'); iskip.add_argument('item'); iskip.add_argument('--reason', required=True)
+    ingest = sub.add_parser('ingest', help='Turn sources into reviewed cards (S1-S9)')
+    ingest.add_argument('paths', nargs='*', type=Path)
+    ingest.add_argument('--all', action='store_true', help='Every new or unfinished inbox item')
+    ingest.add_argument('--executor', choices=['api', 'host'], help='Override [executor].default')
+    ingest.add_argument('--prepare-only', action='store_true', help='Freeze input and chunks; no model call')
+    ingest.add_argument('--proposal-only', action='store_true', help='Produce and review, but do not write')
+    job = sub.add_parser('job', help='Jobs, runs and host-mode hand-off')
     job_sub = job.add_subparsers(dest='job_command', required=True)
     job_sub.add_parser('list')
     show = job_sub.add_parser('show'); show.add_argument('id')
+    jpacket = job_sub.add_parser('packet', help='Create the next producer/reviewer packet for a sub-agent')
+    jpacket.add_argument('id'); jpacket.add_argument('--role', choices=['producer', 'reviewer'], required=True)
+    jpacket.add_argument('--chunk')
+    jsubmit = job_sub.add_parser('submit', help='Submit a sub-agent answer for one run')
+    jsubmit.add_argument('id'); jsubmit.add_argument('--role', choices=['producer', 'reviewer'], required=True)
+    jsubmit.add_argument('--run-id', required=True); jsubmit.add_argument('--file', type=Path, required=True)
+    jsubmit.add_argument('--model', help='Model that produced the answer (recorded as self-reported)')
+    jadvance = job_sub.add_parser('advance', help='Run every step that can run now')
+    jadvance.add_argument('id'); jadvance.add_argument('--executor', choices=['api', 'host'])
+    jadvance.add_argument('--proposal-only', action='store_true')
+    jabandon = job_sub.add_parser('abandon', help='Give up a run that will not be submitted')
+    jabandon.add_argument('id'); jabandon.add_argument('--run-id', required=True)
+    jabandon.add_argument('--reason', required=True)
+    doctor = sub.add_parser('doctor', help='Check configuration, parser, index and endpoints')
+    doctor.add_argument('--live', action='store_true', help='Send one tiny request to each endpoint')
     serve = sub.add_parser('serve', help='MCP stdio server (read-only unless --writer)')
     serve.add_argument('--writer', action='store_true')
     return p
@@ -88,7 +119,138 @@ def parser():
 
 def make_executors(args, root: Path):
     """Return ``(producer, reviewer)`` executors for this invocation."""
-    raise ValueError('No executor is configured for this vault')
+    from .executors.factory import build
+    return build(config.current(), getattr(args, 'executor', None),
+                 vault=str(root) if args.vault else None)
+
+
+def _ingest(args, root: Path) -> list:
+    from . import inbox
+    from .pipelines import ingest
+    paths = list(args.paths)
+    if args.all:
+        lay_items = [i for i in inbox.scan(root) if i['status'] in {'new', 'in_progress'}]
+        paths += [root / i['path'] for i in lay_items]
+    if not paths:
+        raise ValueError('Give source paths or --all')
+    results = []
+    executors = None
+    for path in paths:
+        try:
+            prepared = ingest.prepare(root, path)
+        except ingest.IngestError as exc:
+            results.append({'path': str(path), 'status': 'failed', 'error': str(exc)})
+            continue
+        if args.prepare_only or prepared.get('status') in {'unchanged', 'skipped'} or 'job_id' not in prepared:
+            results.append(prepared)
+            continue
+        executors = executors or make_executors(args, root)
+        results.append(ingest.advance(root, prepared['job_id'], producer=executors[0],
+                                      reviewer=executors[1], apply=not args.proposal_only))
+    return results
+
+
+def _job(args, root: Path):
+    if args.job_command == 'list':
+        return jobs.list_jobs(root)
+    if args.job_command == 'show':
+        return {**jobs.load(root, args.id), 'run_records': jobs.list_runs(root, args.id)}
+    if args.job_command == 'submit':
+        payload = json.loads(args.file.read_text(encoding='utf-8'))
+        return Service(root).submit(args.id, payload, role=args.role, run_id=args.run_id, model=args.model)
+    if args.job_command == 'abandon':
+        return jobs.abandon_run(root, args.id, args.run_id, reason=args.reason)
+    kind = jobs.load(root, args.id)['kind']
+    if args.job_command == 'packet':
+        from .executors.host import HostExecutor
+        host = HostExecutor(vault=str(root) if args.vault else None)
+        if kind == 'ingest':
+            from .pipelines.ingest import packet_for
+            return packet_for(root, args.id, role=args.role, chunk=args.chunk, executor=host)
+        from .runner import run_job
+        result = run_job(root, args.id, producer=host, reviewer=host, apply=False)
+        if result.get('status') != 'awaiting_submission':
+            raise ValueError('No model step is due for this job')
+        return result['handoff']
+    producer, reviewer = make_executors(args, root)
+    if kind == 'ingest':
+        from .pipelines.ingest import advance
+        return advance(root, args.id, producer=producer, reviewer=reviewer, apply=not args.proposal_only)
+    if kind == 'classification-batch':
+        from .backlog import run as run_batch
+        return run_batch(root, args.id, producer=producer, reviewer=reviewer, apply=not args.proposal_only)
+    from .runner import run_job
+    return run_job(root, args.id, producer=producer, reviewer=reviewer, apply=not args.proposal_only)
+
+
+def _inbox(args, root: Path):
+    from . import inbox
+    command = args.inbox_command or 'list'
+    if command == 'list':
+        return inbox.scan(root)
+    if command == 'skip':
+        return inbox.skip(root, args.item, args.reason)
+    item = inbox.find(root, args.item)
+    text = (root / item['path']).read_text(encoding='utf-8', errors='replace')
+    return {**item, 'head': '\n'.join(text.splitlines()[:max(1, args.head)])}
+
+
+def _doctor(args, root: Path) -> dict:
+    import dataclasses
+
+    import yaml as _yaml
+    from . import index
+    from . import layout as layouts
+    from .store import state_root
+    settings = config.current()
+    report = {'config_file': str(settings.source) if settings.source else None, 'vault': str(root),
+              'vault_exists': root.is_dir(), 'layout': dataclasses.asdict(layouts.of(root)),
+              'libyaml': bool(getattr(_yaml, '__with_libyaml__', False)),
+              'fts5': index.fts5_available(), 'executor_default': settings.executor_default}
+    try:
+        report['state_root'] = str(state_root(root))
+    except ValueError as exc:
+        report['state_root_error'] = str(exc)
+    for role in ('producer', 'reviewer'):
+        endpoint = getattr(settings, role)
+        if endpoint is None:
+            report[role] = None
+            continue
+        entry = {'kind': endpoint.kind, 'base_url': endpoint.base_url, 'model': endpoint.model}
+        try:
+            endpoint.api_key()
+            entry['key'] = 'available'
+        except (ValueError, OSError) as exc:
+            entry['key'] = f'unavailable: {exc}'
+        report[role] = entry
+    if settings.producer and settings.reviewer:
+        from .executors.factory import check_families
+        try:
+            report['families'] = check_families(settings)
+        except ValueError as exc:
+            report['families_error'] = str(exc)
+    if args.live:
+        report['live'] = live_check(settings)
+    return report
+
+
+def live_check(settings, transport=None) -> dict:
+    """One minimal request per endpoint; reports the model each provider names."""
+    from .executors.api import ApiExecutor
+    from .executors.base import Task
+    out = {}
+    schema = {'type': 'object', 'required': ['ok'], 'properties': {'ok': {'type': 'boolean'}}}
+    for role in ('producer', 'reviewer'):
+        endpoint = getattr(settings, role)
+        if endpoint is None:
+            out[role] = 'not configured'
+            continue
+        result = ApiExecutor(endpoint, transport=transport).run(Task(
+            job_id='doctor', run_id='doctor', role=role, step='produce',
+            prompt='Health check. Return {"ok": true}.', packet={}, packet_sha256='', output_schema=schema))
+        out[role] = {'status': result.status, 'model_reported': result.model_reported,
+                     'output': result.output, 'error': result.error}
+    return out
 
 
 def _domcreate_evidence(root: Path, substr: str) -> list[str]:
@@ -183,18 +345,24 @@ def main(argv=None):
                               refresh_mocs=(args.refresh_mocs if cmd == 'daily' else False))
         elif cmd == 'recover':
             from .store import recover
+            job_id = args.id or args.job
+            if not job_id:
+                raise ValueError('recover needs a job id')
             if args.action == 'rollback':
-                result = recover(root, args.job, 'rollback')
-                if _has_state(root, args.job):
-                    jobs.update(root, args.job, status='rolled_back')
+                result = recover(root, job_id, 'rollback')
+                if _has_state(root, job_id):
+                    jobs._internal_update(root, job_id, status='rolled_back')
             else:
-                result = (jobs.resume_transaction(root, args.job) if _has_state(root, args.job) else None) \
-                    or recover(root, args.job, 'resume')
+                result = (jobs.resume_transaction(root, job_id) if _has_state(root, job_id) else None) \
+                    or recover(root, job_id, 'resume')
         elif cmd == 'job':
-            if args.job_command == 'list':
-                result = jobs.list_jobs(root)
-            else:
-                result = {**jobs.load(root, args.id), 'run_records': jobs.list_runs(root, args.id)}
+            result = _job(args, root)
+        elif cmd == 'inbox':
+            result = _inbox(args, root)
+        elif cmd == 'ingest':
+            result = _ingest(args, root)
+        elif cmd == 'doctor':
+            result = _doctor(args, root)
         print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
         return 0
     except ExecutorFailure as exc:

@@ -1,0 +1,178 @@
+"""An invented source and scripted producer/reviewer answers for ingest tests."""
+from __future__ import annotations
+
+import json
+import shutil
+from pathlib import Path
+
+from secondbrain import layout as layouts
+from tests.helpers import CATALOG, DOMAIN, EXISTING, PILLAR, TOPIC, build_vault
+
+FIXTURE = Path(__file__).parent / 'fixtures' / 'ingest' / 'lantern_queues.md'
+SOURCE_NAME = FIXTURE.name
+
+OTHER_DOMAIN = 'pebbles'
+OTHER_MOC = 'Example Pebble Map'
+OTHER_PILLAR = 'Pebble basics'
+OTHER_TOPIC = 'Sizes'
+OTHER_CARD = 'card_pebble'
+
+NEW_TOPIC = 'Markers'
+
+CARDS = {
+    'lantern-queue': {
+        'slug': 'lantern-queue', 'title': 'Lantern queue', 'kind': 'concept',
+        'domain': DOMAIN, 'pillar': PILLAR, 'topic': TOPIC,
+        'essence': 'A lantern queue keeps arrival order and lets readers skip ahead by lit markers.',
+        'propositions': ['Items stay in arrival order.', 'Readers skip ahead by following lit markers.'],
+        'intuition': 'Like lamp posts along a road: you can walk to the next lamp without counting stones.',
+        'confusions': ['Unlike an index, markers are placed by count, not by key.'],
+        'flashcards': [{'q': 'What order does a lantern queue keep?', 'a': 'Arrival order.'},
+                       {'q': 'How does a reader skip ahead?', 'a': 'By jumping to a lit marker.'}],
+        'relations': [{'type': 'similar_to', 'target': EXISTING, 'note': 'both route readers past items'},
+                      {'type': 'similar_to', 'target': EXISTING, 'note': 'listed twice on purpose'}],
+        'aliases': ['lantern list'],
+        'source_quotes': ['A lantern queue keeps every item in arrival order but lets a reader skip ahead by lit markers.'],
+        'status': 'confirmed', 'reason': 'PRODUCER-REASON-1 one structure, one question',
+    },
+    'lit-marker-cost': {
+        'slug': 'lit-marker-cost', 'title': 'Lit marker memory cost', 'kind': 'fact',
+        'domain': DOMAIN, 'pillar': PILLAR, 'topic': NEW_TOPIC,
+        'essence': 'Each lit marker costs one extra word, one marker per eight items.',
+        'propositions': ['A writer lights a marker every eight items.',
+                         'Each marker costs one word of memory; 800 items carry 100 markers.'],
+        'intuition': None, 'confusions': [],
+        'flashcards': [{'q': 'How often is a marker lit?', 'a': 'Every eight items.'},
+                       {'q': 'How many markers do 800 items carry?', 'a': '100.'},
+                       {'q': 'What does one marker cost?', 'a': 'One extra word of memory.'}],
+        'relations': [{'type': 'depends_on', 'target': 'lantern-queue', 'note': 'markers belong to the queue'},
+                      {'type': 'part_of', 'target': EXISTING, 'note': 'weak guess', 'tier': 'extension'}],
+        'source_quotes': ['A writer lights a marker every eight items.',
+                          'so a queue of 800 items carries 100 markers'],
+        'status': 'confirmed', 'reason': 'PRODUCER-REASON-2 cost is recalled on its own',
+    },
+    'marker-dimming': {
+        'slug': 'marker-dimming', 'title': 'Marker dimming', 'kind': 'mechanism',
+        'domain': DOMAIN, 'pillar': PILLAR, 'topic': NEW_TOPIC,
+        'essence': 'Compaction deletes old markers.',
+        'propositions': ['Markers before the cut are deleted.'],
+        'intuition': None, 'confusions': [],
+        'flashcards': [{'q': 'What happens to markers before a cut?', 'a': 'They are deleted.'},
+                       {'q': 'Are dimmed markers followed?', 'a': 'No.'}],
+        'relations': [{'type': 'depends_on', 'target': 'lit-marker-cost', 'note': 'dimming acts on markers'}],
+        'source_quotes': ['markers before the cut are dimmed rather than deleted'],
+        'status': 'confirmed', 'reason': 'PRODUCER-REASON-3 compaction behaviour',
+    },
+    'queue-order': {
+        'slug': 'queue-order', 'title': 'Arrival order in lantern queues', 'kind': 'fact',
+        'domain': DOMAIN, 'pillar': PILLAR, 'topic': TOPIC,
+        'essence': 'Items keep arrival order.',
+        'propositions': ['A lantern queue keeps every item in arrival order.'],
+        'intuition': None, 'confusions': [],
+        'flashcards': [{'q': 'Which order is kept?', 'a': 'Arrival order.'},
+                       {'q': 'Does a lantern queue reorder items?', 'a': 'No.'}],
+        'relations': [],
+        'source_quotes': ['A lantern queue keeps every item in arrival order'],
+        'status': 'confirmed', 'reason': 'PRODUCER-REASON-4 order fact',
+    },
+}
+
+FIXED_DIMMING = {
+    **CARDS['marker-dimming'],
+    'essence': 'Compaction dims markers before the cut instead of deleting them.',
+    'propositions': ['Markers before the cut are dimmed, not deleted.',
+                     'Dimmed markers stay readable but are never followed.'],
+    'flashcards': [{'q': 'What happens to markers before a compaction cut?', 'a': 'They are dimmed, not deleted.'},
+                   {'q': 'Are dimmed markers followed?', 'a': 'No, they stay readable only.'}],
+    'source_quotes': ['markers before the cut are dimmed rather than deleted; dimmed markers stay readable but are never followed'],
+    'reason': 'PRODUCER-REASON-5 fixed after review',
+}
+
+TOPIC_PROPOSAL = {'domain': DOMAIN, 'pillar': PILLAR, 'name': NEW_TOPIC,
+                  'boundary': 'How markers are placed, paid for and retired.',
+                  'reason': 'PRODUCER-REASON-6 no topic covers markers'}
+
+ALL_REASONS = [c['reason'] for c in CARDS.values()] + [FIXED_DIMMING['reason'], TOPIC_PROPOSAL['reason'],
+                                                       'PRODUCER-REASON-7', 'PRODUCER-REASON-8']
+
+
+def coverage(slugs):
+    rows = []
+    for slug in slugs:
+        rows.append({'source_quote': CARDS[slug]['source_quotes'][0], 'disposition': 'card',
+                     'cards': [slug], 'reason': 'PRODUCER-REASON-7 covered'})
+    rows.append({'source_quote': 'Thanks for reading, see you next week!', 'disposition': 'out_of_scope',
+                 'reason': 'PRODUCER-REASON-8 sign-off'})
+    return rows
+
+
+def first_candidate():
+    slugs = ['lantern-queue', 'lit-marker-cost', 'marker-dimming', 'queue-order']
+    return {'cards': [CARDS[s] for s in slugs], 'new_topics': [TOPIC_PROPOSAL], 'coverage': coverage(slugs)}
+
+
+def repair_candidate():
+    return {'cards': [FIXED_DIMMING], 'new_topics': [],
+            'coverage': [{'source_quote': FIXED_DIMMING['source_quotes'][0], 'disposition': 'card',
+                          'cards': ['marker-dimming'], 'reason': 'PRODUCER-REASON-7 covered'}]}
+
+
+def first_review():
+    return {'cards': [{'slug': 'lantern-queue', 'decision': 'accept', 'reason': 'faithful and atomic'},
+                      {'slug': 'lit-marker-cost', 'decision': 'accept', 'reason': 'numbers match the text'},
+                      {'slug': 'marker-dimming', 'decision': 'revise',
+                       'reason': 'the text says dimmed rather than deleted; the card says deleted'},
+                      {'slug': 'queue-order', 'decision': 'duplicate', 'duplicate_of': EXISTING,
+                       'reason': 'already covered by the existing card'}],
+            'new_topics': [{'domain': DOMAIN, 'pillar': PILLAR, 'name': NEW_TOPIC, 'decision': 'accept',
+                            'reason': 'markers deserve their own topic'}],
+            'coverage': {'decision': 'accept', 'reason': 'every paragraph is handled'}}
+
+
+def repair_review(decision='accept'):
+    return {'cards': [{'slug': 'marker-dimming', 'decision': decision,
+                       'reason': 'now matches the text' if decision == 'accept' else 'still wrong'}],
+            'new_topics': [], 'coverage': {'decision': 'accept', 'reason': 'covered with earlier round'}}
+
+
+def build_ingest_vault(root: Path, lay: layouts.VaultLayout | None = None) -> Path:
+    """The shared tiny vault plus a second, unrelated MOC that ingest must not touch."""
+    lay = lay or layouts.DEFAULT
+    catalog = json.loads(json.dumps(CATALOG))
+    catalog['domains'][OTHER_DOMAIN] = {'moc': OTHER_MOC, 'question': 'How big are pebbles?'}
+    catalog['tracks'].append({'id': 'stones', 'title': 'Stones', 'domains': [OTHER_DOMAIN]})
+    root = build_vault(root, catalog=catalog, lay=lay)
+    (root / lay.taxonomy / f'{OTHER_MOC}.yaml').write_text(json.dumps(
+        {'title': OTHER_MOC, 'narrative': 'n', 'pillars': [
+            {'name': OTHER_PILLAR, 'order': 1, 'why': 'w', 'topics': [OTHER_TOPIC]}]}), encoding='utf-8')
+    path = root / lay.card_path(OTHER_DOMAIN, 'Pebble sizes.md')
+    path.parent.mkdir(parents=True)
+    path.write_text(f'---\nid: {OTHER_CARD}\ntitle: Pebble sizes\ndomain: {OTHER_DOMAIN}\n'
+                    f'pillar: {OTHER_PILLAR}\ntopic: {OTHER_TOPIC}\n---\n## Essence\nPebbles come in sizes.\n',
+                    encoding='utf-8')
+    registry = json.loads((root / lay.registry).read_text(encoding='utf-8'))
+    registry['notes'].append({'id': OTHER_CARD, 'path': lay.card_path(OTHER_DOMAIN, 'Pebble sizes.md'),
+                              'title': 'Pebble sizes', 'domain': OTHER_DOMAIN})
+    (root / lay.registry).write_text(json.dumps(registry), encoding='utf-8')
+    (root / lay.inbox).mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(FIXTURE, root / lay.inbox / SOURCE_NAME)
+    return root
+
+
+def scripted(producer_outputs, reviewer_outputs):
+    """Responders that hand out answers in call order and record the packets they saw."""
+    seen = {'producer': [], 'reviewer': []}
+
+    def make(role, queue):
+        def respond(task):
+            seen[role].append(task)
+            if not queue:
+                raise AssertionError(f'unexpected {role} call for {task.chunk}')
+            value = queue.pop(0)
+            return value(task) if callable(value) else value
+        return respond
+    return make('producer', list(producer_outputs)), make('reviewer', list(reviewer_outputs)), seen
+
+
+def tree(root: Path) -> dict:
+    return {p.relative_to(root).as_posix(): p.read_bytes() for p in sorted(root.rglob('*')) if p.is_file()}

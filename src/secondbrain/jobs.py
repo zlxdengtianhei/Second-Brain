@@ -38,9 +38,11 @@ RUN_SCHEMA = "secondbrain-run/1"
 PROJECTION_KIND = "projection"
 
 #: Kind -> "module:function" validating a submission before it is persisted.
-#: Signature: ``fn(packet, payload, *, role, candidate) -> payload``.
+#: Signature: ``fn(packet, payload, *, role, candidate, root, chunk, state) -> payload``;
+#: the returned payload (possibly normalized) is what gets stored.
 SUBMISSION_VALIDATORS = {
     'classification': 'secondbrain.classification:validate_submission',
+    'ingest': 'secondbrain.pipelines.ingest:validate_submission',
 }
 
 TERMINAL_STATUSES = {'applying', 'applied', 'partial', 'published', 'rolled_back', 'superseded'}
@@ -295,7 +297,9 @@ def submit(root: Path, job_id: str, payload: dict, *, role: str, run_id: str,
             raise Conflict('STALE_CANDIDATE')
         validate = _validator(state['kind'])
         if validate is not None:
-            validate(json.loads(input_raw), payload, role=role, candidate=candidate)
+            checked = validate(json.loads(input_raw), payload, role=role, candidate=candidate,
+                               root=root, chunk=chunk, state=state)
+            payload = checked if isinstance(checked, dict) else payload
         raw = encoded(payload)
         if len(raw) > 8_000_000:
             raise ValueError('结果超过8MB，请拆成独立处理批次')
@@ -428,6 +432,24 @@ def finish_transaction(root: Path, job_id: str, result: dict, changes: list[Chan
                      commit_intent=digest(read_state(root, location(job_id, 'commit-intent.json'))))
         write_json(root, location(job_id), state)
     return resume_transaction(root, job_id)
+
+
+def release_intent(root: Path, job_id: str, *, reason: str) -> dict:
+    """Drop a frozen write plan that the store refused before writing anything.
+
+    Used when a compare-and-swap check fails (a file changed after the plan
+    was built): nothing reached the vault, so the job goes to
+    ``needs_attention`` and the next ``advance`` builds a fresh plan from the
+    same reviewed candidates.
+    """
+    with vault_lock(root):
+        if read_state(root, location(job_id, 'transaction.json')) is not None:
+            raise Conflict('写入已经开始，只能用 recover 恢复或回滚')
+        state = load(root, job_id)
+        state.pop('commit_intent', None)
+        state.update(status='needs_attention', attention=reason, updated_at=now())
+        write_json(root, location(job_id), state)
+        return state
 
 
 def freeze_projection(root: Path, job_id: str, changes: list[Change], *, checks: dict | None = None,

@@ -35,6 +35,8 @@ class Task:
     packet_sha256: str
     output_schema: dict
     chunk: str | None = None
+    #: Absolute path of the rendered task file (same text the executor sends).
+    packet_path: str | None = None
 
 
 @dataclass

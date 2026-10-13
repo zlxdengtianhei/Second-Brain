@@ -1,0 +1,14 @@
+{
+  "id": "chatcmpl-test-0001",
+  "object": "chat.completion",
+  "created": 1760000000,
+  "model": "gpt-test-2026-01-01",
+  "choices": [
+    {
+      "index": 0,
+      "message": {"role": "assistant", "content": "{\"ok\": true}"},
+      "finish_reason": "stop"
+    }
+  ],
+  "usage": {"prompt_tokens": 120, "completion_tokens": 8, "total_tokens": 128}
+}

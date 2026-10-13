@@ -107,9 +107,13 @@ def call_executor(root: Path, job_id: str, executor: Executor, *, role: str, ste
                          model_requested=executor.model, endpoint_host=executor.endpoint_host,
                          prompt_sha256=digest(prompt_text.encode()), task_sha256=digest(text.encode()),
                          chunk=chunk)
+    # Every run keeps the exact text it was given, for audit and for host hand-off.
+    from .store import _atomic_state, state_root
+    packet_rel = jobs.location(job_id, 'packets', f"{role}-{chunk or 'job'}-{run['run_id']}.md")
+    _atomic_state(root, packet_rel, text.encode('utf-8'))
     task = Task(job_id=job_id, run_id=run['run_id'], role=role, step=step, prompt=prompt_text,
                 packet=packet, packet_sha256=state['input_sha256'], output_schema=output_schema,
-                chunk=chunk)
+                chunk=chunk, packet_path=str(state_root(root) / packet_rel))
     try:
         result = executor.run(task)
     except Exception as exc:

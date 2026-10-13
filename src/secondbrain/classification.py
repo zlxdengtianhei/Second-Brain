@@ -146,7 +146,7 @@ def _validate_candidate_shape(packet: dict, candidate: dict) -> list[dict]:
 
 
 def validate_submission(packet: dict, payload: dict, *, role: str,
-                        candidate: dict | None = None) -> dict:
+                        candidate: dict | None = None, **_context) -> dict:
     """Validate a submission before it can become a persisted artifact."""
     if role == 'producer':
         rows = _validate_candidate_shape(packet, payload)

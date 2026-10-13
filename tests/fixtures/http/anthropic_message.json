@@ -1,0 +1,12 @@
+{
+  "id": "msg_test_0001",
+  "type": "message",
+  "role": "assistant",
+  "model": "claude-test-2026-01-01",
+  "content": [
+    {"type": "tool_use", "id": "toolu_test_0001", "name": "submit_result", "input": {"ok": true}}
+  ],
+  "stop_reason": "tool_use",
+  "stop_sequence": null,
+  "usage": {"input_tokens": 120, "output_tokens": 9}
+}

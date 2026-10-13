@@ -40,6 +40,9 @@ MAX_CARDS = 120    # hard card cap
 MAX_TOPIC = 25     # a single topic's cards listed on one page
 
 RESIDUAL_LABEL = "待分类"
+#: Frontmatter on domain and pillar pages: Breadcrumbs reads their list
+#: items as "down" links, so MOC pages form the hierarchy above the cards.
+BC_FRONTMATTER = "---\nBC-list-note-field: down\n---\n"
 _FALLBACK = "pillar"
 
 
@@ -360,7 +363,7 @@ def _render_residual(moc_title, header, chunk, root_rel, ctx, domain_to_moc):
 def _render_root(moc_title, moc_domains, narrative, pillars, pillar_counts,
                  pillar_links, residual_link_label, residual_total, bridges,
                  root_rel, flat_page_links):
-    text = ["# %s" % moc_title, ""]
+    text = [BC_FRONTMATTER + "# %s" % moc_title, ""]
     text.append("_本 MOC 覆盖：%s ｜ 生成页 %d（含本页）_"
                 % ("、".join(moc_domains), len(flat_page_links) + 1))
     text.append("")
@@ -529,7 +532,7 @@ def _process_moc(snapshot, moc_title, moc_domains, domain_to_moc, issues):
 
 def _render_pillar_pages_here(rel, moc_title, pname, why, pg, page_idx, total,
                               root_rel, ctx, domain_to_moc, order, stem):
-    text = ["# %s · %s" % (moc_title, pname), ""]
+    text = [BC_FRONTMATTER + "# %s · %s" % (moc_title, pname), ""]
     if total > 1:
         text.append("_支柱分页 %d/%d（页码是浏览切片，不是新语义层）_" % (page_idx, total))
         text.append("")

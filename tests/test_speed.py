@@ -120,14 +120,14 @@ def test_index_matches_memory_ranker_and_syncs_incrementally(tmp_path):
     root = build_vault(tmp_path)
     texts = {
         'card_bs': ('二分查找', '## 本质\n二分查找每次把有序区间缩小一半，binary search 的循环不变量。\n'),
-        'card_tcp': ('TCP 三次握手', '## 本质\nTCP handshake 用三个报文建立连接，同步序列号。\n'),
+        'card_tcp': ('TCP 连接建立', '## 本质\nTCP connection setup 用三个报文建立连接，同步序列号。\n'),
         'card_gd': ('梯度下降', '## 本质\n梯度下降沿负梯度更新参数，learning rate 决定步长。\n'),
         'card_bs2': ('二分答案', '## 本质\n在单调判定上做二分查找，求最小可行答案。\n'),
     }
     for cid, (title, body) in texts.items():
         card(root, cid, body, title=title)
     snap = vault.read_snapshot(root)
-    for query in ['二分查找', 'tcp handshake 连接', '梯度 learning rate', '答案']:
+    for query in ['二分查找', 'tcp connection 连接', '梯度 learning rate', '答案']:
         got = [r['id'] for r in index.search(root, snap, query, 3)]
         want = [r['id'] for r in search.search(snap, query, 3)]
         assert got == want, query
