@@ -9,7 +9,7 @@ import pytest
 from secondbrain import cli, config, inbox, jobs
 from secondbrain.executors import FakeExecutor
 from secondbrain.pipelines import ingest
-from secondbrain.store import recover, state_root
+from secondbrain.store import Conflict, recover, state_root
 from secondbrain.vault import read_snapshot
 from tests.ingest_helpers import (DIMMING_IR, FIXED_DIMMING, SOURCE_NAME, build_ingest_vault, first_candidate,
                                   first_review, repair_candidate, repair_review, scripted, tree)
@@ -145,6 +145,50 @@ def test_after_parent_and_child_are_rolled_back_the_source_can_be_ingested_and_r
     second = apply_retry(root, parent)  # the old child (same id, same input) no longer answers for it
     assert second['job_id'] == first['job_id'] and second['created_at'] > first['created_at']
     assert len(archived(root, first['job_id'])) == 1
+
+
+def test_an_unwritten_child_of_an_earlier_run_of_the_parent_is_set_aside(tmp_path):
+    # adapted from the verifier's test (V1, scratch/v1c/scripts/test_v1c_stale.py)
+    root = build_ingest_vault(tmp_path / 'vault')
+    before = tree(root)
+    parent = partial_job(root)
+    stale = ingest.retry(root, parent)  # made, never advanced
+    rollback(root, parent)  # allowed: the child wrote nothing
+    assert tree(root) == before
+    assert partial_job(root) == parent  # a new run of the parent under the same id
+    done = apply_retry(root, parent)
+    assert done['job_id'] == stale['job_id'] and done['created_at'] > stale['created_at']
+    assert len(archived(root, stale['job_id'])) == 1
+
+
+def test_a_written_child_that_looks_stale_is_refused_not_replaced(tmp_path):
+    root = build_ingest_vault(tmp_path / 'vault')
+    parent = partial_job(root)
+    child = apply_retry(root, parent)
+    before = tree(root)
+    path = state_root(root) / jobs.location(parent)
+    state = json.loads(path.read_text(encoding='utf-8'))
+    state['created_at'] = '2099-01-01T00:00:00+00:00'  # as after a clock jump
+    path.write_text(json.dumps(state, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+    with pytest.raises(Conflict, match='roll it back first'):
+        ingest.retry(root, parent)
+    assert jobs.load(root, child['job_id'])['status'] == 'applied'
+    assert archived(root, child['job_id']) == [] and tree(root) == before
+
+
+def test_retrying_a_parent_whose_child_is_partial_points_to_the_child(tmp_path):
+    root = build_ingest_vault(tmp_path / 'vault')
+    parent = partial_job(root)
+    child = ingest.retry(root, parent)
+    still = {'cards': [{'slug': 'marker-dimming', 'decision': 'revise', 'reason': 'still wrong'}],
+             'new_topics': [], 'coverage': {'decision': 'accept', 'reason': 'only the open card was missing'}}
+    produce, respond, _ = scripted([retry_answer(), retry_answer()], [still, still])
+    done = ingest.advance(root, child['job_id'], producer=FakeExecutor('gpt-test', responder=produce),
+                          reviewer=FakeExecutor('claude-test', responder=respond))
+    assert done['status'] == 'partial'
+    again = ingest.retry(root, parent)
+    assert again['job_id'] == child['job_id'] and again['resumed']
+    assert f'sb ingest --retry {child["job_id"]}' in again['hint']
 
 
 def test_a_retry_child_made_before_an_interruption_is_reused(tmp_path, monkeypatch):
