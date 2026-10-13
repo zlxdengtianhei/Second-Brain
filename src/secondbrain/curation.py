@@ -250,8 +250,9 @@ def validate(packet: dict, proposal: dict) -> list[dict]:
         if row.get('source_quotes'):
             raise CurationError(f"{domain}: curation takes existing cards as evidence; source_quotes are not accepted")
         known = _moc_card_ids(packet, domain, packet.get("catalog"))
-        # id 分隔符（-/_）转抄错误是本系统已知撞车族：先按去分隔符归一，
-        # 唯一匹配则替换成规范 id；多义或无匹配再报错并给出最接近候选。
+        # Models often copy an id with the wrong separator (- or _). Compare ids without
+        # separators: a unique match is replaced by the real id; no match or several matches
+        # is an error that names the closest candidates.
         import difflib
         norm_map: dict[str, list[str]] = {}
         for cid in known:
@@ -268,8 +269,9 @@ def validate(packet: dict, proposal: dict) -> list[dict]:
                 bad.append(f'{cid} (closest: {", ".join(close) or "none"})')
         if bad:
             raise CurationError(f"{domain}: coverage_ids that are not existing cards of this map: {'; '.join(bad)}")
-        # 非策展顶层字段（如既有 YAML 的 source）由服务端按现状补齐，与
-        # _merge_taxonomy 的保留语义一致；模型只需设计策展字段，不转抄元数据。
+        # Top-level fields that curation does not design (for example `source` in an existing
+        # file) are copied from the current file, as _merge_taxonomy keeps them; the model
+        # writes the curated fields only and does not copy metadata.
         current_tax = packet_tax.get(moc) or {}
         tx = row["taxonomy"]
         for k in current_tax:

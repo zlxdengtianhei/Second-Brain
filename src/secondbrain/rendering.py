@@ -5,55 +5,66 @@ written, so formula notation is fixed in one place instead of relying on each
 writer. It repairs three problems and is idempotent, so re-rendering also
 heals text that is already on disk.
 
-一起修的三类问题（2026-08-21 实测，183 张卡）：
-1. 裸下标：正文写 ``W_Q、W_K、W_V`` 而不是 ``$W_Q$``。Markdown 把一行里的
-   两个 ``_`` 当成斜体标记，下标不渲染，中间的中文还会变斜体。
-2. 多字符下标没花括号：``d_model`` 即使包进 ``$…$``，MathJax 也只把 ``m``
-   当下标，渲染成 d·ₘodel。必须 ``d_{model}``。
-3. 裸宏名：抽取器写出伪 LaTeX ``prod_t``、``log``、``q_{theta}``，包进
-   ``$…$`` 也渲染成正体字母串；必须补反斜杠（MathJax 无内置的软名走
-   ``\\operatorname{}``）。
+The three problems (all seen in real cards):
+1. Bare subscripts: the body has ``W_Q, W_K, W_V`` instead of ``$W_Q$``. Markdown
+   reads two ``_`` on one line as italics, so the subscripts do not render and
+   the text between them turns italic.
+2. Multi-character subscripts without braces: even inside ``$…$``, MathJax
+   takes only ``m`` of ``d_model`` as the subscript and renders d·ₘodel. It
+   must be ``d_{model}``.
+3. Bare macro names: extractors write pseudo-LaTeX such as ``prod_t``, ``log``,
+   ``q_{theta}``, which render as upright letter strings even inside ``$…$``;
+   they need a backslash (names MathJax does not define use
+   ``\\operatorname{}``).
 
-为什么按区段包而不是逐 token：``P(w_t|h)=C(h,w_t)/C(h)`` 逐 token 包会切成
-``P($w_t$|h)=C(h,$w_t$)/C(h)``，比不包还难读。所以先按中日韩字符与受保护
-片段切段，段内再按空格切块，只有连续的数学块才并成一个区段。
+Why wrap segments, not single tokens: wrapping ``P(w_t|h)=C(h,w_t)/C(h)``
+token by token gives ``P($w_t$|h)=C(h,$w_t$)/C(h)``, which is harder to read
+than no wrapping at all. So a line is first cut at CJK characters and protected
+spans, each segment is split at spaces into chunks, and only consecutive math
+chunks are joined into one wrapped segment.
 
-保守策略（宁可漏，不可错）：
-- 只动正文，frontmatter 不碰；代码围栏、行内 ``code``、``[[wiki]]``、URL、
-  HTML 注释、markdown 链接全部跳过。
-- 一行里 ``$`` 为奇数、出现 ``$`` 紧跟数字（金额）、或含 ``$$``，整行跳过。
-- 数学块判据：块内带 ``_``/``^``、是已知宏名、或每段字母只有一个字母；区段
-  还须至少含一个真正带下标且非标识符的块才落笔。
-- 区段两端裁空格与游离标点，括号不平衡裁到平衡（``$…$`` 内首尾禁空格）。
+Conservative rules (better to miss a formula than to break text):
+- Only the body changes, never the front matter; code fences, inline ``code``,
+  ``[[wiki]]`` links, URLs, HTML comments and markdown links are skipped.
+- A line with an odd number of ``$``, a ``$`` followed by a digit (money) or a
+  ``$$`` is left alone.
+- A chunk is math when it has ``_`` or ``^``, is a known macro name, or each of
+  its letter runs is a single letter; a segment is wrapped only when at least
+  one chunk has a real subscript and is not an identifier.
+- Spaces and stray punctuation are trimmed from both ends of a segment, and
+  unbalanced brackets are trimmed until balanced (no space just inside ``$…$``).
 """
 from __future__ import annotations
 
 import re
 
 # --------------------------------------------------------------------------
-# 常量与正则（与旧实现逐一对应；本域反例经三轮核验收敛，勿随手扩表）
+# Constants and patterns. Each list was settled against counterexamples over several
+# review rounds; do not extend them casually.
 
 GREEK = "Ͱ-Ͽ"
-# 区段边界＝中日韩文字与全角标点（`::` 另由 normalize_math 开头的硬切分处理，
-# 不能只靠字符表：`:` 在 `w_{1:T}` 里合法，移出表会让下标从中间断开）。
+# Segment boundaries: CJK characters and full-width punctuation. (`::` is a hard cut at
+# the start of normalize_math instead: `:` is legal in `w_{1:T}`, so a character-class
+# boundary would split that subscript.)
 CJK = "\u3000-\u303f\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\uff00-\uffef" \
       "\u2018\u2019\u201c\u201d\u2014\u2013"
-# MATH_CHARS 已含前导 ^，是负字符类：除边界与空白外都可进区段
+# MATH_CHARS starts with ^, so it is a negated class: anything but a boundary or space
 MATH_CHARS = rf"^{CJK}\s"
 MATH_CHUNK_RE = re.compile(rf"^[{MATH_CHARS}]+$")
 LETTER_RUN_RE = re.compile(r"[A-Za-z]+")
 
-# 下标锚点：拉丁/希腊字母之外，还认 ∑∏∫∮ 这类算子与组合符（`C̃` = C+U+0303），
-# 否则 `∑_x P(x)=1` 判不出「带下标」，整段留在数学模式外。
+# Subscript anchors: Latin and Greek letters, also operators such as ∑∏∫∮ and combining
+# marks (`C̃` = C+U+0303); otherwise `∑_x P(x)=1` has no "subscript" and stays outside math.
 ANCHOR = rf"A-Za-z{GREEK}\u2200-\u22ff\u0300-\u036f"
 BASE = rf"[{ANCHOR}][{ANCHOR}0-9]*"
-# 下标形态：花括号组 / `\theta` 这类命令（归一后的产物，二次扫必须仍认得它，
-# 否则 `$q_\theta$` 会被判成「没有下标」而被剥掉 $，幂等在第二遍上来回拉锯）/
-# 圆括号组（`∂h^(k)` 这种写法，不认它就判不出「带上标」）/ 裸字母数字。
+# Subscript forms: a brace group; a command such as `\theta` (what normalization writes,
+# so a second pass must still see it, or `$q_\theta$` loses its $ and the two passes
+# disagree); a parenthesis group (`∂h^(k)`, else it has no "superscript"); bare letters/digits.
 SUB = rf"(?:\{{[^}}\n]{{1,24}}\}}|\\[A-Za-z]+|\([^)\n]{{1,16}}\)|[<>]?[{ANCHOR}0-9]+(?:[+\-][0-9]+)?)"
 MATH_TOKEN = re.compile(rf"{BASE}[_^]{SUB}")
 
-# 裸宏名 → LaTeX 命令（只收本域高频且无歧义的；`pi`/`in` 等易撞变量名的不收）
+# Bare macro names that get a backslash: frequent and unambiguous ones only
+# (`pi`, `in` and other likely variable names or words are left out).
 MACROS = [
     "alpha", "beta", "gamma", "delta", "epsilon", "zeta", "eta", "theta",
     "iota", "kappa", "lambda", "mu", "nu", "xi", "rho", "sigma", "tau",
@@ -63,20 +74,20 @@ MACROS = [
     "sin", "cos", "tan", "tanh", "sinh", "cosh", "sigmoid", "relu",
     "sqrt", "frac", "infty", "approx", "cdot", "times", "neq", "leq", "geq",
     "sim", "propto", "partial", "nabla", "mathbb", "text",
-    # 符号类命令名——写成裸词会渲染成斜体字母串（`bullet` → b·u·l·l·e·t）。
-    # 只收无歧义的：`to`/`mid`/`cap`/`cup` 这些同时是英文常用词的不收。
+    # Symbol commands: as bare words they render as italic letters (`bullet` → b·u·l·l·e·t).
+    # Unambiguous ones only: `to`, `mid`, `cap`, `cup` are also common English words.
     "bullet", "circ", "oplus", "otimes", "ldots", "cdots", "vdots",
     "emptyset", "forall", "exists", "equiv", "parallel", "perp",
     "langle", "rangle", "mapsto", "subseteq", "supseteq", "bigl", "bigr",
 ]
-# softmax / argmax / argmin 不是 MathJax 内置命令，写 \softmax 会渲成红字未
-# 定义控制序列；它们走 \operatorname{}。
+# softmax, argmax and argmin are not MathJax commands: \softmax renders as a red
+# undefined control sequence, so they become \operatorname{}.
 OPERATORS = ["softmax", "argmax", "argmin"]
 MACRO_RE = re.compile(r"(?<![\\A-Za-z])(" + "|".join(MACROS) + r")(?![A-Za-z])")
 OPERATOR_RE = re.compile(r"(?<![\\A-Za-z{])(" + "|".join(OPERATORS) + r")(?![A-Za-z}])")
 MACRO_WORDS = set(MACROS) | set(OPERATORS)
 
-# 标识符形态（frontmatter 字段、关系类型、路径等）永远不算数学
+# Identifier shapes (front matter fields, relation types, paths) are never math
 IDENT_PREFIX = ("kc_", "sr_", "cl_", "cr_", "co_", "req_", "task_", "session_")
 IDENT_WORDS = {
     "depends_on", "part_of", "contrasts_with", "similar_to", "generalizes",
@@ -88,7 +99,7 @@ IDENT_WORDS = {
 }
 SNAKE = re.compile(r"^[a-z]{2,}(_[a-z]{2,})+$")
 
-# 受保护片段：行内 code、[[wiki]]、URL、HTML 注释、markdown 链接
+# Protected spans: inline code, [[wiki]] links, URLs, HTML comments, markdown links
 PROTECT = [
     re.compile(p) for p in (
         r"`[^`\n]*`", r"\[\[[^\]]*\]\]", r"https?://\S+", r"<!--.*?-->",
@@ -99,12 +110,13 @@ DOLLAR_INLINE = re.compile(r"\$([^$\n]+)\$")
 
 ENUM_RE = re.compile(r"^[A-Za-z]?\d*\.$")
 LATEX_CMD = re.compile(r"\\[a-zA-Z]{2,}")
-# `\text{}` 这类命令的花括号内允许任意字符（含中文），整组当作数学的一部分
+# Inside the braces of `\text{}` and similar commands any character is allowed (CJK too);
+# the whole group is part of the formula
 TEXTLIKE_CMD = re.compile(r"\\(?:text|mathrm|mathbf|mathit|operatorname)\{[^{}]*\}")
 
 
 def _protected(line: str) -> list[tuple[int, int]]:
-    """收集受保护片段（行内 code / wiki 链接 / URL / HTML 注释 / 链接）的跨度。"""
+    """Spans of protected text: inline code, wiki links, URLs, HTML comments, markdown links."""
     spans: list[tuple[int, int]] = []
     for pat in PROTECT:
         spans += [(m.start(), m.end()) for m in pat.finditer(line)]
@@ -116,33 +128,36 @@ def _is_identifier(tok: str) -> bool:
 
 
 def _is_math_chunk(chunk: str) -> bool:
-    """一个空格分隔块是否属于公式。
+    """Whether one space-separated chunk belongs to a formula.
 
-    判据：块里带 `_`/`^`（下标本来就可以是多字母，如 `d_model`），或它是已知
-    宏名，或它的每段字母都只有一个字母。**两字母不放行**——放行会把 `of`/`is`/
-    `in` 这类英文虚词吸进公式，实测把整句 `of d_model is 512` 包进了 $…$。
-    枚举标记（`P1.`、`3.`）永远不算公式，否则 `- P1. W_Q` 会被整体包起来。
+    It does when it has `_` or `^` (a subscript may have several letters, as in
+    `d_model`), is a known macro name, or each of its letter runs is a single
+    letter. **Two letters are not enough**: that would pull English words such
+    as `of`, `is`, `in` into formulas (it once wrapped `of d_model is 512` in
+    $…$). List markers (`P1.`, `3.`) are never math, else `- P1. W_Q` is wrapped whole.
     """
     if not chunk or ENUM_RE.match(chunk):
         return False
-    # 花括号组保持原子后，块里可能合法地含空格（`\mathbb{E}_{X\sim p}`）。
-    # 字符表检查前先把花括号组挖空，否则这类块会被判成非数学、整段公式丢掉 $。
+    # Brace groups stay whole, so a chunk may contain spaces (`\mathbb{E}_{X\sim p}`).
+    # Empty the brace groups before the character check, or such a chunk counts as
+    # non-math and the whole formula loses its $.
     probe = re.sub(r"\{[^{}]*\}", "{}", chunk)
     if not MATH_CHUNK_RE.match(probe):
         return False
     if "_" in chunk or "^" in chunk or LATEX_CMD.search(chunk):
         return True
-    # 反斜杠命令里的字母不参与「字母段长度」判据——`\mid` 的 mid 是命令名不是
-    # 英文词。不剔除的话 `P(D\mid\theta)` 会被判成非数学块，整段按字面显示。
+    # Letters of backslash commands do not count as letter runs: `mid` in `\mid` is a
+    # command name, not a word. Otherwise `P(D\mid\theta)` is non-math and shown literally.
     stripped = re.sub(r"\\[a-zA-Z]+", "", chunk)
     return all(len(r) == 1 or r in MACRO_WORDS for r in LETTER_RUN_RE.findall(stripped))
 
 
 def _carries_subscript(chunk: str) -> bool:
-    """块里有没有「这确实是公式」的证据：真下标/上标，或 LaTeX 命令。
+    """Whether the chunk shows it really is a formula: a real subscript or superscript, or a LaTeX command.
 
-    只认下标还不够——`P(D\\mid\\theta)` 有命令没下标，判不出来就整段留在数学模
-    式外，`\\mid` 按字面显示（2026-08-22 独立核验在 14 行上实测到这个形态）。
+    Subscripts alone are not enough: `P(D\\mid\\theta)` has a command and no
+    subscript, and without this check it stays outside math with `\\mid` shown
+    literally (an independent check found this form on 14 lines).
     """
     if any(not _is_identifier(m.group(0)) for m in MATH_TOKEN.finditer(chunk)):
         return True
@@ -163,7 +178,7 @@ def _balanced(s: str) -> bool:
 
 
 def _trim(expr: str) -> str:
-    """裁掉两端空格、游离标点，再裁到括号平衡。"""
+    """Trim spaces and stray punctuation at both ends, then trim until the brackets balance."""
     expr = expr.strip()
     while expr and expr[-1] in ".,;:":
         expr = expr[:-1]
@@ -178,35 +193,37 @@ def _trim(expr: str) -> str:
 
 
 def _latexify(expr: str) -> str:
-    """区段内的写法归一：补花括号下标 + 裸宏名补反斜杠。"""
+    """Normalize notation inside a segment: braces around subscripts, backslashes before bare macro names."""
     expr = MACRO_RE.sub(lambda m: "\\" + m.group(1), expr)
     expr = OPERATOR_RE.sub(lambda m: "\\operatorname{" + m.group(1) + "}", expr)
     expr = re.sub(r"\\sqrt\(([^()\n]{1,30})\)",
                   lambda m: "\\sqrt{" + m.group(1) + "}", expr)
-    # `√d_k` → `\sqrt{d_k}`。`√` 只是一个字符，横线不覆盖后面的内容——渲染出来
-    # 像「根号 乘 d_k」。`$…$` 内出现裸 `√` 基本必错。
+    # `√d_k` → `\sqrt{d_k}`. `√` is one character whose bar does not cover what follows,
+    # so it renders as "root times d_k". A bare `√` inside `$…$` is almost always wrong.
     expr = re.sub(r"√\s*\(([^()\n]{1,30})\)", lambda m: "\\sqrt{" + m.group(1) + "}", expr)
     expr = re.sub(r"√\s*(\{[^{}\n]{1,30}\})", lambda m: "\\sqrt" + m.group(1), expr)
     expr = re.sub(rf"√\s*([{ANCHOR}][{ANCHOR}0-9]*(?:[_^](?:\{{[^}}\n]{{1,20}}\}}|[{ANCHOR}0-9]+))?)",
                   lambda m: "\\sqrt{" + m.group(1) + "}", expr)
-    # `^(k)` → `^{(k)}`。TeX 的 `^` 只抓下一个 token，`(` 就是一个 token——
-    # `R^(1×D)` 会渲染成「R 的上标是一个左括号」，`1×D)` 掉回基线。
-    # 这一条必须与 SUB 里的圆括号组同时存在：只让检测侧认它、归一侧不转，
-    # 会把这些片段拉进数学模式而进去之后是坏的（2026-08-22 第四轮核验，净增 9 行）。
+    # `^(k)` → `^{(k)}`. TeX's `^` takes only the next token, and `(` is one token:
+    # `R^(1×D)` renders as "R with a left parenthesis as superscript" and `1×D)` drops to
+    # the baseline. This rule must go with the parenthesis group in SUB: if detection
+    # accepts the form but normalization does not convert it, broken math is produced
+    # (a fourth review round found 9 such lines).
     expr = re.sub(r"([_^])(\([^()\n]{1,20}\))",
                   lambda m: f"{m.group(1)}{{{m.group(2)}}}", expr)
-    # `d_model` → `d_{model}`；`w_<t` → `w_{<t}`；已带花括号或单字符下标不动
+    # `d_model` → `d_{model}`; `w_<t` → `w_{<t}`; braced or single-character subscripts stay
     expr = re.sub(rf"([_^])([<>]?[A-Za-z0-9{GREEK}]{{2,}})",
                   lambda m: f"{m.group(1)}{{{m.group(2)}}}", expr)
     expr = re.sub(rf"([_^])([<>][A-Za-z0-9{GREEK}])",
                   lambda m: f"{m.group(1)}{{{m.group(2)}}}", expr)
-    # \theta 之后紧跟 } 之类不用管；\frac 等命令后的花括号本来就在原文里
+    # Nothing to do after commands such as \theta followed by }; the braces after \frac and
+    # similar commands are already in the source text
     return expr
 
 
 def _split_outside_braces(seg: str) -> list[str]:
-    r"""按空格切块，但花括号组内的空格不切——`\mathbb{E}_{X\sim p}` 是一个块，
-    切开会让后半截落单、$ 收在花括号里面。"""
+    r"""Split at spaces, but not at spaces inside brace groups: `\mathbb{E}_{X\sim p}` is one
+    chunk; splitting it would strand the second half and close the $ inside the braces."""
     out, cur, depth = [], [], 0
     for ch in seg:
         if ch == "{":
@@ -222,7 +239,7 @@ def _split_outside_braces(seg: str) -> list[str]:
 
 
 def _wrap_segment(seg: str) -> str:
-    """段内按空格切块，连续数学块并成区段，含真下标的区段才包 $。"""
+    """Split a segment into chunks at spaces, join consecutive math chunks, and wrap in $ only those with a real subscript."""
     parts = _split_outside_braces(seg)
     math_flag = [_is_math_chunk(p) for p in parts]
     outs: list[str] = []
@@ -252,19 +269,21 @@ def _wrap_segment(seg: str) -> str:
 
 
 def normalize_math(line: str) -> tuple[str, int]:
-    """把一行里的裸公式区段包进 $…$ 并归一写法。返回 (新行, 区段数)。"""
-    # spaced-repetition 的 `::` 是硬边界：问题与答案是两段独立文本，公式区段
-    # 绝不能跨过它（2026-08 曾把 `::` 吞进公式，19 张卡两面各留一个不闭合的 $）。
+    """Wrap the bare formula segments of one line in $…$ and normalize them; returns (new line, segment count)."""
+    # The spaced-repetition `::` is a hard boundary: question and answer are separate texts,
+    # and no formula segment may cross it (an earlier version swallowed `::` into a formula
+    # and left an unclosed $ on both sides of 19 cards).
     if "::" in line and not line.lstrip().startswith("<!--"):
         head, tail = line.split("::", 1)
         a, na = normalize_math(head)
         b, nb = normalize_math(tail)
         return f"{a}::{b}", na + nb
     if "$$" in line or re.search(r"\$\d", line) or line.count("$") % 2:
-        return line, 0  # 块级公式行 / 金额 / 落单的 $：整行不碰
+        return line, 0  # display math, money, or an unpaired $: leave the line alone
 
     spans = _protected(line)
-    # 先把已有的行内 $…$ 摘掉，让相邻碎片能并进同一区段；受保护区内的 $ 不摘
+    # Unwrap existing inline $…$ first so neighbouring pieces can join one segment;
+    # $ inside protected spans stays
     stripped = []
     cursor = 0
     out: list[str] = []
@@ -272,7 +291,7 @@ def normalize_math(line: str) -> tuple[str, int]:
         if any(s < m.end() and m.start() < e for s, e in spans):
             continue
         if not _carries_subscript(m.group(1)):
-            continue   # 剥了包不回去（如 `$A$`）——不剥，当受保护区留着
+            continue   # it could not be wrapped again (e.g. `$A$`): keep it as it is
         out.append(line[cursor:m.start()])
         out.append(m.group(1))
         cursor = m.end()
@@ -282,14 +301,14 @@ def normalize_math(line: str) -> tuple[str, int]:
     if stripped:
         spans = _protected(plain)
 
-    # 按受保护片段与非数学字符切段
-    mask = [True] * len(plain)  # True = 可进公式区段
+    # Cut into segments at protected spans and non-math characters
+    mask = [True] * len(plain)  # True = may be part of a formula segment
     for s, e in spans:
         for i in range(s, min(e, len(plain))):
             mask[i] = False
-    # `\text{中文}` / `\mathrm{}` / `\operatorname{}` 里的内容是数学的一部分，
-    # 哪怕是中文。不这样处理，中文会被当成区段边界，把 `C(\text{上下文},\text{下一词})`
-    # 从中间劈开，$ 落进花括号内（2026-08-22 实测）。
+    # The content of `\text{}`, `\mathrm{}` and `\operatorname{}` is part of the formula,
+    # even when it is CJK text. Otherwise CJK characters act as segment boundaries, split
+    # `C(\text{…},\text{…})` with CJK words inside, and put a $ inside the braces.
     opaque: list[tuple[int, int]] = []
     for m in TEXTLIKE_CMD.finditer(plain):
         opaque.append((m.start(), m.end()))
@@ -318,20 +337,22 @@ def normalize_math(line: str) -> tuple[str, int]:
         n += result[-1].count("$") // 2
         i = j
     new = "".join(result)
-    # 守卫：本函数为了让相邻碎片能并段，先把已有的 $…$ 剥掉再重包。若某个原本
-    # 就包好的片段重包后落在了 $…$ 之外（比如单符号 `$A$`），那就是把对的改坏
-    # 了。这种情况整行原样退回，宁可不优化也不倒退。
+    # Guard: this function unwraps existing $…$ so that neighbouring pieces can join, then
+    # wraps again. If a piece that was wrapped ends up outside $…$ (a single symbol such
+    # as `$A$`), a correct line was made worse; then the line is returned unchanged.
     return (new, n) if new != line else (line, 0)
 
 
 def normalize_markdown(text: str) -> tuple[str, int, list[str]]:
-    """整份 markdown 的公式归一：跳过 frontmatter 与代码围栏，逐行 normalize_math。
+    """Normalize the formulas of a whole markdown text: skip front matter and code fences, run normalize_math per line.
 
-    返回 (归一文本, 改动区段总数, issues)。issues 是改动样例（最多 2 条，每条
-    「old 行\\nnew 行」两行字符串），无改动为空——与旧 fix_math 的 samples 同义。
+    Returns (normalized text, number of changed segments, issues). ``issues`` holds
+    up to 2 examples of a change, each the string "old line\\nnew line"; it is
+    empty when nothing changed.
 
-    幂等：归一结果再过一遍不变（自测见 tests/test_rendering.py），渲染器每次
-    重渲可无脑调用：既修新文本也自愈旧文本。
+    Idempotent: normalizing the result again changes nothing (see
+    tests/test_rendering.py), so a renderer can call it on every write; it
+    fixes new text and heals old text.
     """
     if text.startswith("---\n") and "\n---\n" in text[4:]:
         cut = text.index("\n---\n", 4) + len("\n---\n")

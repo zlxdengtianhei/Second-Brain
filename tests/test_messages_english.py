@@ -7,7 +7,9 @@ owners. The allowed literals are page text by language or character classes.
 from __future__ import annotations
 
 import ast
+import io
 import re
+import tokenize
 from pathlib import Path
 
 PACKAGE = Path(__file__).resolve().parents[1] / 'src' / 'secondbrain'
@@ -46,4 +48,28 @@ def test_no_chinese_message_literals_outside_the_language_tables():
         for line, text in literals(path):
             if CJK.search(text) and (rel, text) not in ALLOWED:
                 found.append(f'{rel}:{line}: {text[:60]!r}')
+    assert found == []
+
+
+#: Docstrings that quote a zh page label as an example.
+QUOTED_LABELS = {('moc.py', '［跨域→…］')}
+
+
+def test_comments_and_docstrings_are_english():
+    found = []
+    for path in sorted(PACKAGE.rglob('*.py')):
+        rel = path.relative_to(PACKAGE).as_posix()
+        if rel.startswith('diagrams/') or path.name == 'review_registry.py':
+            continue
+        source = path.read_text(encoding='utf-8')
+        for token in tokenize.generate_tokens(io.StringIO(source).readline):
+            if token.type == tokenize.COMMENT and CJK.search(token.string):
+                found.append(f'{rel}:{token.start[0]}: {token.string[:60]!r}')
+        for node in ast.walk(ast.parse(source)):
+            if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+                doc = ast.get_docstring(node, clean=False) or ''
+                for label in (label for name, label in QUOTED_LABELS if name == rel):
+                    doc = doc.replace(label, '')
+                if CJK.search(doc):
+                    found.append(f'{rel}:{node.body[0].lineno}: docstring {doc[:60]!r}')
     assert found == []

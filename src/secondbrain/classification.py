@@ -102,8 +102,9 @@ def validate(packet: dict, proposal: dict, *, check_evidence: bool = True,
             got = got.strip()
             row['input_sha256'] = got
         if not got:
-            # 版本绑定的语义是「提案针对冻结字节」，真源在本包内；模型漏填时
-            # 由服务端按冻结包补齐，不改变绑定强度（id 不存在已在上面挡住）。
+            # The binding means "this proposal is about the frozen bytes", and the frozen packet
+            # holds them; when the model leaves the hash out it is filled in from the packet, which
+            # does not weaken the binding (unknown ids were refused above).
             row['input_sha256'] = card['sha256']
         elif got != card['sha256']:
             exp = card['sha256']

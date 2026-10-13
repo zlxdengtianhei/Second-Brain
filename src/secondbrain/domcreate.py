@@ -1,10 +1,13 @@
-"""T3 新域创建：提案证据冻结 → 独立复核 → catalog/体系/迁移的确定性写入。
+"""Creating a new domain: frozen evidence, an independent review, then deterministic writes.
 
-链路形状与其它任务一致：prepare 冻结证据包（目标域参数、候选证据卡、指标），
-生产 agent 提交新域提案（体系、迁移清单、关系词、边界与影响论证），独立复核
-通过后，本模块只做确定性写入：catalog.json 加域与关系词、pillar taxonomy、
-逐卡迁移（只 patch domain/pillar/topic/flashcards 标签，正文/SR 不动）、
-registry 同步、受影响 MOC 重投影。提案与复核都由模型完成，写入没有语义判断。
+The chain has the same shape as the other jobs. ``prepare`` freezes an evidence
+packet (the new domain's parameters, candidate cards, metrics). A producer
+submits a proposal (taxonomy, cards to move, relation words, arguments for the
+boundary and the impact), and after an independent review accepts it this
+module only writes: the domain and relation words in catalog.json, the pillar
+taxonomy, each moved card (only domain, pillar, topic and the flashcards tag
+change; body and review data stay), the registry and the affected maps. Models
+write and review the proposal; the writes make no judgement of meaning.
 """
 from __future__ import annotations
 
@@ -34,7 +37,7 @@ def _safe_domain(domain: str) -> str:
 
 def prepare(root: Path, *, domain: str, moc: str, question: str, track: str,
             evidence_ids: list[str], job_id: str, reason: str | None = None) -> dict:
-    """冻结新域证据包。evidence_ids 是提案方可迁入的候选卡全集（跨域）。"""
+    """Freeze the evidence packet of a new domain; ``evidence_ids`` are all cards the proposal may move in (any domain)."""
     domain = _safe_domain(domain)
     if not isinstance(moc, str) or not moc.strip():
         raise ValueError('The map title must not be empty')

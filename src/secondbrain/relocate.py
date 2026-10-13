@@ -101,7 +101,7 @@ def prepare(root_, *, source_jobs, job_id, ids=None):
 
 
 def validate(packet, proposal):
-    """classification式全覆盖/版本/引用规则；assigned须落在绑定目的域及该域合法pillar/topic。"""
+    """Coverage, version and quote rules as in classification; an ``assigned`` row must name the bound destination domain and one of its pillar/topic pairs."""
     rows = proposal.get('items')
     if not isinstance(rows, list):
         raise ValueError('A move proposal must be {items:[...]}')
@@ -139,7 +139,7 @@ def _packet_pairs(packet, domain):
 
 
 def apply(root_, job_id):
-    """只有accept+assigned且无断链阻碍的卡成对移动；其余pending并给具体引用文件。"""
+    """Move only accepted, ``assigned`` cards whose move breaks no link; the rest stay pending with the files that refer to them."""
     from .moc import build_mocs
     from .projections import entry_projection, review_projection
     from .reviews import available as reviews_available
@@ -234,7 +234,7 @@ def _stage_moves(root_, snapshot, packet, moves):
 
 
 def _relocated_bytes(card, dest, row):
-    """精确只patch domain/pillar/topic及机械的flashcards标签换域；正文/SR不动。"""
+    """Change only domain, pillar, topic and the domain part of the flashcards tag; body and review data stay."""
     patches = {'domain': dest, 'pillar': row['pillar'], 'topic': row['topic']}
     old_tag = f'flashcards/{card.domain}'
     tags = card.fm.get('tags')
@@ -252,7 +252,7 @@ def _relocated_bytes(card, dest, row):
 
 
 def _registry_change(root_, moved):
-    """同IDregistry项只改path/domain，保留未知字段；基于apply时最新字节做CAS。"""
+    """Change only path and domain of the registry entries with these ids, keep unknown fields; compare-and-swap on the bytes read at apply time."""
     registry_rel = layouts.of(root_).registry
     raw = read_bytes(root_, registry_rel)
     if raw is None:
@@ -275,9 +275,10 @@ def _registry_change(root_, moved):
 
 
 def link_obstacles(root_, moving, *, documents=None, replacements=None):
-    """{id: [vault相对引用文件]}：迁移会留下断链的卡。
+    """``{id: [vault-relative files that refer to it]}`` for cards whose move would break a link.
 
-    对实际生成后的字节核链接，不按目录名豁免自定义MOC或指南中保留的正文。
+    Links are checked in the bytes as they will be written; text kept in a
+    custom map page or a guide is not exempt because of its folder name.
     """
     if not moving:
         return {}
@@ -313,7 +314,7 @@ def link_obstacles(root_, moving, *, documents=None, replacements=None):
             if not target:
                 continue
             if rel in path_ids and not target.startswith('/'):
-                obstacles[path_ids[rel]].append(rel)      # 目录相对链接依赖本域目录
+                obstacles[path_ids[rel]].append(rel)      # a folder-relative link depends on the card's domain folder
             if target.startswith('/'):
                 norm = _normalize(target.lstrip('/'))
             else:
@@ -342,7 +343,7 @@ def _normalize(value):
 
 
 def _iter_md(root_):
-    """全vault通过no-follow句柄读md；只排除git内部。"""
+    """Every .md file of the vault, read through no-follow handles; only git internals are skipped."""
     root_ = Path(root_)
     for base, dirs, files in os.walk(root_):
         base_path = Path(base)
