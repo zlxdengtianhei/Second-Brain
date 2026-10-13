@@ -175,9 +175,7 @@ def test_every_guide_has_a_chinese_twin_and_they_link():
     for english, chinese in TWINS:
         assert chinese.exists(), chinese.name
         assert f'[English]({english.name})' in chinese.read_text(encoding='utf-8'), chinese.name
-        # the review-registry spec belongs to the plugin; its English page is not edited here
-        if english.name != 'review-registry.md':
-            assert f'[中文]({chinese.name})' in english.read_text(encoding='utf-8'), english.name
+        assert f'[中文]({chinese.name})' in english.read_text(encoding='utf-8'), english.name
     assert '[中文](README.zh-CN.md)' in (ROOT / 'examples/README.md').read_text(encoding='utf-8')
     assert '[English](README.md)' in (ROOT / 'examples/README.zh-CN.md').read_text(encoding='utf-8')
 
