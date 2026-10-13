@@ -40,10 +40,8 @@ Counted on 2026-10-13: **cards: 42** · domains: 3 · without pillar or topic: 0
 | `00_Inbox/` | 2 |
 | `10_Knowledge/` | 42 |
 | `20_MOCs/` | 15 |
-| `30_Exercises/` | 0 |
 | `40_Sources/` | 7 |
 | `50_Reviews/` | 0 |
-| `90_Meta/` | 2 |
 | `_data/` | 5 |
 
 > Current numbers: `sb status`. The cards and the curated taxonomy YAML are the source of truth.

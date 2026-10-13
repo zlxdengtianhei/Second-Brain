@@ -34,8 +34,9 @@ class VaultLayout:
     #: Hand-written top-level docs whose generated marker blocks `sb docs` refreshes
     #: (none by default; list them under ``[layout] entry_docs``).
     entry_docs: tuple = ()
-    #: Additional top-level folders counted in the optional `kb-dirs` block.
-    extra_dirs: tuple = ('30_Exercises', '90_Meta')
+    #: Additional top-level folders counted in HOME's folder table and the optional
+    #: `kb-dirs` block (none by default; list them under ``[layout] extra_dirs``).
+    extra_dirs: tuple = ()
 
     def __post_init__(self):
         for f in ('knowledge', 'mocs', 'taxonomy', 'sources', 'inbox', 'reviews', 'data'):

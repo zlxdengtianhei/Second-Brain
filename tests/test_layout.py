@@ -123,3 +123,10 @@ extra_dirs = []
                              capture_output=True, text=True, env=env)
     assert applied.returncode == 0, applied.stderr
     assert (root / f'Maps/{MOC}.md').is_file() and not (root / '20_MOCs').exists()
+
+
+def test_no_extra_folders_are_counted_unless_listed():
+    assert layout.VaultLayout().extra_dirs == ()
+    assert '30_Exercises' not in layout.VaultLayout().counted_dirs
+    listed = layout.VaultLayout.from_mapping({'extra_dirs': ['30_Exercises', '90_Meta']})
+    assert {'30_Exercises', '90_Meta'} <= set(listed.counted_dirs)
