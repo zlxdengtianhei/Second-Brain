@@ -1,5 +1,7 @@
 # SecondBrain Review (Obsidian plugin)
 
+[中文说明](README.zh-CN.md)
+
 The daily entry point for reviewing a Second Brain vault. It shows what is due today,
 runs flip and question-and-answer reviews, and explains a card with a language model.
 Every review is appended to an event log in the vault; scheduling (FSRS) is replayed
