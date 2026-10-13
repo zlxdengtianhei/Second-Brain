@@ -1,0 +1,1207 @@
+{
+  "format": 1,
+  "note": "Shared replay vectors for the Python and TypeScript review registries (docs/review-registry.md). 'expect' is hand-written from the spec. 'snapshot' holds full numeric results, written by the Python suite with SB_UPDATE_VECTORS=1 and checked by both suites. A file given as a list is written one item per line (objects are JSON-encoded, strings are written as is); a file given as a string is written verbatim.",
+  "vectors": [
+    {
+      "name": "first-review-good",
+      "description": "A new card rated Good enters learning step 1 (+10 min).",
+      "files": {
+        "events-obs-a.jsonl": [
+          {
+            "v": 1,
+            "ts": "2026-03-02T09:00:00.000+01:00",
+            "device": "obs-a",
+            "card": "ex_alpha",
+            "mode": "flip",
+            "rating": 3
+          }
+        ]
+      },
+      "expect": {
+        "issues": 0,
+        "cards": {
+          "ex_alpha": {
+            "state": "learning",
+            "reps": 1,
+            "lapses": 0,
+            "due": "2026-03-02T08:10:00.000Z",
+            "last_review": "2026-03-02T08:00:00.000Z"
+          }
+        }
+      },
+      "snapshot": {
+        "cards": {
+          "ex_alpha": {
+            "state": "learning",
+            "stability": 2.3065,
+            "difficulty": 2.118103970459016,
+            "due": "2026-03-02T08:10:00.000Z",
+            "last_review": "2026-03-02T08:00:00.000Z",
+            "reps": 1,
+            "lapses": 0
+          }
+        }
+      }
+    },
+    {
+      "name": "first-review-easy",
+      "description": "A new card rated Easy graduates at once: S = w3 = 8.2956, interval 8 days, difficulty clamps to 1.",
+      "files": {
+        "events-obs-a.jsonl": [
+          {
+            "v": 1,
+            "ts": "2026-03-02T09:00:00.000+01:00",
+            "device": "obs-a",
+            "card": "ex_beta",
+            "mode": "flip",
+            "rating": 4
+          }
+        ]
+      },
+      "expect": {
+        "issues": 0,
+        "cards": {
+          "ex_beta": {
+            "state": "review",
+            "reps": 1,
+            "stability": 8.2956,
+            "difficulty": 1,
+            "due": "2026-03-10T08:00:00.000Z"
+          }
+        }
+      },
+      "snapshot": {
+        "cards": {
+          "ex_beta": {
+            "state": "review",
+            "stability": 8.2956,
+            "difficulty": 1.0,
+            "due": "2026-03-10T08:00:00.000Z",
+            "last_review": "2026-03-02T08:00:00.000Z",
+            "reps": 1,
+            "lapses": 0
+          }
+        }
+      }
+    },
+    {
+      "name": "consecutive-correct",
+      "description": "Good, Good after 10 min (graduates, interval 2 days), then two more Good reviews on later days.",
+      "files": {
+        "events-obs-a.jsonl": [
+          {
+            "v": 1,
+            "ts": "2026-03-02T09:00:00.000+01:00",
+            "device": "obs-a",
+            "card": "ex_gamma",
+            "mode": "flip",
+            "rating": 3
+          },
+          {
+            "v": 1,
+            "ts": "2026-03-02T09:10:00.000+01:00",
+            "device": "obs-a",
+            "card": "ex_gamma",
+            "mode": "flip",
+            "rating": 3
+          },
+          {
+            "v": 1,
+            "ts": "2026-03-04T09:30:00.000+01:00",
+            "device": "obs-a",
+            "card": "ex_gamma",
+            "mode": "flip",
+            "rating": 3
+          },
+          {
+            "v": 1,
+            "ts": "2026-03-12T20:00:00.000+01:00",
+            "device": "obs-a",
+            "card": "ex_gamma",
+            "mode": "flip",
+            "rating": 3
+          },
+          {
+            "v": 1,
+            "ts": "2026-03-02T09:00:00.000+01:00",
+            "device": "obs-a",
+            "card": "ex_gamma_2",
+            "mode": "flip",
+            "rating": 3
+          },
+          {
+            "v": 1,
+            "ts": "2026-03-02T09:10:00.000+01:00",
+            "device": "obs-a",
+            "card": "ex_gamma_2",
+            "mode": "flip",
+            "rating": 3
+          }
+        ]
+      },
+      "expect": {
+        "issues": 0,
+        "cards": {
+          "ex_gamma": {
+            "state": "review",
+            "reps": 4,
+            "lapses": 0,
+            "last_review": "2026-03-12T19:00:00.000Z"
+          },
+          "ex_gamma_2": {
+            "state": "review",
+            "reps": 2,
+            "stability": 2.3065,
+            "due": "2026-03-04T08:10:00.000Z"
+          }
+        }
+      },
+      "snapshot": {
+        "cards": {
+          "ex_gamma": {
+            "state": "review",
+            "stability": 38.89607870593059,
+            "difficulty": 2.0974554287524403,
+            "due": "2026-04-20T19:00:00.000Z",
+            "last_review": "2026-03-12T19:00:00.000Z",
+            "reps": 4,
+            "lapses": 0
+          },
+          "ex_gamma_2": {
+            "state": "review",
+            "stability": 2.3065,
+            "difficulty": 2.111214235785395,
+            "due": "2026-03-04T08:10:00.000Z",
+            "last_review": "2026-03-02T08:10:00.000Z",
+            "reps": 2,
+            "lapses": 0
+          }
+        }
+      }
+    },
+    {
+      "name": "lapse-and-relearn",
+      "description": "Easy (review), Again on the due day (relearning, +10 min, lapse), Good 12 min later (graduates).",
+      "files": {
+        "events-obs-a.jsonl": [
+          {
+            "v": 1,
+            "ts": "2026-03-02T09:00:00.000+01:00",
+            "device": "obs-a",
+            "card": "ex_delta",
+            "mode": "flip",
+            "rating": 4
+          },
+          {
+            "v": 1,
+            "ts": "2026-03-10T09:00:00.000+01:00",
+            "device": "obs-a",
+            "card": "ex_delta",
+            "mode": "flip",
+            "rating": 1
+          },
+          {
+            "v": 1,
+            "ts": "2026-03-02T09:00:00.000+01:00",
+            "device": "obs-a",
+            "card": "ex_delta_2",
+            "mode": "flip",
+            "rating": 4
+          },
+          {
+            "v": 1,
+            "ts": "2026-03-10T09:00:00.000+01:00",
+            "device": "obs-a",
+            "card": "ex_delta_2",
+            "mode": "flip",
+            "rating": 1
+          },
+          {
+            "v": 1,
+            "ts": "2026-03-10T09:12:00.000+01:00",
+            "device": "obs-a",
+            "card": "ex_delta_2",
+            "mode": "flip",
+            "rating": 3
+          }
+        ]
+      },
+      "expect": {
+        "issues": 0,
+        "cards": {
+          "ex_delta": {
+            "state": "relearning",
+            "reps": 2,
+            "lapses": 1,
+            "due": "2026-03-10T08:10:00.000Z"
+          },
+          "ex_delta_2": {
+            "state": "review",
+            "reps": 3,
+            "lapses": 1
+          }
+        }
+      },
+      "snapshot": {
+        "cards": {
+          "ex_delta": {
+            "state": "relearning",
+            "stability": 1.3886324609821161,
+            "difficulty": 7.0269895692968385,
+            "due": "2026-03-10T08:10:00.000Z",
+            "last_review": "2026-03-10T08:00:00.000Z",
+            "reps": 2,
+            "lapses": 1
+          },
+          "ex_delta_2": {
+            "state": "review",
+            "stability": 1.427881680763876,
+            "difficulty": 7.0151909490243805,
+            "due": "2026-03-11T08:12:00.000Z",
+            "last_review": "2026-03-10T08:12:00.000Z",
+            "reps": 3,
+            "lapses": 1
+          }
+        }
+      }
+    },
+    {
+      "name": "learning-steps",
+      "description": "Again (+1 min), Again (+1 min), Hard (+6 min), then Good (+10 min) and Good (graduates). Lapses count only in the review state.",
+      "files": {
+        "events-obs-a.jsonl": [
+          {
+            "v": 1,
+            "ts": "2026-03-02T09:00:00.000+01:00",
+            "device": "obs-a",
+            "card": "ex_eps",
+            "mode": "flip",
+            "rating": 1
+          },
+          {
+            "v": 1,
+            "ts": "2026-03-02T09:02:00.000+01:00",
+            "device": "obs-a",
+            "card": "ex_eps",
+            "mode": "flip",
+            "rating": 1
+          },
+          {
+            "v": 1,
+            "ts": "2026-03-02T09:04:00.000+01:00",
+            "device": "obs-a",
+            "card": "ex_eps",
+            "mode": "flip",
+            "rating": 2
+          },
+          {
+            "v": 1,
+            "ts": "2026-03-02T09:00:00.000+01:00",
+            "device": "obs-a",
+            "card": "ex_eps_2",
+            "mode": "flip",
+            "rating": 1
+          },
+          {
+            "v": 1,
+            "ts": "2026-03-02T09:02:00.000+01:00",
+            "device": "obs-a",
+            "card": "ex_eps_2",
+            "mode": "flip",
+            "rating": 1
+          },
+          {
+            "v": 1,
+            "ts": "2026-03-02T09:04:00.000+01:00",
+            "device": "obs-a",
+            "card": "ex_eps_2",
+            "mode": "flip",
+            "rating": 2
+          },
+          {
+            "v": 1,
+            "ts": "2026-03-02T09:11:00.000+01:00",
+            "device": "obs-a",
+            "card": "ex_eps_2",
+            "mode": "flip",
+            "rating": 3
+          },
+          {
+            "v": 1,
+            "ts": "2026-03-02T09:22:00.000+01:00",
+            "device": "obs-a",
+            "card": "ex_eps_2",
+            "mode": "flip",
+            "rating": 3
+          }
+        ]
+      },
+      "expect": {
+        "issues": 0,
+        "cards": {
+          "ex_eps": {
+            "state": "learning",
+            "reps": 3,
+            "lapses": 0,
+            "due": "2026-03-02T08:10:00.000Z"
+          },
+          "ex_eps_2": {
+            "state": "review",
+            "reps": 5,
+            "lapses": 0
+          }
+        }
+      },
+      "snapshot": {
+        "cards": {
+          "ex_eps": {
+            "state": "learning",
+            "stability": 0.08335671711031604,
+            "difficulty": 9.192797649512254,
+            "due": "2026-03-02T08:10:00.000Z",
+            "last_review": "2026-03-02T08:04:00.000Z",
+            "reps": 3,
+            "lapses": 0
+          },
+          "ex_eps_2": {
+            "state": "review",
+            "stability": 0.12584423732556518,
+            "difficulty": 9.164882757235258,
+            "due": "2026-03-03T08:22:00.000Z",
+            "last_review": "2026-03-02T08:22:00.000Z",
+            "reps": 5,
+            "lapses": 0
+          }
+        }
+      }
+    },
+    {
+      "name": "multi-device-interleaved",
+      "description": "Two devices in different offsets review the same card; replay merges by instant. The same five reviews in one file give the same state.",
+      "files": {
+        "events-obs-mac.jsonl": [
+          {
+            "v": 1,
+            "ts": "2026-04-01T08:00:00.000+02:00",
+            "device": "obs-mac",
+            "card": "ex_zeta",
+            "mode": "flip",
+            "rating": 3
+          },
+          {
+            "v": 1,
+            "ts": "2026-04-03T09:00:00.000+02:00",
+            "device": "obs-mac",
+            "card": "ex_zeta",
+            "mode": "qa",
+            "rating": 3,
+            "grader": "llm:example"
+          },
+          {
+            "v": 1,
+            "ts": "2026-04-08T09:15:00.000+02:00",
+            "device": "obs-mac",
+            "card": "ex_zeta",
+            "mode": "flip",
+            "rating": 3
+          },
+          {
+            "v": 1,
+            "ts": "2026-04-01T08:00:00.000+02:00",
+            "device": "obs-mac",
+            "card": "ex_zeta_single",
+            "mode": "flip",
+            "rating": 3
+          },
+          {
+            "v": 1,
+            "ts": "2026-04-01T06:10:00.000Z",
+            "device": "obs-mac",
+            "card": "ex_zeta_single",
+            "mode": "flip",
+            "rating": 3
+          },
+          {
+            "v": 1,
+            "ts": "2026-04-03T09:00:00.000+02:00",
+            "device": "obs-mac",
+            "card": "ex_zeta_single",
+            "mode": "flip",
+            "rating": 3
+          },
+          {
+            "v": 1,
+            "ts": "2026-04-08T07:00:00.000Z",
+            "device": "obs-mac",
+            "card": "ex_zeta_single",
+            "mode": "flip",
+            "rating": 1
+          },
+          {
+            "v": 1,
+            "ts": "2026-04-08T09:15:00.000+02:00",
+            "device": "obs-mac",
+            "card": "ex_zeta_single",
+            "mode": "flip",
+            "rating": 3
+          }
+        ],
+        "events-cli-box.jsonl": [
+          {
+            "v": 1,
+            "ts": "2026-04-01T06:10:00.000Z",
+            "device": "cli-box",
+            "card": "ex_zeta",
+            "mode": "agent",
+            "rating": 3
+          },
+          {
+            "v": 1,
+            "ts": "2026-04-08T07:00:00.000Z",
+            "device": "cli-box",
+            "card": "ex_zeta",
+            "mode": "agent",
+            "rating": 1
+          }
+        ]
+      },
+      "expect": {
+        "issues": 0,
+        "cards": {
+          "ex_zeta": {
+            "state": "review",
+            "reps": 5,
+            "lapses": 1,
+            "same_as": "ex_zeta_single"
+          }
+        }
+      },
+      "snapshot": {
+        "cards": {
+          "ex_zeta": {
+            "state": "review",
+            "stability": 1.4670197822758384,
+            "difficulty": 7.377814181523433,
+            "due": "2026-04-09T07:15:00.000Z",
+            "last_review": "2026-04-08T07:15:00.000Z",
+            "reps": 5,
+            "lapses": 1
+          },
+          "ex_zeta_single": {
+            "state": "review",
+            "stability": 1.4670197822758384,
+            "difficulty": 7.377814181523433,
+            "due": "2026-04-09T07:15:00.000Z",
+            "last_review": "2026-04-08T07:15:00.000Z",
+            "reps": 5,
+            "lapses": 1
+          }
+        }
+      }
+    },
+    {
+      "name": "same-instant",
+      "description": "Two devices log the same card at the same instant: both apply, ordered by device id. An exact duplicate line and a sync conflict copy collapse into one event.",
+      "files": {
+        "events-obs-a.jsonl": [
+          {
+            "v": 1,
+            "ts": "2026-03-02T09:00:00.000+01:00",
+            "device": "obs-a",
+            "card": "ex_eta",
+            "mode": "flip",
+            "rating": 1
+          },
+          {
+            "v": 1,
+            "ts": "2026-03-02T09:00:00.000+01:00",
+            "device": "obs-a",
+            "card": "ex_eta",
+            "mode": "flip",
+            "rating": 1
+          }
+        ],
+        "events-obs-a (conflict).jsonl": [
+          {
+            "v": 1,
+            "ts": "2026-03-02T08:00:00.000Z",
+            "device": "obs-a",
+            "card": "ex_eta",
+            "mode": "flip",
+            "rating": 1
+          }
+        ],
+        "events-obs-b.jsonl": [
+          {
+            "v": 1,
+            "ts": "2026-03-02T09:00:00.000+01:00",
+            "device": "obs-b",
+            "card": "ex_eta",
+            "mode": "flip",
+            "rating": 3
+          }
+        ]
+      },
+      "expect": {
+        "issues": 0,
+        "cards": {
+          "ex_eta": {
+            "state": "learning",
+            "reps": 2,
+            "lapses": 0,
+            "due": "2026-03-02T08:10:00.000Z"
+          }
+        }
+      },
+      "snapshot": {
+        "cards": {
+          "ex_eta": {
+            "state": "learning",
+            "stability": 0.24668918777567272,
+            "difficulty": 6.402115069296838,
+            "due": "2026-03-02T08:10:00.000Z",
+            "last_review": "2026-03-02T08:00:00.000Z",
+            "reps": 2,
+            "lapses": 0
+          }
+        }
+      }
+    },
+    {
+      "name": "qa-items-minimum",
+      "description": "A Q&A review without a card rating uses the lowest item rating (Hard: +6 min). An explicit card rating wins over the items (Again: +1 min).",
+      "files": {
+        "events-obs-a.jsonl": [
+          {
+            "v": 1,
+            "ts": "2026-03-02T09:00:00.000+01:00",
+            "device": "obs-a",
+            "card": "ex_theta",
+            "mode": "qa",
+            "grader": "llm:example",
+            "items": [
+              {
+                "q": "h:00000001",
+                "rating": 3,
+                "verdict": "hit"
+              },
+              {
+                "q": "h:00000002",
+                "rating": 2,
+                "verdict": "partial",
+                "missing": [
+                  "edge case"
+                ]
+              },
+              {
+                "q": "h:00000003",
+                "rating": 4
+              }
+            ]
+          },
+          {
+            "v": 1,
+            "ts": "2026-03-02T09:00:00.000+01:00",
+            "device": "obs-a",
+            "card": "ex_iota",
+            "mode": "agent",
+            "rating": 1,
+            "items": [
+              {
+                "q": "h:00000004",
+                "rating": 3
+              },
+              {
+                "q": "h:00000005",
+                "rating": 3
+              }
+            ]
+          }
+        ]
+      },
+      "expect": {
+        "issues": 0,
+        "cards": {
+          "ex_theta": {
+            "state": "learning",
+            "reps": 1,
+            "due": "2026-03-02T08:06:00.000Z"
+          },
+          "ex_iota": {
+            "state": "learning",
+            "reps": 1,
+            "due": "2026-03-02T08:01:00.000Z"
+          }
+        }
+      },
+      "snapshot": {
+        "cards": {
+          "ex_iota": {
+            "state": "learning",
+            "stability": 0.212,
+            "difficulty": 6.4133,
+            "due": "2026-03-02T08:01:00.000Z",
+            "last_review": "2026-03-02T08:00:00.000Z",
+            "reps": 1,
+            "lapses": 0
+          },
+          "ex_theta": {
+            "state": "learning",
+            "stability": 1.2931,
+            "difficulty": 5.112170705601056,
+            "due": "2026-03-02T08:06:00.000Z",
+            "last_review": "2026-03-02T08:00:00.000Z",
+            "reps": 1,
+            "lapses": 0
+          }
+        }
+      }
+    },
+    {
+      "name": "import-sm2",
+      "description": "An SM-2 import seeds the review state (S = interval, D from ease, due at 04:00 local). It is not a review: reps stay 0. A later review continues from the seed.",
+      "files": {
+        "events-obs-a.jsonl": [
+          {
+            "v": 1,
+            "ts": "2026-03-15T10:00:00.000+01:00",
+            "device": "obs-a",
+            "card": "ex_kappa",
+            "mode": "import",
+            "import": {
+              "from": "sr-sm2",
+              "due": "2026-03-20",
+              "interval": 5,
+              "ease": 250
+            }
+          },
+          {
+            "v": 1,
+            "ts": "2026-03-15T10:00:00.000+01:00",
+            "device": "obs-a",
+            "card": "ex_kappa_2",
+            "mode": "import",
+            "import": {
+              "from": "sr-sm2",
+              "due": "2026-03-20",
+              "interval": 5,
+              "ease": 250
+            }
+          },
+          {
+            "v": 1,
+            "ts": "2026-03-20T09:00:00.000+01:00",
+            "device": "obs-a",
+            "card": "ex_kappa_2",
+            "mode": "flip",
+            "rating": 3
+          }
+        ]
+      },
+      "expect": {
+        "issues": 0,
+        "cards": {
+          "ex_kappa": {
+            "state": "review",
+            "reps": 0,
+            "lapses": 0,
+            "stability": 5,
+            "difficulty": 5.0909,
+            "due": "2026-03-20T03:00:00.000Z",
+            "last_review": "2026-03-15T03:00:00.000Z"
+          },
+          "ex_kappa_2": {
+            "state": "review",
+            "reps": 1,
+            "last_review": "2026-03-20T08:00:00.000Z"
+          }
+        }
+      },
+      "snapshot": {
+        "cards": {
+          "ex_kappa": {
+            "state": "review",
+            "stability": 5.0,
+            "difficulty": 5.0909,
+            "due": "2026-03-20T03:00:00.000Z",
+            "last_review": "2026-03-15T03:00:00.000Z",
+            "reps": 0,
+            "lapses": 0
+          },
+          "ex_kappa_2": {
+            "state": "review",
+            "stability": 17.174235792026483,
+            "difficulty": 5.081037469296839,
+            "due": "2026-04-06T08:00:00.000Z",
+            "last_review": "2026-03-20T08:00:00.000Z",
+            "reps": 1,
+            "lapses": 0
+          }
+        }
+      }
+    },
+    {
+      "name": "import-fsrs",
+      "description": "An FSRS import from the Spaced Repetition plugin keeps its stability, difficulty, due and last review.",
+      "files": {
+        "events-obs-a.jsonl": [
+          {
+            "v": 1,
+            "ts": "2026-03-16T10:00:00.000+01:00",
+            "device": "obs-a",
+            "card": "ex_lambda",
+            "mode": "import",
+            "import": {
+              "from": "sr-fsrs",
+              "due": "2026-03-25T07:00:00.000Z",
+              "interval": 10,
+              "stability": 9.5,
+              "difficulty": 6.2,
+              "last_review": "2026-03-15T07:00:00.000Z"
+            }
+          }
+        ]
+      },
+      "expect": {
+        "issues": 0,
+        "cards": {
+          "ex_lambda": {
+            "state": "review",
+            "reps": 0,
+            "stability": 9.5,
+            "difficulty": 6.2,
+            "due": "2026-03-25T07:00:00.000Z",
+            "last_review": "2026-03-15T07:00:00.000Z"
+          }
+        }
+      },
+      "snapshot": {
+        "cards": {
+          "ex_lambda": {
+            "state": "review",
+            "stability": 9.5,
+            "difficulty": 6.2,
+            "due": "2026-03-25T07:00:00.000Z",
+            "last_review": "2026-03-15T07:00:00.000Z",
+            "reps": 0,
+            "lapses": 0
+          }
+        }
+      }
+    },
+    {
+      "name": "bad-lines-skipped",
+      "description": "Invalid lines are reported and skipped; valid lines around them still apply. Empty lines are ignored.",
+      "files": {
+        "events-obs-a.jsonl": [
+          {
+            "v": 1,
+            "ts": "2026-03-02T09:00:00.000+01:00",
+            "device": "obs-a",
+            "card": "ex_mu",
+            "mode": "flip",
+            "rating": 3
+          },
+          "{not json",
+          {
+            "v": 1,
+            "ts": "2026-03-02T09:05:00.000+01:00",
+            "device": "obs-a",
+            "card": "ex_mu",
+            "mode": "flip"
+          },
+          {
+            "v": 1,
+            "ts": "2026-03-02T09:05:01.000+01:00",
+            "device": "obs-a",
+            "card": "ex_mu",
+            "mode": "flip",
+            "rating": 5
+          },
+          {
+            "v": 2,
+            "ts": "2026-03-02T09:05:02.000+01:00",
+            "device": "obs-a",
+            "card": "ex_mu",
+            "mode": "flip",
+            "rating": 3
+          },
+          {
+            "v": 1,
+            "ts": "2026-03-02T09:05:03",
+            "device": "obs-a",
+            "card": "ex_mu",
+            "mode": "flip",
+            "rating": 3
+          },
+          {
+            "v": 1,
+            "ts": "2026-03-02T09:05:04.000+01:00",
+            "device": "bad device!",
+            "card": "ex_mu",
+            "mode": "flip",
+            "rating": 3
+          },
+          {
+            "v": 1,
+            "ts": "2026-03-02T09:05:05.000+01:00",
+            "device": "obs-a",
+            "card": "ex_mu",
+            "mode": "flip",
+            "rating": true
+          },
+          {
+            "v": 1,
+            "ts": "2026-03-02T09:05:06.000+01:00",
+            "device": "obs-a",
+            "card": "",
+            "mode": "flip",
+            "rating": 3
+          },
+          "",
+          "{\"v\":1,\"ts\":\"2026-03-02T09:0",
+          {
+            "v": 1,
+            "ts": "2026-03-02T09:10:00.000+01:00",
+            "device": "obs-a",
+            "card": "ex_mu",
+            "mode": "flip",
+            "rating": 3
+          }
+        ]
+      },
+      "expect": {
+        "issues": 9,
+        "cards": {
+          "ex_mu": {
+            "state": "review",
+            "reps": 2,
+            "stability": 2.3065,
+            "due": "2026-03-04T08:10:00.000Z"
+          }
+        }
+      },
+      "snapshot": {
+        "cards": {
+          "ex_mu": {
+            "state": "review",
+            "stability": 2.3065,
+            "difficulty": 2.111214235785395,
+            "due": "2026-03-04T08:10:00.000Z",
+            "last_review": "2026-03-02T08:10:00.000Z",
+            "reps": 2,
+            "lapses": 0
+          }
+        }
+      }
+    },
+    {
+      "name": "md-storage",
+      "description": "A .md log: only lines starting with '{' are events; front matter, headings and notes are ignored.",
+      "files": {
+        "events-obs-m.md": "---\nformat: secondbrain-review-log\n---\n# Review log\n{\"v\":1,\"ts\":\"2026-03-02T09:00:00.000+01:00\",\"device\":\"obs-m\",\"card\":\"ex_nu\",\"mode\":\"flip\",\"rating\":3}\nA note written by hand.\n  {\"v\":1,\"ts\":\"2026-03-02T09:10:00.000+01:00\",\"device\":\"obs-m\",\"card\":\"ex_nu\",\"mode\":\"flip\",\"rating\":3}\n"
+      },
+      "expect": {
+        "issues": 0,
+        "cards": {
+          "ex_nu": {
+            "state": "review",
+            "reps": 2,
+            "due": "2026-03-04T08:10:00.000Z"
+          }
+        }
+      },
+      "snapshot": {
+        "cards": {
+          "ex_nu": {
+            "state": "review",
+            "stability": 2.3065,
+            "difficulty": 2.111214235785395,
+            "due": "2026-03-04T08:10:00.000Z",
+            "last_review": "2026-03-02T08:10:00.000Z",
+            "reps": 2,
+            "lapses": 0
+          }
+        }
+      }
+    },
+    {
+      "name": "learning-day-boundary",
+      "description": "23:30 and 08:00 next morning are one learning day apart (long-term update). 01:00 and 03:30 are the same learning day (same-day update keeps S = 2.3065, interval 2).",
+      "files": {
+        "events-obs-a.jsonl": [
+          {
+            "v": 1,
+            "ts": "2026-03-02T23:30:00.000+01:00",
+            "device": "obs-a",
+            "card": "ex_xi",
+            "mode": "flip",
+            "rating": 3
+          },
+          {
+            "v": 1,
+            "ts": "2026-03-03T08:00:00.000+01:00",
+            "device": "obs-a",
+            "card": "ex_xi",
+            "mode": "flip",
+            "rating": 3
+          },
+          {
+            "v": 1,
+            "ts": "2026-03-03T01:00:00.000+01:00",
+            "device": "obs-a",
+            "card": "ex_omicron",
+            "mode": "flip",
+            "rating": 3
+          },
+          {
+            "v": 1,
+            "ts": "2026-03-03T03:30:00.000+01:00",
+            "device": "obs-a",
+            "card": "ex_omicron",
+            "mode": "flip",
+            "rating": 3
+          }
+        ]
+      },
+      "expect": {
+        "issues": 0,
+        "cards": {
+          "ex_xi": {
+            "state": "review",
+            "reps": 2
+          },
+          "ex_omicron": {
+            "state": "review",
+            "reps": 2,
+            "stability": 2.3065,
+            "due": "2026-03-05T02:30:00.000Z"
+          }
+        }
+      },
+      "snapshot": {
+        "cards": {
+          "ex_omicron": {
+            "state": "review",
+            "stability": 2.3065,
+            "difficulty": 2.111214235785395,
+            "due": "2026-03-05T02:30:00.000Z",
+            "last_review": "2026-03-03T02:30:00.000Z",
+            "reps": 2,
+            "lapses": 0
+          },
+          "ex_xi": {
+            "state": "review",
+            "stability": 7.31530074407728,
+            "difficulty": 2.111214235785395,
+            "due": "2026-03-10T07:00:00.000Z",
+            "last_review": "2026-03-03T07:00:00.000Z",
+            "reps": 2,
+            "lapses": 0
+          }
+        }
+      }
+    },
+    {
+      "name": "scheduler-day-never-backwards",
+      "description": "A later instant from a device whose offset puts it on an earlier learning day is scheduled on the card's last day (elapsed 0).",
+      "files": {
+        "events-obs-a.jsonl": [
+          {
+            "v": 1,
+            "ts": "2026-04-01T08:00:00.000+02:00",
+            "device": "obs-a",
+            "card": "ex_pi",
+            "mode": "flip",
+            "rating": 3
+          }
+        ],
+        "events-cli-x.jsonl": [
+          {
+            "v": 1,
+            "ts": "2026-04-01T02:30:00.000-04:00",
+            "device": "cli-x",
+            "card": "ex_pi",
+            "mode": "agent",
+            "rating": 3
+          }
+        ]
+      },
+      "expect": {
+        "issues": 0,
+        "cards": {
+          "ex_pi": {
+            "state": "review",
+            "reps": 2,
+            "stability": 2.3065,
+            "due": "2026-04-03T06:30:00.000Z"
+          }
+        }
+      },
+      "snapshot": {
+        "cards": {
+          "ex_pi": {
+            "state": "review",
+            "stability": 2.3065,
+            "difficulty": 2.111214235785395,
+            "due": "2026-04-03T06:30:00.000Z",
+            "last_review": "2026-04-01T06:30:00.000Z",
+            "reps": 2,
+            "lapses": 0
+          }
+        }
+      }
+    },
+    {
+      "name": "review-interval-ordering",
+      "description": "Same-day Good on a review card: hard and good intervals both round to 8, so good becomes hard + 1 = 9 days.",
+      "files": {
+        "events-obs-a.jsonl": [
+          {
+            "v": 1,
+            "ts": "2026-03-02T09:00:00.000+01:00",
+            "device": "obs-a",
+            "card": "ex_rho",
+            "mode": "flip",
+            "rating": 4
+          },
+          {
+            "v": 1,
+            "ts": "2026-03-02T09:00:30.000+01:00",
+            "device": "obs-a",
+            "card": "ex_rho",
+            "mode": "flip",
+            "rating": 3
+          }
+        ]
+      },
+      "expect": {
+        "issues": 0,
+        "cards": {
+          "ex_rho": {
+            "state": "review",
+            "reps": 2,
+            "stability": 8.2956,
+            "due": "2026-03-11T08:00:30.000Z"
+          }
+        }
+      },
+      "snapshot": {
+        "cards": {
+          "ex_rho": {
+            "state": "review",
+            "stability": 8.2956,
+            "difficulty": 1.0,
+            "due": "2026-03-11T08:00:30.000Z",
+            "last_review": "2026-03-02T08:00:30.000Z",
+            "reps": 2,
+            "lapses": 0
+          }
+        }
+      }
+    }
+  ],
+  "question_ids": [
+    {
+      "text": "a",
+      "q": "h:e40c292c"
+    },
+    {
+      "text": "",
+      "q": "h:811c9dc5"
+    },
+    {
+      "text": "  What   is\tBinary Search? ",
+      "same_as": "what is binary search?"
+    },
+    {
+      "text": "ＴＣＰ 三次握手是什么？",
+      "same_as": "tcp 三次握手是什么?"
+    }
+  ],
+  "review_items": [
+    {
+      "file": "cards/binary-search.md",
+      "items": [
+        [
+          "What precondition does binary search need?",
+          "The array must be sorted."
+        ],
+        [
+          "What is the loop invariant of binary search?",
+          "If the target exists, it lies inside [lo, hi]."
+        ],
+        [
+          "How many comparisons does binary search need?",
+          "O(log n), because each step halves the interval."
+        ],
+        [
+          "Inside a sub-heading",
+          "still part of the review section"
+        ]
+      ]
+    },
+    {
+      "file": "cards/tcp-handshake.md",
+      "items": [
+        [
+          "TCP 三次握手依次发送哪三个报文？",
+          "SYN、SYN-ACK、ACK。"
+        ],
+        [
+          "为什么需要第三次握手？",
+          "让服务器确认客户端收到了它的初始序号。"
+        ]
+      ]
+    }
+  ],
+  "sr_import": [
+    {
+      "name": "sm2-multi",
+      "text": "Q1::A1 <!--SR:!2026-03-20,5,250-->\nQ2::A2\n<!--SR:!2026-03-18,3,230!2026-03-25,9,270-->",
+      "frontmatter": {},
+      "seed": {
+        "from": "sr-sm2",
+        "due": "2026-03-18",
+        "interval": 3,
+        "ease": 230
+      }
+    },
+    {
+      "name": "frontmatter-only",
+      "text": "body",
+      "frontmatter": {
+        "sr-due": "2026-04-02",
+        "sr-interval": 12,
+        "sr-ease": 290
+      },
+      "seed": {
+        "from": "sr-sm2",
+        "due": "2026-04-02",
+        "interval": 12,
+        "ease": 290
+      }
+    },
+    {
+      "name": "fsrs",
+      "text": "Q::A <!--SR:!fsrs,2026-03-25T07:00:00.000Z,10,9.5,6.2,2,4,0,0,2026-03-15T07:00:00.000Z-->",
+      "frontmatter": {},
+      "seed": {
+        "from": "sr-fsrs",
+        "due": "2026-03-25T07:00:00.000Z",
+        "interval": 10,
+        "stability": 9.5,
+        "difficulty": 6.2,
+        "last_review": "2026-03-15T07:00:00.000Z"
+      }
+    },
+    {
+      "name": "none",
+      "text": "Q::A\nno schedule here",
+      "frontmatter": {
+        "title": "x"
+      },
+      "seed": null
+    }
+  ]
+}

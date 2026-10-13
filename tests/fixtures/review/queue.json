@@ -1,0 +1,74 @@
+{
+  "format": 1,
+  "note": "Status and queue cases shared by the Python and TypeScript registries. All expectations are hand-written from docs/review-registry.md sections 5 and 6.",
+  "now": "2026-03-10T12:00:00.000+01:00",
+  "cards": [
+    {"id": "ex_data_structures", "title": "Data structures overview", "domain": "algo", "kind": "concept", "rank": 0},
+    {"id": "ex_array", "title": "Arrays", "domain": "algo", "kind": "concept", "rank": 1},
+    {"id": "ex_loop_invariant", "title": "Loop invariants", "domain": "algo", "kind": "concept", "rank": 2},
+    {"id": "ex_sorting", "title": "Sorting", "domain": "algo", "kind": "concept", "rank": 3, "relations": [["precedes", "ex_binary_search"]]},
+    {"id": "ex_binary_search", "title": "Binary search", "domain": "algo", "kind": "mechanism", "rank": 4, "relations": [["depends_on", "ex_array"], ["depends_on", "ex_loop_invariant"], ["similar_to", "ex_sorting"]]},
+    {"id": "ex_hash_table", "title": "Hash tables", "domain": "algo", "kind": "mechanism", "rank": 5, "relations": [["part_of", "ex_data_structures"]]},
+    {"id": "ex_cycle_a", "title": "Cycle A", "domain": "algo", "kind": "concept", "rank": 6, "relations": [["depends_on", "ex_cycle_b"]]},
+    {"id": "ex_cycle_b", "title": "Cycle B", "domain": "algo", "kind": "concept", "rank": 6, "relations": [["depends_on", "ex_cycle_a"]]},
+    {"id": "ex_log_record", "title": "Study log", "domain": "algo", "kind": "record", "rank": 7},
+    {"id": "ex_draft", "title": "Draft card", "domain": "algo", "kind": "concept", "status": "needs-review", "rank": 8},
+    {"id": "ex_tcp", "title": "TCP", "domain": "net", "kind": "concept", "rank": 10, "relations": [["required_by", "ex_tls"]]},
+    {"id": "ex_handshake", "title": "TCP handshake", "domain": "net", "kind": "mechanism", "rank": 11, "relations": [["follows", "ex_tcp"]]},
+    {"id": "ex_udp", "title": "UDP", "domain": "net", "kind": "concept", "rank": 12, "relations": [["contrasts_with", "ex_tcp"]]},
+    {"id": "ex_tls", "title": "TLS", "domain": "net", "kind": "concept", "rank": 13}
+  ],
+  "files": {
+    "events-obs-a.jsonl": [
+      {"v": 1, "ts": "2026-03-01T09:00:00.000+01:00", "device": "obs-a", "card": "ex_array", "mode": "flip", "rating": 4},
+      {"v": 1, "ts": "2026-03-05T10:00:00.000+01:00", "device": "obs-a", "card": "ex_udp", "mode": "import", "import": {"from": "sr-fsrs", "due": "2026-04-01T08:00:00.000Z", "interval": 30, "stability": 30, "difficulty": 5, "last_review": "2026-03-02T08:00:00.000Z"}},
+      {"v": 1, "ts": "2026-03-08T09:00:00.000+01:00", "device": "obs-a", "card": "ex_gone", "mode": "flip", "rating": 3},
+      {"v": 1, "ts": "2026-03-09T09:00:00.000+01:00", "device": "obs-a", "card": "ex_handshake", "mode": "flip", "rating": 4},
+      {"v": 1, "ts": "2026-03-10T09:00:00.000+01:00", "device": "obs-a", "card": "ex_tcp", "mode": "flip", "rating": 3}
+    ]
+  },
+  "summary": {
+    "today": "2026-03-10",
+    "totals": {"total": 14, "unlearned": 10, "learning": 1, "review": 2, "mastered": 1, "learned": 4, "due": 2, "reviewed_today": 1, "due_not_reviewed_today": 1},
+    "domains": {
+      "algo": {"total": 10, "unlearned": 9, "learning": 0, "review": 1, "mastered": 0, "learned": 1, "due": 1, "reviewed_today": 0, "due_not_reviewed_today": 1},
+      "net": {"total": 4, "unlearned": 1, "learning": 1, "review": 1, "mastered": 1, "learned": 3, "due": 1, "reviewed_today": 1, "due_not_reviewed_today": 0}
+    },
+    "new_today": 1,
+    "reviews_today": 1,
+    "streak": 3,
+    "orphans": ["ex_gone"]
+  },
+  "queues": [
+    {
+      "name": "all-domains",
+      "new_per_day": 10,
+      "domains": [],
+      "due": ["ex_array", "ex_tcp"],
+      "new": ["ex_data_structures", "ex_loop_invariant", "ex_sorting", "ex_binary_search", "ex_hash_table", "ex_tls", "ex_cycle_a", "ex_cycle_b"],
+      "new_quota": 9,
+      "new_available": 8,
+      "cycle_breaks": ["ex_cycle_a"]
+    },
+    {
+      "name": "one-domain",
+      "new_per_day": 3,
+      "domains": ["net"],
+      "due": ["ex_array", "ex_tcp"],
+      "new": ["ex_tls"],
+      "new_quota": 2,
+      "new_available": 1,
+      "cycle_breaks": []
+    },
+    {
+      "name": "quota-used",
+      "new_per_day": 1,
+      "domains": ["algo"],
+      "due": ["ex_array", "ex_tcp"],
+      "new": [],
+      "new_quota": 0,
+      "new_available": 7,
+      "cycle_breaks": ["ex_cycle_a"]
+    }
+  ]
+}
