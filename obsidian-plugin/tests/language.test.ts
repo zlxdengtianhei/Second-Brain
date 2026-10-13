@@ -82,9 +82,9 @@ describe("the vault's language", () => {
 	it("without a record, is the language of the first map root page with a page index (a vault made before the record)", async () => {
 		const a = new MemoryAdapter();
 		a.files.set("_data/secondbrain/catalog.json", catalog({}));
-		a.files.set("20_MOCs/Agent Harness 构成.md", "# Agent Harness 构成\n\n## 分页索引（全部可达）\n- [[x]]\n");
-		a.files.set("20_MOCs/大学物理.md", "# 大学物理\n\n## Page index (every page)\n");
-		a.files.set("20_MOCs/_pillars/大学物理.yaml", "title: 大学物理\n");
+		a.files.set("20_MOCs/Atlas 示例图谱甲.md", "# Atlas 示例图谱甲\n\n## 分页索引（全部可达）\n- [[x]]\n");
+		a.files.set("20_MOCs/示例图谱乙.md", "# 示例图谱乙\n\n## Page index (every page)\n");
+		a.files.set("20_MOCs/_pillars/示例图谱乙.yaml", "title: 示例图谱乙\n");
 		a.files.set("20_MOCs/notes.txt", "## Page index (every page)");
 		expect(await detectVaultLanguage(a, folders)).toBe("zh");
 		a.files.set("20_MOCs/A plain note.md", "no marker here");
