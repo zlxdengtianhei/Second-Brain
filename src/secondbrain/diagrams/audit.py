@@ -1,0 +1,267 @@
+"""Read-only audit of the Mermaid diagrams already in a vault.
+
+Three stages, so the browser-based parse can sit in the middle:
+
+1. extract(): read every card under the knowledge folder; write cards.jsonl
+   (card fields plus file hash) and blocks.jsonl (one Mermaid block per line,
+   the input format of tools/mermaid_check);
+2. tools/mermaid_check parses and renders blocks.jsonl into checks.jsonl,
+   which carries the parse result, node and edge structure, direction and size;
+3. tier(): join both and sort every diagram into one of four tiers:
+     delete  - restates the text, wrong form for the card, or broken on a
+               fact/contrast card: remove the diagram section;
+     keep    - shows a branch, a merge, a loop, or is a sequence/state diagram,
+               and its node labels are grounded in the card;
+     review  - neither: judge again with the draw-or-skip method;
+     redraw  - does not parse: judge again and draw from scratch.
+
+The rules are the mechanical tiering from the method write-up; they are a
+screen, not a verdict on each diagram.
+"""
+from __future__ import annotations
+
+import hashlib
+import json
+import re
+from collections import Counter, defaultdict
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, Iterable, Iterator
+
+import yaml
+
+from .text import tokens
+
+_Loader = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
+FENCE = re.compile(r"```mermaid\n(.*?)```", re.S)
+_PROP = re.compile(r"^- P(\d+)\.\s*(.+)$", re.M)
+_WIKI = re.compile(r"\[\[([^\]|#]+)(?:#[^\]|]*)?(?:\|[^\]]*)?\]\]")
+
+
+@dataclass(frozen=True)
+class CardFormat:
+    """Where the card parts live: the knowledge folder and the section headings."""
+
+    knowledge_dir: str = "10_Knowledge"
+    essence: str = "本质"
+    propositions: str = "命题"
+    diagram: str = "图"
+    related: str = "相关"
+
+
+DEFAULT_FORMAT = CardFormat()
+
+
+def split_frontmatter(text: str) -> tuple[dict[str, Any], str]:
+    if text.startswith("---\n"):
+        end = text.find("\n---\n", 4)
+        if end > 0:
+            try:
+                fm = yaml.load(text[4:end], Loader=_Loader) or {}
+            except yaml.YAMLError:
+                fm = {}
+            return (fm if isinstance(fm, dict) else {}), text[end + 5:]
+    return {}, text
+
+
+def sections(body: str) -> dict[str, str]:
+    """Second-level sections by heading; headings inside code fences do not count."""
+    out: dict[str, str] = {}
+    cur, buf, in_code = "", [], False
+    for line in body.split("\n"):
+        if line.startswith("```"):
+            in_code = not in_code
+        if not in_code and line.startswith("## "):
+            out[cur] = "\n".join(buf)
+            cur, buf = line[3:].strip(), []
+            continue
+        buf.append(line)
+    out[cur] = "\n".join(buf)
+    return out
+
+
+def read_card(text: str, ref: str, fmt: CardFormat = DEFAULT_FORMAT) -> dict[str, Any]:
+    """Card fields the diagram step uses, plus every Mermaid block in the body."""
+    fm, body = split_frontmatter(text)
+    secs = sections(body)
+    return {
+        "ref": ref,
+        "sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
+        "title": str(fm.get("title") or Path(ref).stem),
+        "kind": fm.get("kind"),
+        "domain": fm.get("domain"),
+        "essence": secs.get(fmt.essence, "").strip(),
+        "propositions": [m[1].strip() for m in _PROP.findall(secs.get(fmt.propositions, ""))],
+        "related_titles": _WIKI.findall(secs.get(fmt.related, "")),
+        "has_diagram_section": fmt.diagram in secs,
+        "blocks": FENCE.findall(body),
+    }
+
+
+def scan(vault: Path, fmt: CardFormat = DEFAULT_FORMAT) -> Iterator[dict[str, Any]]:
+    root = Path(vault) / fmt.knowledge_dir
+    for p in sorted(root.rglob("*.md")):
+        yield read_card(p.read_text(encoding="utf-8"), p.relative_to(vault).as_posix(), fmt)
+
+
+def extract(vault: Path, out_dir: Path, fmt: CardFormat = DEFAULT_FORMAT) -> dict[str, int]:
+    """Write cards.jsonl and blocks.jsonl under out_dir. Reads the vault only."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+    n_cards = n_blocks = 0
+    with (out_dir / "cards.jsonl").open("w", encoding="utf-8") as fc, \
+            (out_dir / "blocks.jsonl").open("w", encoding="utf-8") as fb:
+        for card in scan(vault, fmt):
+            n_cards += 1
+            for j, text in enumerate(card["blocks"]):
+                n_blocks += 1
+                fb.write(json.dumps({"id": f"{card['ref']}#{j}", "text": text}, ensure_ascii=False) + "\n")
+            fc.write(json.dumps(card, ensure_ascii=False) + "\n")
+    return {"cards": n_cards, "blocks": n_blocks}
+
+
+def shape_of(nodes: list[dict], edges: list[dict]) -> str:
+    """chain, star, cyclic, tree, dag or empty."""
+    ids = {n["id"] for n in nodes}
+    indeg, outdeg, deg = Counter(), Counter(), Counter()
+    for e in edges:
+        outdeg[e["from"]] += 1
+        indeg[e["to"]] += 1
+        deg[e["from"]] += 1
+        deg[e["to"]] += 1
+    n, m = len(ids), len(edges)
+    if n == 0:
+        return "empty"
+    if m and all(indeg[i] <= 1 and outdeg[i] <= 1 for i in ids) and m == n - 1:
+        return "chain"
+    if m >= 3 and (max(deg.values()) if deg else 0) == m:
+        return "star"
+    adj = defaultdict(list)
+    for e in edges:
+        adj[e["from"]].append(e["to"])
+    color: dict[str, int] = {}
+
+    def cyclic(u: str) -> bool:
+        color[u] = 1
+        for v in adj[u]:
+            if color.get(v) == 1 or (v not in color and cyclic(v)):
+                return True
+        color[u] = 2
+        return False
+
+    if any(cyclic(i) for i in ids if i not in color):
+        return "cyclic"
+    return "tree" if m == n - 1 else "dag"
+
+
+def grounding(card: dict[str, Any], nodes: list[dict]) -> float | None:
+    """Share of nodes whose label tokens are at least half found in title, essence and propositions."""
+    source = tokens(" ".join([card["title"], card["essence"], " ".join(card["propositions"])]))
+    scored = grounded = 0
+    for n in nodes:
+        t = tokens(n.get("label") or "")
+        if not t:
+            continue
+        scored += 1
+        if len(t & source) / len(t) >= 0.5:
+            grounded += 1
+    return round(grounded / scored, 2) if scored else None
+
+
+def metrics(card: dict[str, Any], check: dict[str, Any]) -> dict[str, Any]:
+    nodes, edges = check.get("nodes") or [], check.get("edges") or []
+    return {
+        "type": check.get("type"), "direction": check.get("direction"),
+        "width": check.get("width"), "height": check.get("height"),
+        "n_nodes": len(nodes), "n_edges": len(edges),
+        "decision_nodes": sum(1 for n in nodes if n.get("shape") == "diamond"),
+        "shape": shape_of(nodes, edges),
+        "grounding": grounding(card, nodes),
+        "edge_labels": [(e.get("label") or "").strip() for e in edges],
+        "max_indegree": max(Counter(e["to"] for e in edges).values(), default=0),
+    }
+
+
+def _gain(m: dict[str, Any]) -> str | None:
+    if m["type"] in ("sequence", "stateDiagram"):
+        return "type"
+    if m["decision_nodes"]:
+        return "branch"
+    if m["shape"] == "cyclic":
+        return "loop"
+    if m["n_nodes"] >= 5 and m["max_indegree"] >= 2:
+        return "merge"
+    return None
+
+
+@dataclass(frozen=True)
+class TierRules:
+    delete_domains: tuple[str, ...] = ()
+    weak_kinds: tuple[str, ...] = ("fact", "contrast")
+    max_restating_edges: int = 2
+    max_short_chain_nodes: int = 4
+    min_grounding: float = 0.5
+
+
+def tier_one(card: dict[str, Any], check: dict[str, Any], rules: TierRules = TierRules()) -> tuple[str, str]:
+    """(tier, rule) for one card's first diagram."""
+    if card["domain"] in rules.delete_domains:
+        return "delete", "domain"
+    if not check.get("ok"):
+        return ("delete", "broken+fact/contrast") if card["kind"] in rules.weak_kinds else ("redraw", "broken")
+    m = metrics(card, check)
+    labels = m["edge_labels"]
+    same_labels = len(labels) >= 3 and len(set(labels)) == 1
+    gain = _gain(m)
+    if gain == "type":
+        return "keep", "sequence/state"
+    if m["n_edges"] <= rules.max_restating_edges:
+        return "delete", "le2_edges"
+    if m["shape"] == "chain" and m["n_nodes"] <= rules.max_short_chain_nodes:
+        return "delete", "short_chain"
+    if card["kind"] in rules.weak_kinds and not gain:
+        return "delete", "fact/contrast_no_gain"
+    if same_labels and not gain:
+        return "delete", "star_same_label"
+    if gain and (m["grounding"] or 0) >= rules.min_grounding:
+        return "keep", gain
+    return "review", "gain_low_grounding" if gain else "no_gain"
+
+
+def read_jsonl(path: Path) -> Iterator[dict[str, Any]]:
+    with Path(path).open(encoding="utf-8") as f:
+        for line in f:
+            if line.strip():
+                yield json.loads(line)
+
+
+@dataclass
+class TierReport:
+    counts: Counter = field(default_factory=Counter)
+    why: dict[str, Counter] = field(default_factory=lambda: defaultdict(Counter))
+    cards: dict[str, dict[str, Any]] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"counts": dict(self.counts), "why": {t: dict(c) for t, c in self.why.items()},
+                "cards": self.cards}
+
+
+def tier(cards: Iterable[dict[str, Any]], checks: Iterable[dict[str, Any]],
+         rules: TierRules = TierRules()) -> TierReport:
+    """Tier every card that has a diagram; checks are mermaid_check results keyed '<ref>#<j>'."""
+    by_id = {c["id"]: c for c in checks}
+    report = TierReport()
+    for card in cards:
+        if not card["blocks"]:
+            continue
+        check = by_id.get(f"{card['ref']}#0")
+        if check is None:
+            raise KeyError(f"no mermaid_check result for {card['ref']}#0")
+        t, why = tier_one(card, check, rules)
+        report.counts[t] += 1
+        report.why[t][why] += 1
+        entry = {"tier": t, "why": why, "kind": card["kind"], "domain": card["domain"],
+                 "n_props": len(card["propositions"]), "sha256": card["sha256"], "ok": bool(check.get("ok"))}
+        if check.get("ok"):
+            entry.update({k: check.get(k) for k in ("type", "direction", "width", "height")})
+        report.cards[card["ref"]] = entry
+    return report
