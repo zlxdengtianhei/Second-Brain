@@ -7,6 +7,8 @@ import { ReviewService } from "./service";
 import { mergeSettings, reviewDir, type ReviewSettings } from "./settings";
 import { type LoadedCard, ReviewModal } from "./ui/review-modal";
 import { buildIcs, reviewUri } from "./ics";
+import { planSrImport } from "./sr-import";
+import { ConfirmModal } from "./ui/confirm";
 import { ExplainView, VIEW_EXPLAIN } from "./ui/explain-view";
 import { Reminder } from "./ui/reminder";
 import { ReviewSettingTab } from "./ui/settings-tab";
@@ -56,6 +58,7 @@ export default class SecondBrainReviewPlugin extends Plugin {
 		this.addCommand({ id: "start-qa", name: t("cmd.qa"), callback: () => void this.startSession("qa") });
 		this.addCommand({ id: "explain-card", name: t("cmd.explain"), callback: () => void this.explainActive() });
 		this.addCommand({ id: "write-ics", name: t("cmd.ics"), callback: () => void this.writeIcs() });
+		this.addCommand({ id: "import-sr", name: t("cmd.import"), callback: () => void this.importSr() });
 		this.addSettingTab(new ReviewSettingTab(this.app, this));
 
 		this.app.workspace.onLayoutReady(() => void this.start());
@@ -183,6 +186,29 @@ export default class SecondBrainReviewPlugin extends Plugin {
 
 	explainTemplate(): Promise<Template> {
 		return this.template(this.settings.explainTemplate, DEFAULT_EXPLAIN_TEMPLATE);
+	}
+
+	/** Turn Spaced Repetition schedules in cards into import events (cards are not modified). */
+	async importSr(): Promise<void> {
+		if (!this.service.loaded) await this.service.reload();
+		const scanning = new Notice(t("import.scan"), 0);
+		const plan = await planSrImport(this.index.all(), {
+			frontmatter: (c) => {
+				const file = this.app.vault.getAbstractFileByPath(c.path);
+				return file instanceof TFile ? (this.app.metadataCache.getFileCache(file)?.frontmatter as Record<string, unknown> | undefined) : undefined;
+			},
+			read: async (c) => {
+				const file = this.app.vault.getAbstractFileByPath(c.path);
+				return file instanceof TFile ? this.app.vault.cachedRead(file) : "";
+			},
+			hasEvents: (c) => this.service.state(c.id) !== undefined,
+		});
+		scanning.hide();
+		if (!plan.found.length) return void new Notice(t("import.none"));
+		new ConfirmModal(this.app, t("import.confirm", { n: plan.found.length, skipped: plan.skipped }), t("import.go"), async () => {
+			const n = await this.service.recordBatch(plan.found.map((f) => ({ card: f.card.id, mode: "import", importSeed: f.seed })));
+			new Notice(t("import.done", { n }));
+		}).open();
 	}
 
 	/** Write the daily reminder calendar file into the vault. */

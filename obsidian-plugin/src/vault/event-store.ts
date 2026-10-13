@@ -80,15 +80,20 @@ export class EventStore {
 
 	/** Append one validated event line to this device's log. Calls are serialized. */
 	append(event: Record<string, unknown>): Promise<string> {
-		const run = this.queue.then(() => this.appendNow(event));
+		return this.appendMany([event]);
+	}
+
+	/** Append several validated events with one write. */
+	appendMany(events: Record<string, unknown>[]): Promise<string> {
+		const run = this.queue.then(() => this.appendNow(events));
 		this.queue = run.catch(() => undefined);
 		return run;
 	}
 
-	private async appendNow(event: Record<string, unknown>): Promise<string> {
-		if (event.device !== this.device) throw new Error("event device does not match this store");
+	private async appendNow(events: Record<string, unknown>[]): Promise<string> {
+		if (events.some((e) => e.device !== this.device)) throw new Error("event device does not match this store");
 		const path = this.ownPath();
-		const line = serializeEvent(event);
+		const line = events.map(serializeEvent).join("");
 		const dir = this.directory;
 		if (!(await this.adapter.exists(path))) {
 			if (!(await this.adapter.exists(dir))) await this.adapter.mkdir(dir);

@@ -127,6 +127,22 @@ export class ReviewService {
 			.slice(0, limit);
 	}
 
+	/** Write many events at once (imports), then replay everything. */
+	async recordBatch(inputs: (Omit<NewEvent, "device" | "now"> & { now?: Stamp })[]): Promise<number> {
+		if (!inputs.length) return 0;
+		const objs = inputs.map((input) => makeEvent({ ...input, device: this.store.device, now: input.now ?? this.now() }));
+		const path = await this.store.appendMany(objs);
+		const source = path.slice(path.lastIndexOf("/") + 1);
+		for (const obj of objs) this.events.push(parseEvent(obj, source, Number.MAX_SAFE_INTEGER));
+		const issues = this.result.issues;
+		this.result = replay(this.events);
+		this.result.issues = issues;
+		const ordered = orderEvents(this.events);
+		this.lastKey = ordered[ordered.length - 1] ?? null;
+		this.notify();
+		return objs.length;
+	}
+
 	/** Write one review (or import) for this device and update state. */
 	async record(input: Omit<NewEvent, "device" | "now"> & { now?: Stamp }): Promise<CardState | undefined> {
 		const obj = makeEvent({ ...input, device: this.store.device, now: input.now ?? this.now() });

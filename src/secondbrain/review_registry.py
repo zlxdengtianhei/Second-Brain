@@ -835,10 +835,21 @@ def log_path(review_dir: Path, device: str, fmt: str = "jsonl") -> Path:
 
 def append_event(review_dir: Path, event: Mapping[str, Any], *, fmt: str = "jsonl") -> Path:
     """Validate and append one event line to this device's log (docs section 1.3)."""
-    parse_event(event)
-    path = log_path(review_dir, str(event["device"]), fmt)
+    return append_events(review_dir, [event], fmt=fmt)
+
+
+def append_events(review_dir: Path, events: Sequence[Mapping[str, Any]], *, fmt: str = "jsonl") -> Path:
+    """Validate all events, then append them to one device's log with a single write."""
+    if not events:
+        raise ValueError("no events to append")
+    for event in events:
+        parse_event(event)
+    devices = {str(e["device"]) for e in events}
+    if len(devices) != 1:
+        raise ValueError("all events must come from one device")
+    path = log_path(review_dir, devices.pop(), fmt)
     review_dir.mkdir(parents=True, exist_ok=True)
-    line = json.dumps(event, ensure_ascii=False, separators=(",", ":")) + "\n"
+    line = "".join(json.dumps(e, ensure_ascii=False, separators=(",", ":")) + "\n" for e in events)
     fd = os.open(path, os.O_RDWR | os.O_APPEND | os.O_CREAT, 0o644)
     try:
         size = os.fstat(fd).st_size
@@ -903,6 +914,32 @@ def sr_schedule(text: str, frontmatter: Mapping[str, Any] | None = None) -> dict
         return {"from": "sr-sm2", "due": min(r[0] for r in sm2),
                 "interval": max(1, min(r[1] for r in sm2)), "ease": min(r[2] for r in sm2)}
     return None
+
+
+def plan_sr_import(cards: Iterable[tuple[CardMeta, str, Mapping[str, Any] | None]],
+                   result: ReplayResult) -> tuple[list[tuple[CardMeta, dict[str, Any]]], int]:
+    """Cards with Spaced Repetition data and no events yet, plus the count skipped for having events."""
+    found: list[tuple[CardMeta, dict[str, Any]]] = []
+    skipped = 0
+    for meta, text, frontmatter in cards:
+        seed = sr_schedule(text, frontmatter)
+        if seed is None:
+            continue
+        if meta.id in result.states:
+            skipped += 1
+        else:
+            found.append((meta, seed))
+    return found, skipped
+
+
+def import_sr(review_dir: Path, cards: Iterable[tuple[CardMeta, str, Mapping[str, Any] | None]], *,
+              device: str, now: datetime, fmt: str = "jsonl", dry_run: bool = False) -> dict[str, Any]:
+    """One-time import of Spaced Repetition schedules as ``import`` events. Card files are not changed."""
+    found, skipped = plan_sr_import(cards, load(review_dir))
+    events = [make_import_event(m.id, seed, device=device, now=now) for m, seed in found]
+    path = append_events(review_dir, events, fmt=fmt) if events and not dry_run else None
+    return {"imported": 0 if dry_run else len(events), "found": len(events), "skipped": skipped,
+            "written": str(path) if path else None}
 
 
 def make_import_event(card: str, seed: Mapping[str, Any], *, device: str, now: datetime) -> dict[str, Any]:

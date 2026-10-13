@@ -132,6 +132,10 @@ export class ReviewSettingTab extends PluginSettingTab {
 						await p.saveData(s);
 					}),
 			);
+		new Setting(containerEl)
+			.setName(t("settings.import"))
+			.setDesc(t("settings.import.desc"))
+			.addButton((b) => b.setButtonText(t("import.go")).onClick(() => void p.importSr()));
 		new Setting(containerEl).setDesc(t("settings.device", { device: p.service.store.device }));
 	}
 

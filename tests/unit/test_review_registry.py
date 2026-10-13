@@ -135,6 +135,32 @@ def test_import_event_round_trip(tmp_path: Path) -> None:
     assert rr.format_utc(st.due) == "2026-03-20T03:00:00.000Z"
 
 
+def test_import_sr_skips_cards_with_events_and_writes_once(tmp_path: Path) -> None:
+    now = datetime(2026, 3, 15, 10, tzinfo=timezone(timedelta(hours=1)))
+    rr.append_event(tmp_path, rr.make_event("ex_d", device="cli-1", now=now - timedelta(days=1), rating=3))
+    cards = [
+        (rr.CardMeta(id="ex_a"), "Q::A <!--SR:!2026-03-20,5,250-->", None),
+        (rr.CardMeta(id="ex_b"), "no schedule", None),
+        (rr.CardMeta(id="ex_c"), "Q::A", {"sr-due": "2026-03-22", "sr-interval": 7, "sr-ease": 270}),
+        (rr.CardMeta(id="ex_d"), "Q::A <!--SR:!2026-03-21,2,230-->", None),
+    ]
+    dry = rr.import_sr(tmp_path, cards, device="cli-1", now=now, dry_run=True)
+    assert dry == {"imported": 0, "found": 2, "skipped": 1, "written": None}
+    out = rr.import_sr(tmp_path, cards, device="cli-1", now=now)
+    assert out["imported"] == 2
+    result = rr.load(tmp_path)
+    assert result.states["ex_c"].stability == 7.0 and result.states["ex_c"].reps == 0
+    again = rr.import_sr(tmp_path, cards, device="cli-1", now=now)
+    assert again["found"] == 0 and again["skipped"] == 3
+
+
+def test_append_events_rejects_mixed_devices(tmp_path: Path) -> None:
+    a = rr.make_event("ex_a", device="cli-1", now=NOW, rating=3)
+    b = rr.make_event("ex_b", device="cli-2", now=NOW, rating=3)
+    with pytest.raises(ValueError):
+        rr.append_events(tmp_path, [a, b])
+
+
 # --------------------------------------------------------------------------
 # Status and queue
 # --------------------------------------------------------------------------
