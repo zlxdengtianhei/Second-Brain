@@ -12,7 +12,7 @@ sb inbox show "<name>" --head 60                # the first lines of one file
 sb inbox skip "<name>" --reason "a receipt"     # mark a file as not knowledge
 ```
 
-A file's status is `new`, `in_progress`, `done`, `partial` (some cards still pending; see `sb ingest --retry`), `skipped` or `failed`. The status is found by content hash, so a renamed copy of an ingested file is still `done`. A `partial` source stays in the list after its file has left the inbox, with `in_inbox: false` and `path` set to the copy in `40_Sources/`. The [Agent Skill](../skills/secondbrain/references/triage.md) lists what should and should not become cards.
+A file's status is `new`, `in_progress`, `done`, `partial` (some cards still pending; see `sb ingest --retry`), `skipped` or `failed`. The status is found by content hash, so a renamed copy of an ingested file is still `done`. A source stays in the list after its file has left the inbox when it is `partial`, or when it is `done` and came from the inbox; it then has `in_inbox: false` and `path` set to the copy in `40_Sources/`. The [Agent Skill](../skills/secondbrain/references/triage.md) lists what should and should not become cards.
 
 ## Starting a source
 
@@ -32,7 +32,7 @@ sb ingest --retry <job>             # try the pending cards of a partial job aga
 |---|---|
 | Freeze | The source bytes, the extracted text, the chunks, the catalog, the full taxonomy and the nearest cards are stored as the job's input, with a hash. Only UTF-8 text is read unless a converter is configured. A source over `max_source_bytes` is refused. |
 | Chunk | The text is cut into exact consecutive slices of about `chunk_chars` characters, at headings and blank lines first, then at sentence ends. |
-| Route | Each paragraph of a chunk is searched against the existing cards. The domains of the best matches become the chunk's candidate domains, and the best matches become its neighbours. |
+| Route | Each paragraph of a chunk is searched against the existing cards. The domains of the best matches become the chunk's candidate domains. The best matches for the whole chunk, then the best three of each paragraph (40 at most), become its neighbours. |
 | Produce | The producer gets the chunk, all domains with their guiding questions, the full taxonomy of the candidate domains (with card counts per topic), the neighbours and the cards already proposed for other chunks of the same source. It returns cards, proposed new topics and a coverage table. |
 | Check | Code validates the answer when it is submitted (list below). Errors go back to the producer; an invalid answer uses the chunk's repair round. |
 | Review | The reviewer gets the chunk, the cards without the producer's reasons, the three closest existing cards for each new card in full, and the taxonomy. It decides `accept`, `revise` or `duplicate` for each card, `accept` or `revise` for each new topic, and whether the coverage table is right, each with a reason. |
@@ -48,6 +48,8 @@ sb ingest --retry <job>             # try the pending cards of a partial job aga
 - a domain, pillar or topic that is not in the taxonomy, unless it is a valid new-topic proposal under an existing pillar;
 - a new topic that repeats or merely renames an existing one, more new topics than allowed per source, or a proposed topic no card uses;
 - a relation type that is not in the catalog, or a target that is neither an existing card nor a card of this source;
+- two relations that point opposite ways: a type and its inverse from one card to the same target, or two cards that each claim the same type of the other;
+- a card with a `contrasts_with` relation that does not state the contrast in `confusions`;
 - a duplicate slug, a title that cannot be a file name, or a title that an existing card already has;
 - fewer than two or more than four question-and-answer pairs, or `::` inside them;
 - a card id written into the text (cards refer to each other by `[[Title]]`);
@@ -58,7 +60,7 @@ sb ingest --retry <job>             # try the pending cards of a partial job aga
 In one transaction:
 
 - each accepted card, as `10_Knowledge/<domain>/<title>.md`, rendered by code from the reviewed fields;
-- inverse relations on existing cards (front matter only);
+- inverse relations on existing cards, in the front matter and in the related section (the rest of the card stays as it is);
 - accepted new topics in the taxonomy file;
 - a copy of the source in `40_Sources/<first 16 hex of sha256>/<file name>`;
 - `_data/manifest.jsonl`, the inbox registry and `_data/notes_registry.json`;
