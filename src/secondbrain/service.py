@@ -119,6 +119,37 @@ def initialize(root: Path, catalog: dict, job_id: str = 'initialize-catalog'):
     return apply_changes(root, job_id, [Change(catalog_rel, None, raw)])
 
 
+def describe_moc_changes(root: Path, changes) -> dict:
+    """What a MOC refresh would change, by kind and by MOC.
+
+    Kinds: ``new`` (page does not exist yet), ``breadcrumbs_field_only`` (the
+    page differs only by the ``BC-list-note-field`` frontmatter that current
+    pages carry), ``removed`` and ``content``.
+    """
+    from . import layout as layouts
+    from .moc import BC_FRONTMATTER
+    mocs = layouts.of(root).mocs + '/'
+    kinds: Counter = Counter()
+    by_moc: dict = {}
+    for change in changes:
+        before = read_bytes(root, change.relative_path)
+        if before is None:
+            kind = 'new'
+        elif change.after is None:
+            kind = 'removed'
+        elif change.after == BC_FRONTMATTER.encode('utf-8') + before:
+            kind = 'breadcrumbs_field_only'
+        else:
+            kind = 'content'
+        kinds[kind] += 1
+        rel = change.relative_path
+        name = rel[len(mocs):].split('/', 1)[0] if rel.startswith(mocs) else rel
+        moc = name[:-3] if name.endswith('.md') else name
+        by_moc.setdefault(moc, Counter())[kind] += 1
+    return {'kinds': dict(sorted(kinds.items())),
+            'by_moc': {moc: dict(sorted(c.items())) for moc, c in sorted(by_moc.items())}}
+
+
 def refresh(root: Path, *, job_id: str, domains: list[str] | None = None, apply: bool = False):
     from datetime import date
     from .moc import build_mocs
@@ -129,8 +160,8 @@ def refresh(root: Path, *, job_id: str, domains: list[str] | None = None, apply:
     if not apply:
         p = build_mocs(s, affected_domains=set(domains) if domains else None)
         changes = classification.projection_changes(root, p)
-        return {'status': 'planned', 'changed_files': len(changes), 'metrics': p.metrics,
-                'issues': p.issues, 'paths': [c.relative_path for c in changes]}
+        return {'status': 'planned', 'changed_files': len(changes), 'drift': describe_moc_changes(root, changes),
+                'metrics': p.metrics, 'issues': p.issues, 'paths': [c.relative_path for c in changes]}
     packet = {'kind': jobs.PROJECTION_KIND, 'projection': 'refresh', 'date': date.today().isoformat(),
               'options': {'domains': list(domains or [])}, 'snapshot_fingerprint': s.fingerprint}
     state = jobs.create(root, job_id, jobs.PROJECTION_KIND, packet)

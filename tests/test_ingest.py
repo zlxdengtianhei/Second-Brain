@@ -189,6 +189,38 @@ def test_ingest_acceptance_list(tmp_path, lay, language):
     assert tree(root) == before
 
 
+def _strip_breadcrumbs_field(root, lay):
+    """Make MOC pages look like ones written before the BC-list-note-field frontmatter existed."""
+    from secondbrain.moc import BC_FRONTMATTER
+    for path in (root / lay.mocs).rglob('*.md'):
+        text = path.read_text(encoding='utf-8')
+        if text.startswith(BC_FRONTMATTER):
+            path.write_text(text[len(BC_FRONTMATTER):], encoding='utf-8')
+
+
+def test_ingest_without_a_prior_refresh_changes_only_the_affected_maps(tmp_path):
+    lay = layouts.DEFAULT
+    root = build_ingest_vault(tmp_path / 'vault')
+    refresh(root, job_id='old-renderer', apply=True)
+    _strip_breadcrumbs_field(root, lay)  # pages as an older renderer wrote them
+    drift = refresh(root, job_id='preview-before')
+    other = moc_files(root, lay, OTHER_MOC)
+    assert drift['changed_files'] == len(other) + len(moc_files(root, lay, MOC))
+    assert drift['drift']['kinds'] == {'breadcrumbs_field_only': drift['changed_files']}
+    assert drift['drift']['by_moc'][OTHER_MOC] == {'breadcrumbs_field_only': len(other)}
+    before = tree(root)
+    _, result, _ = run_default(root, lay)
+    assert result['status'] == 'applied'
+    after = tree(root)
+    changed = {p for p in set(before) | set(after) if before.get(p) != after.get(p)}
+    maps = {p for p in changed if p.startswith(lay.mocs + '/') and not lay.is_taxonomy_file(p)}
+    assert maps and all(p == f'{lay.mocs}/{MOC}.md' or p.startswith(f'{lay.mocs}/{MOC}/') for p in maps)
+    assert moc_files(root, lay, OTHER_MOC) == other  # untouched, still in the old format
+    left = refresh(root, job_id='preview-after')
+    assert left['drift']['by_moc'] == {OTHER_MOC: {'breadcrumbs_field_only': len(other)}}
+    assert refresh(root, job_id='preview-domain', domains=[DOMAIN])['changed_files'] == 0
+
+
 def test_cli_ingest_reports_unchanged_and_rolls_back(tmp_path):
     lay = layouts.DEFAULT
     root = build_ingest_vault(tmp_path / 'vault')
