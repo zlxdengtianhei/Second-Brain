@@ -93,4 +93,4 @@ sb refresh --apply # writes the MOC pages under 20_MOCs/
 
 Put notes, articles or transcripts into `00_Inbox/`, then follow the quick start in the [README](../README.md): `sb inbox list`, then `sb ingest <file>` with the host or the API executor.
 
-To review in Obsidian, install the [SecondBrain Review plugin](../obsidian-plugin/README.md). If your cards use English headings, set its section names to `Review cards`, `Essence` and `Propositions`, or copy the settings file of the example vault (`examples/vault/.obsidian/plugins/secondbrain-review/data.json`) into the same place in your vault before you enable the plugin.
+To review in Obsidian, install the [SecondBrain Review plugin](../obsidian-plugin/README.md). It reads the language that `sb init` recorded and uses the matching interface and card headings (`Review cards`, `Essence` and `Propositions` in an English vault). Set the section names in its settings only if your cards use other headings.

@@ -217,7 +217,7 @@ This is version 0.1.0, built in October 2026 from the tool the author uses on a 
 - In host mode the model name is whatever the sub-agent reports. In Claude Code every sub-agent is a Claude model, so every review there is same-family.
 - The API executors are tested with recorded responses, not against live endpoints.
 - The diagram thresholds are defaults chosen from one vault and a 50-card pilot, not calibrated.
-- The plugin's interface is in Chinese for now; its section names are settings, and the example vault sets them to English. The plugin has unit tests; the manual checklist for Obsidian is in its README.
+- The plugin's interface is in English or Chinese and follows the vault's language by default; the card headings it reads do too, unless set in its settings. The plugin has unit tests; the manual checklist for Obsidian is in its README.
 
 ## License
 
