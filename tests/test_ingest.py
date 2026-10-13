@@ -258,7 +258,9 @@ def test_rejected_card_stays_pending_and_the_rest_is_written(tmp_path):
     rows = [json.loads(line) for line in (root / '_data/secondbrain/inbox_registry.jsonl').read_text().splitlines()]
     assert rows[-1]['status'] == 'partial' and rows[-1]['pending'] == 1
     assert inbox.scan(root) == []  # moved to sources even though partial
-    assert ingest.prepare(root, root / layouts.DEFAULT.source_path(rows[-1]['sha256'], SOURCE_NAME))['status'] == 'partial'
+    again = ingest.prepare(root, root / layouts.DEFAULT.source_path(rows[-1]['sha256'], SOURCE_NAME))
+    assert (again['status'], again['result'], again['pending']) == ('unchanged', 'partial', 1)
+    assert again['hint'] == f'sb ingest --retry {prepared["job_id"]}'
 
 
 def test_relation_to_a_pending_card_is_not_written(tmp_path):

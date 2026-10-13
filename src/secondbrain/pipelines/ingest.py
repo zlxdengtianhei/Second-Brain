@@ -111,16 +111,23 @@ def prepare(root: Path, source: Path, *, settings: config.Settings | None = None
     sha = digest(raw)
     job_id = inbox.job_id_for(sha)
     done = inbox.done_index(root).get(sha)
-    if done and done['status'] in {'applied', 'done'}:
-        return {'status': 'unchanged', 'job_id': done.get('job_id') or job_id, 'source_sha256': sha,
-                'via': done['via']}
+    if done and done['status'] in {'applied', 'done', 'partial'}:
+        out = {'status': 'unchanged', 'result': done['status'], 'job_id': done.get('job_id') or job_id,
+               'source_sha256': sha, 'via': done['via']}
+        if done['status'] == 'partial':
+            out.update(pending=done.get('pending'), hint=f'sb ingest --retry {out["job_id"]}')
+        return out
     if done and done['status'] == 'skipped':
         return {'status': 'skipped', 'source_sha256': sha, 'reason': done.get('reason')}
     try:
         state = jobs.load(root, job_id)
-        return {**state, 'resumed': True}
     except ValueError:
-        pass
+        state = None
+    if state is not None and state['status'] == 'rolled_back':
+        # the vault holds nothing of the old job: keep its records aside and start again
+        jobs.archive(root, job_id, reason='rolled back; the source was ingested again')
+    elif state is not None:
+        return {**state, 'resumed': True}
     source_path = Path(source).absolute()
     in_inbox = source_path.parent.resolve() == (root / lay.inbox).resolve()
     inbox_path = f'{lay.inbox}/{source_path.name}' if in_inbox else None

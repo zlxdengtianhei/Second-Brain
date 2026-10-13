@@ -434,6 +434,34 @@ def finish_transaction(root: Path, job_id: str, result: dict, changes: list[Chan
     return resume_transaction(root, job_id)
 
 
+def archive(root: Path, job_id: str, *, reason: str) -> dict:
+    """Move a job that left nothing in the vault aside, so its id can be used again.
+
+    Allowed when the job never wrote (no transaction) or its transaction was
+    rolled back. The job directory is renamed to ``<id>.reset-<UTC time>``
+    with its runs, packets and journal, so the history stays readable.
+    """
+    if not isinstance(reason, str) or not reason.strip():
+        raise ValueError('reset needs a reason')
+    with vault_lock(root):
+        state = load(root, job_id)
+        raw = read_state(root, location(job_id, 'transaction.json'))
+        journal = json.loads(raw) if raw is not None else None
+        if journal is not None and journal.get('status') != 'rolled_back':
+            raise Conflict(f'Job {job_id} has written to the vault ({journal.get("status")}); '
+                           'roll it back first: sb recover <job> --rollback')
+        if state.get('commit_intent') and journal is None:
+            raise Conflict(f'Job {job_id} has a frozen write plan; resume or roll it back first')
+        stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
+        target = job_name(f'{job_id}.reset-{stamp}')
+        state.update(job_id=target, status='archived', updated_at=now(),
+                     archived={'original_id': job_id, 'reason': reason.strip(), 'at': now(), 'was': state['status']})
+        write_json(root, location(job_id), state)
+        with _state_dir(root, 'jobs', create=False) as fd:
+            os.rename(job_id, target, src_dir_fd=fd, dst_dir_fd=fd)
+        return {'job_id': job_id, 'archived_as': target, 'was': state['archived']['was']}
+
+
 def release_intent(root: Path, job_id: str, *, reason: str) -> dict:
     """Drop a frozen write plan that the store refused before writing anything.
 

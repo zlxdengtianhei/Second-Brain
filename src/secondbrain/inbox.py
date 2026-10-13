@@ -59,7 +59,8 @@ def done_index(root: Path) -> dict:
     for row in registry_rows(root):
         if isinstance(row.get('sha256'), str):
             done[row['sha256']] = {'status': row.get('status'), 'via': 'inbox_registry',
-                                   'job_id': row.get('job_id'), 'reason': row.get('reason')}
+                                   'job_id': row.get('job_id'), 'reason': row.get('reason'),
+                                   'pending': row.get('pending')}
     return done
 
 
@@ -103,6 +104,8 @@ def scan(root: Path) -> list[dict]:
             item.update(status='done', via='job', result=status)
         elif status == 'failed':
             item.update(status='failed', reason='ingest job failed; see sb job show')
+        elif status == 'rolled_back':
+            item.update(status='new', note='the previous ingest was rolled back; ingesting again starts a new job')
         elif status is not None:
             item.update(status='in_progress', job_status=status)
         items.append(item)

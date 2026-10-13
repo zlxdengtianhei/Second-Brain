@@ -133,6 +133,9 @@ def parser():
     jadvance = job_sub.add_parser('advance', help='Run every step that can run now')
     jadvance.add_argument('id'); jadvance.add_argument('--executor', choices=['api', 'host'])
     jadvance.add_argument('--proposal-only', action='store_true')
+    jreset = job_sub.add_parser('reset', help='Set aside a job that left nothing in the vault (never written or '
+                                              'rolled back) so its source can be prepared again')
+    jreset.add_argument('id'); jreset.add_argument('--reason', required=True)
     jabandon = job_sub.add_parser('abandon', help='Give up a run that will not be submitted')
     jabandon.add_argument('id'); jabandon.add_argument('--run-id', required=True)
     jabandon.add_argument('--reason', required=True)
@@ -171,7 +174,8 @@ def _ingest(args, root: Path) -> list:
         except ingest.IngestError as exc:
             results.append({'path': str(path), 'status': 'failed', 'error': str(exc)})
             continue
-        if args.prepare_only or prepared.get('status') in {'unchanged', 'skipped'} or 'job_id' not in prepared:
+        finished = prepared.get('status') in {'unchanged', 'skipped', 'applied', 'partial', 'failed', 'published'}
+        if args.prepare_only or finished or 'schema' not in prepared:
             results.append(prepared)
             continue
         executors = executors or make_executors(args, root)
@@ -191,6 +195,8 @@ def _job(args, root: Path):
         return service.submit(args.id, payload, role=args.role, run_id=args.run_id, model=args.model)
     if args.job_command == 'abandon':
         return jobs.abandon_run(root, args.id, args.run_id, reason=args.reason)
+    if args.job_command == 'reset':
+        return jobs.archive(root, args.id, reason=args.reason)
     if args.job_command == 'packet':
         return service.job_packet(args.id, args.role, args.chunk, vault_arg=str(root) if args.vault else None)
     producer, reviewer = make_executors(args, root)

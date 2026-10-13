@@ -39,7 +39,10 @@ class Service:
                 'review': review, 'jobs': jobs.list_jobs(self.root)}
 
     def job_show(self, job_id: str) -> dict:
-        return {**jobs.load(self.root, job_id), 'run_records': jobs.list_runs(self.root, job_id)}
+        state = jobs.load(self.root, job_id)
+        if state.get('status') == 'archived':  # run records keep the original job id
+            return state
+        return {**state, 'run_records': jobs.list_runs(self.root, job_id)}
 
     def job_packet(self, job_id: str, role: str, chunk: str | None = None, *, vault_arg: str | None = None) -> dict:
         """Create the next run for ``role`` and return its hand-off (packet file, run id, submit command)."""

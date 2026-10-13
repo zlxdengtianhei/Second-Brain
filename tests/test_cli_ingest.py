@@ -123,3 +123,70 @@ api_key_env = "SB_DOCTOR_KEY_MISSING"
     assert report['families'] == {'producer_family': 'openai', 'reviewer_family': 'anthropic'}
     assert report['layout']['knowledge'] == '10_Knowledge' and 'live' not in report
     assert 'sk-doctor-test' not in out
+
+
+def _fake_run(root, job_id):
+    from secondbrain.executors import FakeExecutor
+    from secondbrain.pipelines import ingest
+    from tests.ingest_helpers import scripted
+    produce, review, _ = scripted([first_candidate(), repair_candidate()], [first_review(), repair_review()],
+                                  {'marker-dimming': DIMMING_IR})
+    return ingest.advance(root, job_id, producer=FakeExecutor('gpt-test', responder=produce),
+                          reviewer=FakeExecutor('claude-test', responder=review))
+
+
+def test_a_rolled_back_source_can_be_ingested_again(tmp_path, capsys):
+    from tests.ingest_helpers import tree
+    root = build_ingest_vault(tmp_path / 'vault')
+    source = root / '00_Inbox' / SOURCE_NAME
+    before = tree(root)
+    code, prepared, _ = run(capsys, root, 'ingest', str(source), '--prepare-only')
+    job_id = prepared[0]['job_id']
+    assert _fake_run(root, job_id)['status'] == 'applied'
+    code, _, err = run(capsys, root, 'recover', job_id, '--rollback')
+    assert code == 0, err
+    assert tree(root) == before
+    code, items, _ = run(capsys, root, 'inbox', 'list')
+    assert items[0]['status'] == 'new' and 'rolled back' in items[0]['note']
+    code, again, _ = run(capsys, root, 'ingest', str(source), '--executor', 'host')
+    assert code == 0 and again[0]['job_id'] == job_id and again[0]['status'] == 'awaiting_submission'
+    code, listed, _ = run(capsys, root, 'job', 'list')
+    archived = [j for j in listed if j['job_id'].startswith(f'{job_id}.reset-')]
+    assert len(archived) == 1 and archived[0]['status'] == 'archived'
+    code, shown, _ = run(capsys, root, 'job', 'show', archived[0]['job_id'])
+    assert shown['archived']['was'] == 'rolled_back' and shown['archived']['original_id'] == job_id
+    code, _, _ = run(capsys, root, 'job', 'abandon', job_id, '--run-id', again[0]['handoffs'][0]['run_id'],
+                     '--reason', 'switching to the scripted executors')
+    assert _fake_run(root, job_id)['status'] == 'applied'
+
+
+def test_job_reset_refuses_written_jobs_and_frees_unwritten_ones(tmp_path, capsys):
+    root = build_ingest_vault(tmp_path / 'vault')
+    source = root / '00_Inbox' / SOURCE_NAME
+    code, prepared, _ = run(capsys, root, 'ingest', str(source), '--prepare-only')
+    job_id = prepared[0]['job_id']
+    code, reset, err = run(capsys, root, 'job', 'reset', job_id, '--reason', 'start over with another config')
+    assert code == 0, err
+    assert reset['was'] == 'prepared' and reset['archived_as'].startswith(f'{job_id}.reset-')
+    code, prepared, _ = run(capsys, root, 'ingest', str(source), '--prepare-only')
+    assert prepared[0]['status'] == 'prepared' and not prepared[0].get('resumed')
+    assert _fake_run(root, job_id)['status'] == 'applied'
+    code, _, err = run(capsys, root, 'job', 'reset', job_id, '--reason', 'oops')
+    assert code == 3 and 'roll it back first' in err
+
+
+def test_rerunning_a_partial_source_reports_unchanged_without_an_executor(tmp_path, capsys):
+    from secondbrain.executors import FakeExecutor
+    from secondbrain.pipelines import ingest
+    from tests.ingest_helpers import scripted
+    root = build_ingest_vault(tmp_path / 'vault')
+    produce, review, _ = scripted([first_candidate(), repair_candidate()], [first_review(), repair_review('revise')])
+    prepared = ingest.prepare(root, root / '00_Inbox' / SOURCE_NAME)
+    result = ingest.advance(root, prepared['job_id'], producer=FakeExecutor('gpt-test', responder=produce),
+                            reviewer=FakeExecutor('claude-test', responder=review))
+    assert result['status'] == 'partial'
+    copy = root / result['source_record']['path']
+    # API mode has no endpoints configured: building an executor would fail with exit 2
+    code, out, err = run(capsys, root, 'ingest', str(copy))
+    assert code == 0, err
+    assert out[0]['status'] == 'unchanged' and out[0]['result'] == 'partial' and out[0]['pending'] == 1
