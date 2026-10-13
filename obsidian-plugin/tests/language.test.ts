@@ -4,7 +4,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { LOCALES, locale, type MessageKey, setLocale, t } from "../src/i18n";
-import { extractReviewItems, sectionText } from "../src/registry";
+import { extractReviewItems, hasHeading, sectionText } from "../src/registry";
 import { cardSectionNames, DEFAULT_SETTINGS, icsFile, LANGUAGE_DEFAULTS, mergeSettings, sectionCandidates, sectionNames } from "../src/settings";
 import {
 	appLanguage,
@@ -191,6 +191,7 @@ describe("section headings and calendar file follow the vault's language", () =>
 		const enCard = "## Essence\nE.\n\n## Propositions\n- P1.\n\n## Review cards\nQ?::A.\n";
 		const both = "## Essence\nE.\n\n## 本质\nZ.\n";
 		const fenced = "```\n## 复习卡\n```\n";
+		const longer = "## Essence and intuition\nX.\n\n## 本质\nE.\n";
 		const unset = mergeSettings(undefined);
 		expect(sectionCandidates(unset, "en").review).toEqual(["Review cards", "复习卡"]);
 		expect(sectionCandidates(unset, "zh").essence).toEqual(["本质", "Essence"]);
@@ -199,6 +200,9 @@ describe("section headings and calendar file follow the vault's language", () =>
 		expect(cardSectionNames(both, sectionCandidates(unset, "zh")).essence).toBe("本质");
 		expect(cardSectionNames(both, sectionCandidates(unset, "en")).essence).toBe("Essence");
 		expect(cardSectionNames(fenced, sectionCandidates(unset, "en")).review).toBe("Review cards");
+		// A heading that only contains a candidate is a different heading.
+		expect(cardSectionNames(longer, sectionCandidates(unset, "en")).essence).toBe("本质");
+		expect([hasHeading(longer, "Essence"), hasHeading("## Essence ##\n", "Essence"), hasHeading("### Essence\n", "Essence")]).toEqual([false, true, true]);
 		expect(cardSectionNames("no headings", sectionCandidates(unset, "zh"))).toEqual(sectionNames(unset, "zh"));
 		const typed = mergeSettings({ reviewSection: "Flashcards" });
 		expect(sectionCandidates(typed, "en").review).toEqual(["Flashcards"]);

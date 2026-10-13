@@ -50,7 +50,10 @@ To start a session at once: `obsidian://secondbrain-review?mode=flip` or
 Install the same version of the plugin on every device that syncs the vault. The plugin
 settings (`data.json`) sync with the vault. This version saves an empty section heading to
 mean "the heading of the vault's language"; an earlier build reads the empty heading as it is
-and finds no questions.
+and finds no questions. To go back to an earlier build, first delete the keys `reviewSection`,
+`essenceSection`, `propositionsSection` and `icsPath` whose value is empty (`""`) from
+`<vault>/.obsidian/plugins/secondbrain-review/data.json` on one device, and let the change
+sync. The earlier build then uses its own defaults, which are the Chinese headings.
 
 ## Language
 

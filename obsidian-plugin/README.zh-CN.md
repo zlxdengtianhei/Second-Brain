@@ -45,6 +45,8 @@ agent 用 `sb review log` 记下的复习也算数。
 
 同步同一个库的每台设备都要装同一版本的插件。插件设置（`data.json`）随库同步。这一版把留空的小节标题存成空值，
 表示"用库语言的标题"；更早的构建会把空值当成标题去找，结果一个问题也找不到。
+要换回更早的构建，先在一台设备上从 `<vault>/.obsidian/plugins/secondbrain-review/data.json` 删掉值为空（`""`）的
+`reviewSection`、`essenceSection`、`propositionsSection`、`icsPath` 这几个键，等这个改动同步到其他设备。更早的构建随后用自己的默认值，即中文标题。
 
 ## 语言
 
