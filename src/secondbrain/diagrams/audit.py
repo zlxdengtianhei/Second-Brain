@@ -103,6 +103,17 @@ def heading_counts(paths: Iterable[Path]) -> Counter:
     return counts
 
 
+def knowledge_dir(flag: str | None = None) -> tuple[str, str]:
+    """The knowledge folder and where it came from: the --knowledge-dir flag,
+    else ``[layout] knowledge`` of a loaded config file, else the default."""
+    if flag:
+        return flag, "--knowledge-dir"
+    settings = config.current()
+    if settings.source is not None:
+        return settings.layout.knowledge, f"[layout] knowledge in {settings.source}"
+    return DEFAULT_FORMAT.knowledge_dir, "default"
+
+
 def card_format(vault: Path, language: str | None = None, refs: Iterable[str] | None = None,
                 knowledge_dir: str = DEFAULT_FORMAT.knowledge_dir) -> tuple[CardFormat, str, str]:
     """The card format for a vault, its language, and where the language came from.

@@ -3,7 +3,7 @@
     python -m secondbrain.diagrams schema
     python -m secondbrain.diagrams packets CARDS.jsonl OUT_DIR [--batch 10] [--skip-domain D ...]
     python -m secondbrain.diagrams apply CARDS.jsonl ANSWER.json ... --out OUT_DIR [--checker CHECK.mjs]
-    python -m secondbrain.diagrams audit-extract VAULT OUT_DIR [--language en|zh]
+    python -m secondbrain.diagrams audit-extract VAULT OUT_DIR [--language en|zh] [--knowledge-dir DIR]
     python -m secondbrain.diagrams audit-tier OUT_DIR [--delete-domain D ...]
     python -m secondbrain.diagrams prune VAULT OUT_DIR [--language en|zh] [--write]
     python -m secondbrain.diagrams pool OUT_DIR [--refs REFS.txt] [--out POOL.jsonl]
@@ -21,6 +21,8 @@ The commands that read or write cards in a vault (audit-extract, prune,
 writeback) find the section headings by card language: --language, else
 [cards] language of the config file, else the headings the cards use. pool
 reads cards.jsonl, so it follows the language audit-extract used.
+audit-extract reads the cards under --knowledge-dir, else [layout] knowledge
+of the config file, else 10_Knowledge.
 """
 from __future__ import annotations
 
@@ -175,13 +177,16 @@ def cmd_audit_apply(a) -> dict:
 
 
 def _card_format(a, refs=None) -> audit.CardFormat:
-    """Card headings for a.vault by language; the choice goes to stderr."""
+    """Card headings for a.vault by language, and the knowledge folder; the choices go to stderr."""
     try:
-        fmt, language, source = audit.card_format(a.vault, a.language, refs,
-                                                  getattr(a, "knowledge_dir", audit.DEFAULT_FORMAT.knowledge_dir))
+        folder, folder_source = audit.knowledge_dir(getattr(a, "knowledge_dir", None))
+        fmt, language, source = audit.card_format(a.vault, a.language, refs, folder)
     except ValueError as e:
         raise SystemExit(str(e))
-    print(f"card language {language} (from {source})", file=sys.stderr)
+    note = f"card language {language} (from {source})"
+    if refs is None:  # the command reads the whole knowledge folder
+        note += f"; knowledge folder {folder} (from {folder_source})"
+    print(note, file=sys.stderr)
     return fmt
 
 
@@ -253,7 +258,8 @@ def main(argv: list[str] | None = None) -> int:
     s = sub.add_parser("audit-extract", help="vault -> cards.jsonl, blocks.jsonl (read-only)")
     s.add_argument("vault", type=Path)
     s.add_argument("out", type=Path)
-    s.add_argument("--knowledge-dir", default=audit.DEFAULT_FORMAT.knowledge_dir)
+    s.add_argument("--knowledge-dir", help="card folder in the vault (default: [layout] knowledge of the "
+                                           f"config file, else {audit.DEFAULT_FORMAT.knowledge_dir})")
     s.add_argument("--language", **lang)
     s = sub.add_parser("audit-tier", help="cards.jsonl + checks.jsonl -> tiers.json")
     s.add_argument("dir", type=Path)

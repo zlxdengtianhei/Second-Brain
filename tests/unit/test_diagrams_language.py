@@ -154,3 +154,31 @@ def test_zh_output_does_not_depend_on_how_the_language_was_chosen(tmp_path, monk
     assert main(["audit-extract", str(ZH), str(tmp_path / "config")]) == 0
     runs["config"] = [(tmp_path / "config" / f).read_bytes() for f in ("cards.jsonl", "blocks.jsonl")]
     assert runs["headings"] == runs["flag"] == runs["library"] == runs["config"]
+
+
+def test_knowledge_folder_from_flag_then_layout_then_default(tmp_path, monkeypatch, capsys):
+    v = tmp_path / "v"
+    shutil.copytree(EN / "10_Knowledge", v / "Notes")
+    shutil.copytree(ZH / "10_Knowledge", v / "10_Knowledge")
+
+    def extract(name: str, *extra: str) -> list[dict]:
+        assert main(["audit-extract", str(v), str(tmp_path / name), *extra]) == 0
+        return list(audit.read_jsonl(tmp_path / name / "cards.jsonl"))
+
+    assert audit.knowledge_dir() == ("10_Knowledge", "default")
+    rows = extract("none")
+    assert "knowledge folder 10_Knowledge (from default)" in capsys.readouterr().err
+    assert len(rows) == 3 and all(r["ref"].startswith("10_Knowledge/") and r["essence"] for r in rows)
+
+    cfg = tmp_path / "sb.toml"
+    cfg.write_text('[layout]\nknowledge = "Notes"\n\n[cards]\nlanguage = "en"\n', encoding="utf-8")
+    monkeypatch.setenv("SECONDBRAIN_CONFIG", str(cfg))
+    config.activate(None)
+    assert audit.knowledge_dir() == ("Notes", f"[layout] knowledge in {cfg}")
+    rows = extract("config")
+    assert f"knowledge folder Notes (from [layout] knowledge in {cfg})" in capsys.readouterr().err
+    assert len(rows) == 3 and all(r["ref"].startswith("Notes/") and r["essence"] for r in rows)
+
+    rows = extract("flags", "--knowledge-dir", "10_Knowledge", "--language", "zh")
+    assert "knowledge folder 10_Knowledge (from --knowledge-dir)" in capsys.readouterr().err
+    assert [r["essence"] for r in rows] == [r["essence"] for r in audit.read_jsonl(tmp_path / "none" / "cards.jsonl")]
