@@ -16,8 +16,10 @@ from pathlib import Path
 import pytest
 
 from secondbrain.diagrams.__main__ import main
+from secondbrain.diagrams.emit import emit
 from secondbrain.diagrams.ir import Card
 from secondbrain.diagrams.pipeline import load_prompt
+from secondbrain.diagrams.staleness import marker
 from secondbrain.diagrams.validate import validate
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -41,13 +43,12 @@ def _prompt_examples() -> list[tuple[Card, dict]]:
 
 
 # Token budget. The method write-up asked for about 1,000-1,500 tokens with one or
-# two examples. The first pilot added one example per structure category it
-# missed, which grew the prompt to 2,233 o200k tokens; the second pilot's rules
-# (cite E, back edges, fan-out, width, data inputs, old diagrams) were added
-# without growing it: 2,196 when written, with 4 draw and 2 skip examples. The
-# cap is the size before that revision, so new rules have to replace old text.
-TOKEN_CAP = 2233
-BYTE_CAP = 8000  # dependency-free proxy for the same budget (7,825 bytes when written)
+# two examples. The pilots grew the prompt to 2,233 and then 2,196 o200k tokens
+# (4 draw and 2 skip examples). It was then cut back to the method's budget
+# with every rule kept: 1,495 o200k (1,530 cl100k) when written, with 2 draw
+# examples. New rules have to replace old text.
+TOKEN_CAP = 1500
+BYTE_CAP = 5400  # dependency-free proxy for the same budget (5,280 bytes when written)
 
 
 def test_prompt_states_the_core_rules():
@@ -76,9 +77,7 @@ def test_prompt_token_budget():
 def test_prompt_examples_pass_the_validator():
     examples = _prompt_examples()
     assert [(c.ref, ir["decision"], ir.get("form")) for c, ir in examples] == [
-        ("nn/residual", "draw", "flow"), ("fs/double-indirect", "draw", "structure"),
-        ("algo/rpn", "draw", "flow"), ("econ/inflation", "draw", "structure"),
-        ("net/tcp-vs-udp", "skip", None), ("http/request-line", "skip", None)]
+        ("nn/residual", "draw", "flow"), ("algo/rpn", "draw", "flow")]
     for card, ir in examples:
         report = validate(ir, card)
         assert report.ok, (card.ref, [str(e) for e in report.errors])
@@ -91,6 +90,33 @@ def _tool() -> tuple[str, Path] | None:
     if not node or not (modules / "node_modules" / "mermaid").is_dir():
         return None
     return node, modules
+
+
+def _example_mermaid() -> list[dict]:
+    out = []
+    for card, ir in _prompt_examples():
+        parsed = validate(ir, card).ir
+        out.append({"id": card.ref, "text": emit(parsed, marker(card, parsed))})
+    return out
+
+
+def test_prompt_examples_emit_with_marker():
+    for block in _example_mermaid():
+        assert block["text"].startswith("%% diagram v1 props=E,"), block["id"]
+        assert block["text"].splitlines()[1] == "flowchart TB", block["id"]
+
+
+@pytest.mark.skipif(_tool() is None, reason="tools/mermaid_check dependencies not installed")
+def test_prompt_examples_render_in_obsidian_mermaid(tmp_path):
+    blocks = _example_mermaid()
+    src, res = tmp_path / "examples.jsonl", tmp_path / "checks.jsonl"
+    src.write_text("".join(json.dumps(b, ensure_ascii=False) + "\n" for b in blocks), encoding="utf-8")
+    node, modules = _tool()
+    proc = subprocess.run([node, str(TOOL), "--modules", str(modules), str(src), str(res)],
+                          capture_output=True, text=True, timeout=600)
+    assert proc.returncode == 0, proc.stderr
+    for c in (json.loads(x) for x in res.read_text(encoding="utf-8").splitlines()):
+        assert c["ok"] and c["width"] <= 700 and not c.get("label_overlaps"), c
 
 
 def _run_batch(tmp_path: Path, capsys) -> tuple[list[str], Path]:
