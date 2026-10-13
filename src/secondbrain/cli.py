@@ -14,7 +14,7 @@ from pathlib import Path
 
 from dataclasses import replace
 
-from . import config, jobs
+from . import config, jobs, labels
 from .executors.base import ExecutorFailure
 from .service import Service
 from .store import Conflict
@@ -36,6 +36,9 @@ def parser():
     init = sub.add_parser('init', help='Initialize vault metadata from a reviewed catalog')
     init.add_argument('--catalog', type=Path, required=True)
     stat = sub.add_parser('status'); stat.add_argument('--job')
+    lang = sub.add_parser('language', help="The vault's generated-text language; --set switches it")
+    lang.add_argument('--set', choices=['en', 'zh'], dest='set_language',
+                      help='Record this language in the catalog (then rewrite pages with refresh and docs)')
     search = sub.add_parser('search'); search.add_argument('query'); search.add_argument('--limit', type=int, default=12)
     read = sub.add_parser('read'); read.add_argument('ids', nargs='+')
     for name in MODEL_KINDS:
@@ -351,6 +354,9 @@ def _activate(args) -> Path:
     vault = args.vault.expanduser().absolute() if args.vault else settings.vault
     if vault is None:
         raise ValueError('No vault: pass --vault, set SECONDBRAIN_VAULT, or set `vault` in the config file')
+    if not settings.card_language_set:
+        # [cards] language not in the config file: generated text follows the vault.
+        settings = replace(settings, card_language=labels.vault_language(vault) or settings.card_language)
     config.activate(replace(settings, vault=vault))
     return vault
 
@@ -380,6 +386,9 @@ def main(argv=None):
             result = initialize(root, json.loads(args.catalog.read_text()))
         elif cmd == 'status':
             result = service.status(args.job)
+        elif cmd == 'language':
+            from .service import set_language
+            result = set_language(root, args.set_language) if args.set_language else labels.describe(root)
         elif cmd == 'search':
             result = service.search(args.query, args.limit)
         elif cmd == 'read':

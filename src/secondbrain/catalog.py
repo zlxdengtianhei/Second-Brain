@@ -11,6 +11,7 @@ Only Python standard library + PyYAML (transitively via vault).
 from __future__ import annotations
 
 SCHEMA = "secondbrain-catalog/1"
+LANGUAGES = ("en", "zh")
 
 _FORBIDDEN = ("", ".", "..")
 
@@ -134,6 +135,9 @@ def validate_catalog(data) -> dict:
         _require(inverse_relations.get(inv) == rel,
                  "inverse_relations does not close: %r -> %r -> %r" % (rel, inv, inverse_relations.get(inv)))
 
+    # The language of the vault's generated text (written by `sb init` and `sb language --set`).
+    _require(data.get("language", "en") in LANGUAGES,
+             "language must be one of %s, got %r" % ("/".join(LANGUAGES), data.get("language")))
     return data
 
 

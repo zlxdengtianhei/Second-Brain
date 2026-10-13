@@ -5,7 +5,7 @@ from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
-from . import jobs
+from . import jobs, labels
 from .catalog import category_pairs, taxonomy_packet
 from .evidence import check_verbatim
 from .store import Change, Conflict, apply_changes, digest, read_bytes
@@ -21,6 +21,7 @@ def writable_snapshot(snapshot: Snapshot) -> None:
         more = f' (and {len(fatal) - 5} more)' if len(fatal) > 5 else ''
         raise ValueError(f'The vault has {len(fatal)} unresolved problem(s); nothing is written until they are '
                          f'fixed: {shown}{more}. Run `sb status` for the full list.')
+    labels.check_language(snapshot)
 
 
 def _describe_issue(issue: dict) -> str:

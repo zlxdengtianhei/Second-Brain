@@ -29,6 +29,7 @@ def test_example_config_parses(tmp_path):
     assert settings.producer.kind == 'openai' and settings.reviewer.kind == 'anthropic'
     assert settings.producer.api_key_env == 'SB_PRODUCER_API_KEY'
     assert settings.layout == layout.DEFAULT
+    assert settings.card_language == 'en' and not settings.card_language_set  # follows the vault
 
 
 def test_full_config_round_trip(tmp_path):
@@ -69,7 +70,7 @@ commit = true
     assert settings.review.max_repair_rounds == 2 and not settings.review.require_different_family
     assert settings.review.model_families['mylocal'] == 'local'
     assert settings.review.model_families['claude'] == 'anthropic'
-    assert settings.ingest.after_ingest == 'keep' and settings.card_language == 'zh'
+    assert settings.ingest.after_ingest == 'keep' and settings.card_language == 'zh' and settings.card_language_set
     assert settings.taxonomy_extra_reviewers == 1 and settings.git_commit is True
 
 

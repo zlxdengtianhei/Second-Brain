@@ -1,6 +1,8 @@
 """Small shared service used by terminal commands and the MCP adapter."""
 from __future__ import annotations
 
+import json
+import uuid
 from collections import Counter
 from pathlib import Path
 
@@ -111,6 +113,13 @@ class Service:
 
 def initialize(root: Path, catalog: dict, job_id: str = 'initialize-catalog'):
     validate_catalog(catalog)
+    if 'language' not in catalog:
+        # Record the vault's generated-text language: configured, else found in existing maps, else English.
+        from . import config, labels
+        settings = config.current()
+        language = settings.card_language if settings.card_language_set else (
+            labels.detected_language(root) or settings.card_language)
+        catalog = {**catalog, 'language': language}
     raw = jobs.encoded(catalog)
     from . import layout as layouts
     catalog_rel = layouts.of(root).catalog
@@ -120,6 +129,30 @@ def initialize(root: Path, catalog: dict, job_id: str = 'initialize-catalog'):
             return {'status': 'unchanged'}
         raise ValueError('a catalog exists already; change domains through a reviewed proposal')
     return apply_changes(root, job_id, [Change(catalog_rel, None, raw)])
+
+
+def set_language(root: Path, language: str, job_id: str | None = None):
+    """Record ``language`` as the vault's generated-text language (the explicit way to switch it).
+
+    Pages already written keep their text until ``sb refresh --apply`` and
+    ``sb docs --apply`` rewrite them; existing cards keep their headings.
+    """
+    from . import labels
+    from . import layout as layouts
+    catalog_rel = layouts.of(root).catalog
+    raw = read_bytes(root, catalog_rel)
+    if raw is None:
+        raise ValueError('No catalog yet; `sb init` records the language when it creates one')
+    catalog = json.loads(raw)
+    before = labels.recorded_language(catalog)
+    if before == language:
+        return {'status': 'unchanged', 'language': language}
+    catalog['language'] = language
+    validate_catalog(catalog)
+    job_id = job_id or f'language-{language}-{uuid.uuid4().hex[:12]}'
+    result = apply_changes(root, job_id, [Change(catalog_rel, digest(raw), jobs.encoded(catalog))])
+    return {**result, 'language': language, 'previous': before or labels.detected_language(root),
+            'next': ['sb refresh --apply', 'sb docs --apply']}
 
 
 def describe_moc_changes(root: Path, changes) -> dict:

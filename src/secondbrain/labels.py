@@ -5,8 +5,16 @@ The ``zh`` map text reproduces the pages earlier versions wrote byte for byte
 (``tests/test_page_language.py`` holds the golden pages), so switching to this
 module does not change an existing Chinese vault's maps. Vault content (card
 titles, taxonomy names, narratives) is never translated.
+
+A vault has one language for its generated text. It is recorded as the
+top-level ``language`` of the catalog (``sb init``, ``sb language --set``);
+a vault made before the record existed is detected from its generated map
+pages. ``[cards] language`` defaults to the vault's language, and a write
+whose configured language differs from it is refused (:func:`check_language`).
 """
 from __future__ import annotations
+
+import json
 
 from . import config
 
@@ -192,8 +200,92 @@ PAGES = {
 
 
 def language() -> str:
-    """The configured language (``[cards] language``)."""
+    """The active language: ``[cards] language``, or the vault's when the config file does not set it."""
     return config.current().card_language
+
+
+def recorded_language(catalog) -> str | None:
+    """The ``language`` recorded in a catalog mapping, if any."""
+    value = catalog.get('language') if isinstance(catalog, dict) else None
+    return value if value in MOC else None
+
+
+def detected_language(root) -> str | None:
+    """Language of the generated map root pages (``<mocs>/*.md``); None when there are none."""
+    from . import layout as layouts
+    from .store import read_bytes
+    if root is None:
+        return None
+    folder = layouts.of(root).mocs
+    try:
+        names = sorted(p.name for p in (root / folder).iterdir() if p.suffix == '.md')
+    except OSError:
+        return None
+    markers = [(lang, table['page_index'].encode()) for lang, table in MOC.items()]
+    for name in names:
+        try:
+            raw = read_bytes(root, f'{folder}/{name}') or b''
+        except (OSError, ValueError):
+            continue
+        for lang, marker in markers:
+            if marker in raw:
+                return lang
+    return None
+
+
+def _catalog(root):
+    from . import layout as layouts
+    from .store import read_bytes
+    try:
+        raw = read_bytes(root, layouts.of(root).catalog)
+        return json.loads(raw) if raw else None
+    except (OSError, ValueError):
+        return None
+
+
+def vault_language(root, *, catalog=None) -> str | None:
+    """The vault's language: recorded in the catalog, else detected from its maps, else None."""
+    if catalog is None and root is not None:
+        catalog = _catalog(root)
+    return recorded_language(catalog) or detected_language(root)
+
+
+def describe(root) -> dict:
+    """Where the vault's language comes from and which language writes use (`sb language`)."""
+    settings = config.current()
+    recorded = recorded_language(_catalog(root))
+    detected = detected_language(root)
+    vault = recorded or detected
+    return {'recorded': recorded, 'detected': detected, 'vault': vault,
+            'configured': settings.card_language if settings.card_language_set else None,
+            'config_file': str(settings.source) if settings.source else None,
+            'active': settings.card_language,
+            'writes_allowed': vault is None or vault == settings.card_language}
+
+
+def check_language(snapshot) -> None:
+    """Refuse a write whose generated text would not be in the vault's language.
+
+    Called by every writer through ``writable_snapshot``. When the config file
+    does not set ``[cards] language``, the vault's language becomes the active
+    one instead.
+    """
+    vault = vault_language(snapshot.root, catalog=snapshot.catalog)
+    settings = config.current()
+    if vault is None or vault == settings.card_language:
+        return
+    if not settings.card_language_set:
+        config.use_language(vault)
+        return
+    source = recorded_language(snapshot.catalog) and 'recorded in the catalog' or 'found in the map pages'
+    where = f'in {settings.source}' if settings.source else 'in the active settings'
+    want = settings.card_language
+    raise ValueError(
+        f'This vault\'s generated text is {vault} ({source}), but [cards] language = "{want}" {where}. '
+        f'Writing now would mix {want} maps, HOME and cards into a {vault} vault, so nothing was written. '
+        f'To keep {vault}, remove `language` from [cards] (the vault\'s language is then used). '
+        f'To switch the vault to {want}, run `sb language --set {want}`, then `sb refresh --apply` and '
+        f'`sb docs --apply` to rewrite the generated pages.')
 
 
 def moc(lang: str | None = None) -> dict:
