@@ -44,11 +44,13 @@ def _prompt_examples() -> list[tuple[Card, dict]]:
 
 # Token budget. The method write-up asked for about 1,000-1,500 tokens with one or
 # two examples. The pilots grew the prompt to 2,233 and then 2,196 o200k tokens
-# (4 draw and 2 skip examples). It was then cut back to the method's budget
-# with every rule kept: 1,497 o200k (1,532 cl100k) when written, with 2 draw
-# examples. New rules have to replace old text.
-TOKEN_CAP = 1500
-BYTE_CAP = 5400  # dependency-free proxy for the same budget (5,289 bytes when written)
+# (4 draw and 2 skip examples). It was then cut back with every rule kept to
+# 1,497 o200k and 2 flow examples; the cheapest structure example went back in
+# because missed structure diagrams were pilot 1's main recall loss and an
+# example fixed them: 1,677 o200k (1,738 cl100k) when written. New rules have
+# to replace old text.
+TOKEN_CAP = 1700
+BYTE_CAP = 6000  # dependency-free proxy for the same budget (5,860 bytes when written)
 
 
 def test_prompt_states_the_core_rules():
@@ -77,7 +79,7 @@ def test_prompt_token_budget():
 def test_prompt_examples_pass_the_validator():
     examples = _prompt_examples()
     assert [(c.ref, ir["decision"], ir.get("form")) for c, ir in examples] == [
-        ("nn/residual", "draw", "flow"), ("algo/rpn", "draw", "flow")]
+        ("nn/residual", "draw", "flow"), ("algo/rpn", "draw", "flow"), ("econ/inflation", "draw", "structure")]
     for card, ir in examples:
         report = validate(ir, card)
         assert report.ok, (card.ref, [str(e) for e in report.errors])

@@ -40,3 +40,9 @@ Card `algo/rpn`: E 逆波兰表达式用栈求值，扫描到结束为止。P1 �
 ```json
 {"decision":"draw","form":"flow","question":"每个记号怎样处理？","nodes":[{"key":"e","label":"扫描结束？","role":"decision","p":["P3","E"]},{"key":"k","label":"数字或运算符？","role":"decision","p":["P2"]},{"key":"u","label":"压栈","p":["P2"]},{"key":"c","label":"弹出两个数计算，结果压栈","p":["P2"]},{"key":"r","label":"栈顶就是结果","role":"end","p":["P3"]}],"edges":[{"from":"e","to":"k","label":"否","p":["P1"]},{"from":"e","to":"r","label":"是","p":["P3"]},{"from":"k","to":"u","label":"数字","p":["P2"]},{"from":"k","to":"c","label":"运算符","p":["P2"]},{"from":"u","to":"e"},{"from":"c","to":"e"}]}
 ```
+
+Card `econ/inflation`: E 需求拉动与成本推动都会推高物价。P1 总需求增长快于供给时，需求拉动物价上涨。P2 成本上升时，成本推动物价上涨。
+
+```json
+{"decision":"draw","form":"structure","question":"哪两条途径推高物价？","nodes":[{"key":"d","label":"总需求增长快于供给","p":["P1"]},{"key":"c","label":"成本上升","p":["P2"]},{"key":"p","label":"物价上涨","p":["E","P1"]}],"edges":[{"from":"d","to":"p","label":"需求拉动","p":["P1"]},{"from":"c","to":"p","label":"成本推动","p":["P2"]}]}
+```
