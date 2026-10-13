@@ -162,8 +162,9 @@ def read_results(output: str | dict, refs: Sequence[str | None]) -> dict[str | N
     results = output.get("results") if isinstance(output, dict) else None
     if not isinstance(results, list):
         return {r: None for r in refs}
-    by_ref = {x.get("ref"): x.get("ir") for x in results if isinstance(x, dict) and x.get("ref") is not None}
-    if by_ref:
+    keyed = [x for x in results if isinstance(x, dict) and x.get("ref") is not None]
+    by_ref = {x["ref"]: x.get("ir") for x in keyed if isinstance(x["ref"], str)}
+    if keyed:
         return {r: by_ref.get(r) for r in refs}
     return {r: (results[i].get("ir") if i < len(results) and isinstance(results[i], dict) else None)
             for i, r in enumerate(refs)}
@@ -172,19 +173,23 @@ def read_results(output: str | dict, refs: Sequence[str | None]) -> dict[str | N
 def process(card: Card | dict, ir_data: Any, attempt: int = 0, policy: Policy = DEFAULT_POLICY) -> Outcome:
     """Validate one IR and turn it into a diagram, a rewrite request, or a skip."""
     card = card if isinstance(card, Card) else Card.from_dict(card)
+    report = None
     if ir_data is None:
         report_errors = [Issue("V1", "no IR returned for this card")]
-        report = None
     else:
-        report = validate(ir_data, card, policy.limits)
-        report_errors = report.errors
+        try:
+            report = validate(ir_data, card, policy.limits)
+            report_errors = report.errors
+            if report.ok and report.ir.decision == "draw":
+                mermaid = emit(report.ir, marker=marker(card, report.ir))
+        except Exception as e:  # a malformed answer must cost one card, never the batch
+            report = None
+            report_errors = [Issue("V1", f"IR could not be checked: {type(e).__name__}: {e}")]
     warnings = [str(w) for w in report.warnings] if report else []
     if report is not None and report.ok:
-        ir = report.ir
-        if ir.decision == "skip":
-            return Outcome(card.ref, "skip", reason=ir.reason, attempt=attempt, warnings=warnings)
-        return Outcome(card.ref, "draw", mermaid=emit(ir, marker=marker(card, ir)), attempt=attempt,
-                       warnings=warnings)
+        if report.ir.decision == "skip":
+            return Outcome(card.ref, "skip", reason=report.ir.reason, attempt=attempt, warnings=warnings)
+        return Outcome(card.ref, "draw", mermaid=mermaid, attempt=attempt, warnings=warnings)
     action = fallback(report_errors, attempt, policy.max_rewrites)
     errors = [str(e) for e in report_errors]
     if isinstance(action, Rewrite):

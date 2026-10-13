@@ -167,3 +167,13 @@ def test_cli_audit_round_trip(tmp_path, capsys):
     assert summary["actions"] == {"delete_section": 1, "direction_tb": 1}
     assert summary["status"] == {"written": 2}
     assert "## 图" not in (tmp_path / "v" / BUBBLE).read_text(encoding="utf-8")
+
+
+def test_merge_counts_as_gain_only_from_five_nodes():
+    labels = [("a", "取区间中点 mid"), ("b", "比较目标值"), ("c", "取区间中点"), ("d", "比较 a[mid] 与目标值"),
+              ("e", "目标值")]
+    nodes = [(k, v, "square") for k, v in labels]
+    five = _check(nodes, [("a", "c", "1"), ("b", "c", "2"), ("c", "d", "3"), ("d", "e", "4")])
+    assert audit.tier_one(_card(), five) == ("keep", "merge")
+    four = _check(nodes[:4], [("a", "c", "1"), ("b", "c", "2"), ("c", "d", "3")])
+    assert audit.tier_one(_card(), four) == ("review", "no_gain")

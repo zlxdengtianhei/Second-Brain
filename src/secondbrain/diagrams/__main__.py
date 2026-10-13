@@ -56,14 +56,18 @@ def cmd_apply(a) -> dict:
     cards = {c["ref"]: Card.from_dict(c) for c in _jsonl(a.cards)}
     a.out.mkdir(parents=True, exist_ok=True)
     outcomes = []
+    policy = Policy(skip_domains=tuple(a.skip_domain))
     for answer in a.answers:
         packet_path = answer.with_name(answer.name.replace(".answer", ""))
         packet = json.loads(packet_path.read_text(encoding="utf-8"))
         refs = [c["ref"] for c in packet["input"]["cards"]]
-        irs = read_results(answer.read_text(encoding="utf-8"), refs)
+        try:
+            text = answer.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            text = ""  # every card in this packet then reports "no IR returned"
+        irs = read_results(text, refs)
         attempt = packet.get("attempt", a.attempt)
-        outcomes += [process(cards[r], irs[r], attempt=attempt, policy=Policy(skip_domains=tuple(a.skip_domain)))
-                     for r in refs]
+        outcomes += [process(cards[r], irs[r], attempt=attempt, policy=policy) for r in refs]
     for i, o in enumerate(x for x in outcomes if x.status == "rewrite"):
         (a.out / f"rewrite-{i + 1:03d}.json").write_text(json.dumps(o.rewrite, ensure_ascii=False, indent=1),
                                                         encoding="utf-8")

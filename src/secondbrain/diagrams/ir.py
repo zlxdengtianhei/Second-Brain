@@ -211,7 +211,7 @@ def parse_ir(data: Any) -> tuple[DiagramIR | None, list[Issue]]:
             issues.append(Issue("V1", f"duplicate key {key!r}", w + ".key"))
         keys.add(key)
         role = n.get("role") or DEFAULT_ROLE[form]
-        if role not in ROLES[form]:
+        if not isinstance(role, str) or role not in ROLES[form]:
             issues.append(Issue("V1", f"role {role!r} not allowed in {form}; use one of {', '.join(ROLES[form])}", w + ".role"))
         label = _text(n.get("label"), w + ".label", issues, required=True)
         nodes.append(Node(key=key, label=label, role=role, p=_refs(n.get("p"), w + ".p", issues)))
@@ -232,12 +232,14 @@ def parse_ir(data: Any) -> tuple[DiagramIR | None, list[Issue]]:
         _extra(e, _MESSAGE_KEYS if form == "sequence" else _EDGE_KEYS, w, issues)
         src, dst = e.get("from"), e.get("to")
         for end, v in (("from", src), ("to", dst)):
-            if v not in keys:
+            if not isinstance(v, str):
+                issues.append(Issue("V1", f"{end} must be one node key (a string)", f"{w}.{end}"))
+            elif v not in keys:
                 issues.append(Issue("V1", f"{end} refers to unknown node {v!r}", f"{w}.{end}"))
         if form == "sequence":
             label = _text(e.get("text"), w + ".text", issues, required=True)
             style = e.get("style") or "sync"
-            if style not in MESSAGE_STYLES:
+            if not isinstance(style, str) or style not in MESSAGE_STYLES:
                 issues.append(Issue("V1", f"style must be one of {', '.join(MESSAGE_STYLES)}", w + ".style"))
             note = e.get("note", False)
             if not isinstance(note, bool):
@@ -272,11 +274,14 @@ def parse_ir(data: Any) -> tuple[DiagramIR | None, list[Issue]]:
             issues.append(Issue("V1", "members must be a non-empty list of node keys", w + ".members"))
             continue
         for m in members:
-            if m not in keys:
+            if not isinstance(m, str):
+                issues.append(Issue("V1", "members must be node keys (strings)", w + ".members"))
+            elif m not in keys:
                 issues.append(Issue("V1", f"member {m!r} is not a node key", w + ".members"))
             elif m in grouped:
                 issues.append(Issue("V1", f"node {m!r} is in more than one group", w + ".members"))
-            grouped.add(m)
+            if isinstance(m, str):
+                grouped.add(m)
         groups.append(Group(label, tuple(str(m) for m in members), _refs(g.get("p"), w + ".p", issues)))
 
     if any(i.is_error for i in issues):

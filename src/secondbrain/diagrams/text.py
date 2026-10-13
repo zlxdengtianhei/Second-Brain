@@ -33,12 +33,33 @@ def tokens(s: str) -> set[str]:
     return out
 
 
+_WORD = re.compile(r"[a-z][a-z0-9]*|\d+")
+
+
+def grounding_tokens(s: str) -> set[str]:
+    """Tokens for the validator's grounding check (V4).
+
+    Like tokens(), but Latin compounds are split at '-', '_', '.' and other
+    punctuation, and single letters count, so a label copied from a
+    proposition matches it part by part: 'Request' is grounded in
+    'Discover-Offer-Request-ACK', and 'S_i' in 'S_i'. tokens() keeps the
+    original rule because the audit reproduces published numbers with it.
+    """
+    s = strip_markup(s).lower()
+    out = set(_WORD.findall(s))
+    for run in _CJK_RUN.findall(s):
+        if len(run) == 1:
+            out.add(run)
+        out.update(run[i:i + 2] for i in range(len(run) - 1))
+    return out
+
+
 def overlap(label: str, source: str) -> float | None:
-    """Share of the label's tokens that also occur in source; None if the label has none."""
-    t = tokens(label)
+    """Share of the label's grounding tokens found in source; None if the label has none."""
+    t = grounding_tokens(label)
     if not t:
         return None
-    return len(t & tokens(source)) / len(t)
+    return len(t & grounding_tokens(source)) / len(t)
 
 
 def display_width(s: str) -> float:

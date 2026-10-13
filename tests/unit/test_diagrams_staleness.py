@@ -61,3 +61,11 @@ def test_legacy_diagram_without_marker_is_unmarked():
 def test_other_method_version_is_stale():
     mm = drawn().replace("%% diagram v1 ", "%% diagram v0 ", 1)
     assert check_staleness(mm, CARD).status == "stale"
+
+
+def test_every_proposition_is_in_the_hash():
+    mm = drawn()
+    for i in range(len(CARD.propositions)):
+        props = list(CARD.propositions)
+        props[i] = props[i].replace("。", "，并且有改动。")
+        assert check_staleness(mm, dataclasses.replace(CARD, propositions=tuple(props))).status == "stale", i

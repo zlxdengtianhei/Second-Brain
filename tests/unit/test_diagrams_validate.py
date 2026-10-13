@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from secondbrain.diagrams.ir import IR_JSON_SCHEMA, Card, parse_ir
+from secondbrain.diagrams.text import grounding_tokens, tokens
 from secondbrain.diagrams.validate import Limits, validate
 
 FIX = Path(__file__).resolve().parents[1] / "fixtures" / "diagrams"
@@ -255,3 +256,75 @@ def test_schema_lists_every_form_and_role():
     assert "decision" in IR_JSON_SCHEMA["properties"]["nodes"]["items"]["properties"]["role"]["enum"]
     ir_obj, issues = parse_ir(ir("networking/etag-revalidation"))
     assert ir_obj is not None and ir_obj.form == "sequence" and not issues
+
+
+# Tokenisation and robustness ----------------------------------------------------
+
+def _first_node_v4(label: str, prop: str) -> list[str]:
+    card = Card(title="t", essence="e", propositions=(prop, "第二条命题"))
+    data = {"decision": "draw", "form": "structure", "question": "q",
+            "nodes": [{"key": "a", "label": label, "p": ["P1"]}] +
+                     [{"key": k, "label": "第二条命题", "p": ["P2"]} for k in "bcd"],
+            "edges": [{"from": "a", "to": x, "label": "第二条命题", "p": ["P2"]} for x in "bcd"]}
+    return [str(i) for i in validate(data, card).errors if i.code == "V4"]
+
+
+@pytest.mark.parametrize("label, prop", [
+    ("Request", "完整交互过程（Discover-Offer-Request-ACK）由客户端发起"),
+    ("ACK", "完整交互过程（Discover-Offer-Request-ACK）由客户端发起"),
+    ("Thought", "通过 Thought-Action-Observation 循环完成任务"),
+    ("Observation", "通过 Thought-Action-Observation 循环完成任务"),
+    ("Plan-and-Execute", "Plan-and-Execute 先规划再执行"),
+    ("LLM-as-Judge", "用 LLM-as-Judge 给答案打分"),
+    ("JSON-RPC 消息", "MCP 用 JSON-RPC 传递消息"),
+    ("S_i", "第 i 个子集记为 S_i"),
+])
+def test_v4_words_copied_from_a_compound_are_grounded(label, prop):
+    assert _first_node_v4(label, prop) == []
+
+
+def test_v4_pins_cjk_bigrams():
+    assert tokens("段页式") == grounding_tokens("段页式") == {"段页", "页式"}
+    assert grounding_tokens("页") == {"页"}
+    # with single characters as tokens, "页段" would look grounded in "段页式"
+    assert _first_node_v4("页段", "段页式变换") != []
+
+
+def test_v4_label_without_any_token_is_reported():
+    errors = _first_node_v4("→", "段页式变换")
+    assert len(errors) == 1 and "shares no wording" in errors[0]
+
+
+def test_v5_single_exit_decision_is_not_a_branch():
+    data = _chain(5)
+    data["nodes"][1]["role"] = "decision"
+    data["edges"][1].update(label="是", p=["P2"])
+    assert "V5" in codes(data, SEARCH)
+
+
+def test_v5_repeated_edge_is_not_a_merge():
+    data = _chain(4)
+    data["edges"].append(dict(data["edges"][0]))
+    assert "V5" in codes(data, SEARCH)
+
+
+@pytest.mark.parametrize("mutate", [
+    lambda d: d["edges"][0].update({"from": ["mid"]}),
+    lambda d: d["edges"][0].update(to={"key": "cmp"}),
+    lambda d: d.update(groups=[{"label": "g", "members": [{"key": "mid"}]}]),
+    lambda d: d["nodes"][0].update(role=["step"]),
+    lambda d: d["nodes"][0].update(key=["mid"]),
+])
+def test_v1_rejects_non_scalar_fields_without_crashing(mutate):
+    data = ir("algorithms/binary-search")
+    mutate(data)
+    report = validate(data, SEARCH)
+    assert report.ir is None and report.errors and {i.code for i in report.errors} == {"V1"}
+
+
+def test_v1_rejects_non_scalar_message_fields():
+    data = ir("networking/etag-revalidation")
+    data["messages"][0]["from"] = ["b"]
+    data["messages"][1]["style"] = ["reply"]
+    report = validate(data, ETAG)
+    assert [i.where for i in report.errors] == ["messages[0].from", "messages[1].style"]

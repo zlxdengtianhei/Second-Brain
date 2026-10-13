@@ -93,12 +93,13 @@ def _gain(ir: DiagramIR, limits: Limits) -> str | None:
     if ir.form == "flow":
         outs: dict[str, list] = defaultdict(list)
         indeg: dict[str, int] = defaultdict(int)
+        for src, dst in {(e.src, e.dst) for e in ir.edges}:  # a repeated edge is not a merge
+            indeg[dst] += 1
         for e in ir.edges:
             outs[e.src].append(e)
-            indeg[e.dst] += 1
         for n in ir.nodes:
             o = outs.get(n.key, [])
-            if n.role == "decision" and len(o) >= 2 and all(e.label for e in o):
+            if n.role == "decision" and len({e.dst for e in o}) >= 2 and all(e.label for e in o):
                 return None
         if any(v >= 2 for v in indeg.values()):
             return None

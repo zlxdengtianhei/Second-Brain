@@ -7,7 +7,7 @@ Obsidian 1.13.x bundles `mermaid@11.13.0` with one local patch (label widths are
 Used by:
 
 - `tests/unit/test_diagrams_mermaid.py`: the V9 regression corpus (every emitted diagram parses, renders and keeps its label text);
-- `python -m secondbrain.diagrams audit`: parse results and diagram structure for existing vault diagrams;
+- `python -m secondbrain.diagrams audit-extract` writes the blocks this tool checks, and `audit-tier` reads its results (parse result, structure, direction, size) to tier existing vault diagrams;
 - after `prune`: confirming that changed diagrams still parse.
 
 ## Install

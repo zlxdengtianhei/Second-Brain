@@ -100,3 +100,44 @@ def test_rewrite_round_trip_on_a_fixable_error():
     assert first.status == "rewrite" and first.errors[0].startswith("V4 [nodes[2].label]")
     fixed = process(SEARCH, ENTRIES["algorithms/binary-search"]["ir"], attempt=first.rewrite["attempt"])
     assert fixed.status == "draw" and fixed.attempt == 1
+
+
+def test_read_results_ignores_non_string_refs():
+    assert read_results({"results": [{"ref": ["x"], "ir": {}}, {"ref": "y", "ir": 1}]}, ["x", "y"]) == \
+        {"x": None, "y": 1}
+
+
+def test_malformed_answer_costs_one_card_not_the_batch(tmp_path, capsys):
+    from secondbrain.diagrams.__main__ import main
+    cards = [c.to_dict() for c in CARDS.values() if c.kind != "contrast"]
+    (tmp_path / "cards.jsonl").write_text("".join(json.dumps(c, ensure_ascii=False) + "\n" for c in cards),
+                                          encoding="utf-8")
+    main(["packets", str(tmp_path / "cards.jsonl"), str(tmp_path / "p")])
+    capsys.readouterr()
+    refs = [c["ref"] for c in cards]
+    broken = copy.deepcopy(ENTRIES["algorithms/binary-search"]["ir"])
+    broken["edges"][0]["from"] = ["mid"]
+    broken["groups"] = [{"label": "g", "members": [{"key": "mid"}]}]
+    answer = {"results": [
+        {"ref": refs[0], "ir": {"decision": "skip", "reason": "linear"}},
+        {"ref": refs[1], "ir": ENTRIES[refs[1]]["ir"]},
+        {"ref": refs[2], "ir": broken},
+        {"ref": ["junk"], "ir": {}},
+    ]}
+    (tmp_path / "p" / "packet-001.answer.json").write_text(json.dumps(answer, ensure_ascii=False), encoding="utf-8")
+    assert main(["apply", str(tmp_path / "cards.jsonl"), str(tmp_path / "p" / "packet-001.answer.json"),
+                 "--out", str(tmp_path / "o")]) == 0
+    rows = [json.loads(x) for x in (tmp_path / "o" / "outcomes.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert [(r["ref"], r["status"]) for r in rows] == [(refs[0], "skip"), (refs[1], "draw"), (refs[2], "rewrite")]
+    assert all(e.startswith("V1") for e in rows[2]["errors"])
+
+
+def test_unexpected_checker_error_becomes_a_v1_issue(monkeypatch):
+    from secondbrain.diagrams import pipeline
+
+    def boom(*a, **k):
+        raise RuntimeError("bug")
+
+    monkeypatch.setattr(pipeline, "emit", boom)
+    out = process(SEARCH, ENTRIES["algorithms/binary-search"]["ir"])
+    assert out.status == "rewrite" and out.errors == ["V1 IR could not be checked: RuntimeError: bug"]
