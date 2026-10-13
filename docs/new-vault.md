@@ -1,6 +1,8 @@
 # Starting a vault of your own
 
-A vault needs three things before the first ingest: a catalog of domains, a taxonomy file for each map of content (MOC), and an empty card registry. You write the catalog and the taxonomy files; `sb init` puts the catalog into the vault and adds the registry and the folders. The [example vault](../examples/vault/) has a complete set to copy from.
+[中文](new-vault.zh-CN.md)
+
+A vault needs three things before the first ingest: a catalog of domains, a taxonomy file for each map of content (MOC), and an empty card registry. You write the catalog and the taxonomy files; `sb init` puts the catalog into the vault and adds the registry and the folders. The example vaults ([English](../examples/vault/), [Chinese](../examples/vault-zh/)) have a complete set to copy from.
 
 The steps below use the default folder names. To use other names, set `[layout]` in the config file first ([configuration.md](configuration.md)).
 

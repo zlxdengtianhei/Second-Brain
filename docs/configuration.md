@@ -1,5 +1,7 @@
 # Configuration
 
+[中文](configuration.zh-CN.md)
+
 Every key is optional. Without a config file, `sb` uses the defaults below.
 
 ## Where settings come from

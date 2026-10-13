@@ -6,7 +6,7 @@ Turn notes in an Obsidian inbox into checked, linked knowledge cards, and review
 
 ![Animated atlas of a Second Brain vault: cards appear day by day, relations light up between them, then the view moves into one domain](docs/media/second-brain-atlas-en.gif)
 
-<sub>The atlas shows the author's own vault: 8,615 cards and 23,841 typed relations in 25 domains. Those cards are not published. The GIF shows three short stretches of a 54-second video at normal speed. This repository ships the tool and a small English [example vault](examples/vault/). The full video, in an English and a Chinese version, is on the [Releases page](../../releases).</sub>
+<sub>The atlas shows the author's own vault: 8,615 cards and 23,841 typed relations in 25 domains. Those cards are not published. The GIF shows three short stretches of the 54-second atlas animation at normal speed. This repository ships the tool and two small example vaults, in [English](examples/vault/) and in [Chinese](examples/vault-zh/).</sub>
 
 - **Cards from your inbox, with a second opinion.** One model drafts atomic cards from a source. A separate reviewer judges every card against the source. Code checks quotes, taxonomy and links before anything is written.
 - **One recoverable write per source.** Cards, a copy of the source, the registries and the maps are written in one transaction. `sb recover <job> --rollback` undoes it byte for byte.
@@ -46,7 +46,7 @@ sb refresh                        # preview of the maps: nothing to change
 
 Open `~/sb-example` in Obsidian. `HOME.md` links to the three maps in `20_MOCs/`; the cards are in `10_Knowledge/`, the source notes in `40_Sources/`.
 
-Two notes are still in the inbox. Start one of them:
+Two notes are still in the inbox; `sb inbox list` also shows the seven ingested sources as `done`. Start one of them:
 
 ```sh
 sb inbox list
@@ -59,10 +59,11 @@ The result lists `handoffs`: a task file for a producer model, where to write it
 - **With API keys**: install the API extra too (`pip install -e ".[review,api]"`), describe a producer and a reviewer endpoint in a config file (see [Configuration](#configuration)), then run `sb ingest <file> --executor api`.
 - **By hand**: the hand-off is plain files and commands ([docs/agents.md](docs/agents.md#doing-it-by-hand)).
 
-To try the review plugin on the example vault, build it (needs Node.js 18 or later) and copy it into the vault. The vault already holds the plugin's settings for English cards.
+To try the review plugin on the example vault, build it (needs Node.js 18 or later) and copy it into the vault. It needs no settings: it reads the vault's language and uses English headings and an English interface.
 
 ```sh
 cd obsidian-plugin && npm ci && npm run build
+mkdir -p ~/sb-example/.obsidian/plugins/secondbrain-review
 cp main.js manifest.json styles.css ~/sb-example/.obsidian/plugins/secondbrain-review/
 ```
 
@@ -200,7 +201,8 @@ src/secondbrain/          the Python package and the `sb` command
 skills/secondbrain/       Agent Skill for coding-agent harnesses
 obsidian-plugin/          SecondBrain Review plugin (TypeScript)
 tools/mermaid_check/      checks Mermaid with the build Obsidian ships
-examples/vault/           English example vault (CC BY 4.0)
+examples/vault/           English example vault
+examples/vault-zh/        Chinese example vault (the Chinese README's quick start uses it)
 examples/prompts/         grading and explanation prompt templates
 docs/                     guides and specifications
 tests/                    pytest suite
@@ -213,7 +215,7 @@ This is version 0.1.0, built in October 2026 from the tool the author uses on a 
 - It runs on macOS and Linux. Windows is not supported: the transaction lock uses `fcntl`.
 - No command writes a config file, a catalog or taxonomy files yet. You write the catalog and the taxonomy files once by hand; `sb init --catalog <file>` then adds the empty card registry and folders ([docs/new-vault.md](docs/new-vault.md)).
 - Ingest can add a new topic under an existing pillar. It cannot add a pillar or a domain; such material is reported as `needs_taxonomy`.
-- The Agent Skill has run end to end in Claude Code only (it built the example vault). Codex, Pi, headless sessions and MCP hosts follow the same protocol but have not been tested in a real host.
+- The Agent Skill has run end to end in Claude Code only (it built both example vaults). Codex, Pi, headless sessions and MCP hosts follow the same protocol but have not been tested in a real host.
 - In host mode the model name is whatever the sub-agent reports. In Claude Code every sub-agent is a Claude model, so every review there is same-family.
 - The API executors are tested with recorded responses, not against live endpoints.
 - The diagram thresholds are defaults chosen from one vault and a 50-card pilot, not calibrated.
@@ -221,4 +223,4 @@ This is version 0.1.0, built in October 2026 from the tool the author uses on a 
 
 ## License
 
-The code is under the [MIT License](LICENSE). The example vault in [`examples/vault/`](examples/vault/) (cards, source notes, taxonomy, maps and review log) is under [CC BY 4.0](examples/LICENSE).
+Everything in this repository, including the example vaults, is under the [MIT License](LICENSE).

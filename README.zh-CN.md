@@ -6,7 +6,7 @@
 
 ![Second Brain 知识库星图动画：卡片按日期逐日出现，卡片之间的关系逐条点亮，然后镜头进入一个领域](docs/media/second-brain-atlas-zh.gif)
 
-<sub>星图展示的是作者自己的知识库：25 个领域里的 8,615 张卡片和 23,841 条带类型的关系。这些卡片不公开。GIF 是一段 54 秒视频里的三个片段，按原速播放。本仓库提供工具和一个英文[示例库](examples/vault/)。完整视频有中文版和英文版，放在 [Releases 页](../../releases)。</sub>
+<sub>星图展示的是作者自己的知识库：25 个领域里的 8,615 张卡片和 23,841 条带类型的关系。这些卡片不公开。GIF 是 54 秒星图动画里的三个片段，按原速播放。本仓库提供工具和两个小示例库：[中文](examples/vault-zh/)和[英文](examples/vault/)。</sub>
 
 - **入库有第二道把关。** 一个模型从来源起草原子卡片，另一次独立运行对照来源逐卡复核。写入前，程序检查引文、分类和关系。
 - **每份来源一次可恢复的写入。** 卡片、来源副本、登记表和地图页在同一个事务里写入。`sb recover <job> --rollback` 能逐字节撤销。
@@ -30,15 +30,15 @@ python3 -m venv .venv
 . .venv/bin/activate
 pip install -e ".[review]"
 
-cp -R examples/vault ~/sb-example
+cp -R examples/vault-zh ~/sb-example
 export SECONDBRAIN_VAULT=~/sb-example
 ```
 
-示例库有 42 张英文卡片，分属三个领域（学习、数据推理、计算基础），其中 8 张带图。它们由下文的 Agent Skill 从 7 份短笔记做成；另用 `sb review log` 记了 5 次复习。每条 `sb` 命令都输出 JSON。先看看库里有什么：
+示例库有 52 张中文卡片，分属三个领域（学习、数据推理、计算基础），其中 8 张带图。它们由下文的 Agent Skill 从 7 份中文短笔记做成；另用 `sb review log` 记了 5 次复习。英文示例库在 [`examples/vault/`](examples/vault/)，用法相同。每条 `sb` 命令都输出 JSON。先看看库里有什么：
 
 ```sh
 sb status                         # 卡片数、收件箱、复习统计、发现的问题
-sb search "spaced repetition"     # 全库词法检索
+sb search "间隔复习"              # 全库词法检索
 sb review status                  # 各领域已学、到期、新卡
 sb review queue --limit 5         # 现在复习什么
 sb refresh                        # 预览地图页：没有要改的
@@ -46,23 +46,24 @@ sb refresh                        # 预览地图页：没有要改的
 
 用 Obsidian 打开 `~/sb-example`。`HOME.md` 链到 `20_MOCs/` 里的三张地图；卡片在 `10_Knowledge/`，来源笔记在 `40_Sources/`。
 
-收件箱里还留着两份笔记。开始处理其中一份：
+收件箱里还留着两份笔记；`sb inbox list` 也会列出已经入库的 7 份来源，状态是 `done`。开始处理其中一份：
 
 ```sh
 sb inbox list
-sb ingest ~/sb-example/00_Inbox/"Sleep and memory.md" --executor host
+sb ingest ~/sb-example/00_Inbox/"睡眠与记忆.md" --executor host
 ```
 
 结果里的 `handoffs` 给出：给生产者模型的任务文件、答案写到哪里、提交答案的 `sb job submit` 命令。接下来要由模型来做，三种方式任选：
 
 - **在编程 agent 宿主里**（Claude Code、Codex、Pi 等）：把 [`skills/secondbrain`](skills/secondbrain/) 复制到宿主的 skills 目录（Claude Code 是 `~/.claude/skills/secondbrain/`）。从这个 shell 启动宿主，让它能对同一个 `SECONDBRAIN_VAULT` 运行 `sb`。让它处理收件箱。它为每个交接开一个新的子代理，并反复运行 `sb job advance <job_id> --executor host`，直到写入完成。
 - **用 API key**：另装 API 依赖（`pip install -e ".[review,api]"`），在配置文件里写一个生产者端点和一个复核者端点（见[配置](#配置)），然后运行 `sb ingest <file> --executor api`。
-- **手动**：交接只是普通文件和命令（[docs/agents.md](docs/agents.md#doing-it-by-hand)）。
+- **手动**：交接只是普通文件和命令（[docs/agents.zh-CN.md](docs/agents.zh-CN.md#手动操作)）。
 
-想在示例库上试复习插件，先构建插件（需要 Node.js 18 或更高版本），再复制进库。示例库里已经放好了插件针对英文卡片的设置。
+想在示例库上试复习插件，先构建插件（需要 Node.js 18 或更高版本），再复制进库。插件不需要设置：它读取知识库的语言，在中文库里用中文小节名和中文界面。
 
 ```sh
 cd obsidian-plugin && npm ci && npm run build
+mkdir -p ~/sb-example/.obsidian/plugins/secondbrain-review
 cp main.js manifest.json styles.css ~/sb-example/.obsidian/plugins/secondbrain-review/
 ```
 
@@ -94,7 +95,7 @@ flowchart TD
 7. **写入。** 一个事务写入卡片，给已有卡片补上反向关系，把批准的新主题加进分类体系，把来源复制到 `40_Sources/`，更新登记表，重新生成受影响的地图页和 `HOME.md`，并把文件移出收件箱。
 8. **每日复习。** 新卡在复习队列里以新卡出现，不需要另外登记。
 
-细节：[docs/ingest.md](docs/ingest.md)（英文）。
+细节：[docs/ingest.zh-CN.md](docs/ingest.zh-CN.md)。
 
 ## 入口与执行方式
 
@@ -110,7 +111,7 @@ flowchart TD
 - **宿主执行器**（`--executor host`）：工具为每一步写一个任务文件。宿主把它交给一个新的子代理，子代理写 JSON 答案并运行 `sb job submit`。这样用的是你已有的宿主和订阅。模型名由子代理自报。复核者与生产者同属一个模型家族时也接受，记为 `same_family: true`。
 - **API 执行器**（`--executor api`，命令没指定时的默认值）：工具自己调用端点。配置一个生产者和一个复核者（OpenAI 兼容或 Anthropic API），两者须来自不同模型家族，同一家族会被拒绝。key 只从环境变量或命令读取，不从配置文件读。`sb doctor --live` 向每个端点发一次小请求。
 
-各宿主和 MCP 的设置：[docs/agents.md](docs/agents.md)（英文）。
+各宿主和 MCP 的设置：[docs/agents.zh-CN.md](docs/agents.zh-CN.md)。
 
 ## 每日复习
 
@@ -132,9 +133,9 @@ Obsidian 插件 **SecondBrain Review**（[`obsidian-plugin/`](obsidian-plugin/RE
 - **讲解**：模型依据当前卡、相关卡、它在地图里的支柱和主题、你的复习记录讲解，可以继续追问；
 - 提醒：状态栏计数、每日一次通知、一个日历文件。
 
-评分和讲解经由 [AI Providers](https://github.com/pfrankov/obsidian-ai-providers) 插件：在那里添加一个提供方，再在 SecondBrain Review 里选它。提示词是可以改的模板；英文版在 [`examples/prompts/`](examples/prompts/)，示例库用的就是它们。不配提供方，翻卡复习和仪表盘照样能用。
+评分和讲解经由 [AI Providers](https://github.com/pfrankov/obsidian-ai-providers) 插件：在那里添加一个提供方，再在 SecondBrain Review 里选它。提示词是可以改的模板；中文和英文模板都在 [`examples/prompts/`](examples/prompts/)，插件也内置了这两种语言的版本。不配提供方，翻卡复习和仪表盘照样能用。
 
-日志格式和调度规则：[docs/review-registry.md](docs/review-registry.md)（英文）。
+日志格式和调度规则：[docs/review-registry.zh-CN.md](docs/review-registry.zh-CN.md)。
 
 ## 卡内图
 
@@ -145,7 +146,7 @@ Obsidian 插件 **SecondBrain Review**（[`obsidian-plugin/`](obsidian-plugin/RE
 3. 程序检查 IR：规模、引用、标签用词能在被引文字里找到、确有分支或汇合或循环、标签是纯文本、估算宽度放得进笔记。
 4. IR 通过就由程序生成 Mermaid 代码块；不通过，模型带着错误清单重写一次；仍不通过，这张卡就不带图。
 
-模型从不写 Mermaid，所以图里不会出现卡片没说的主张，而且一定能解析。生成器对照 Obsidian 内置的 Mermaid 版本测试（[`tools/mermaid_check`](tools/mermaid_check/README.md)）。用 `[cards] diagrams = false` 关闭这一步。V1 到 V15 各项检查，以及处理库里已有图的批处理工具：[docs/diagrams.md](docs/diagrams.md)（英文）。
+模型从不写 Mermaid，所以图里不会出现卡片没说的主张，而且一定能解析。生成器对照 Obsidian 内置的 Mermaid 版本测试（[`tools/mermaid_check`](tools/mermaid_check/README.md)）。用 `[cards] diagrams = false` 关闭这一步。V1 到 V15 各项检查，以及处理库里已有图的批处理工具：[docs/diagrams.zh-CN.md](docs/diagrams.zh-CN.md)。
 
 ## 配置
 
@@ -174,7 +175,7 @@ language = "zh"               # en | zh：卡片小节名，以及地图页、HO
 diagrams = true
 ```
 
-可选依赖：API 执行器用 `pip install -e ".[api]"`，MCP 服务用 `".[mcp]"`，`sb review`、`sb today` 和 `sb daily` 的复习页用 `".[review]"`。全部配置项、目录布局和复核策略：[docs/configuration.md](docs/configuration.md)（英文）。从零建自己的库：[docs/new-vault.md](docs/new-vault.md)（英文）。
+可选依赖：API 执行器用 `pip install -e ".[api]"`，MCP 服务用 `".[mcp]"`，`sb review`、`sb today` 和 `sb daily` 的复习页用 `".[review]"`。全部配置项、目录布局和复核策略：[docs/configuration.zh-CN.md](docs/configuration.zh-CN.md)。从零建自己的库：[docs/new-vault.zh-CN.md](docs/new-vault.zh-CN.md)。
 
 ## 安全与恢复
 
@@ -200,9 +201,10 @@ src/secondbrain/          Python 包和 `sb` 命令
 skills/secondbrain/       给编程 agent 宿主用的 Agent Skill
 obsidian-plugin/          SecondBrain Review 插件（TypeScript）
 tools/mermaid_check/      用 Obsidian 内置的 Mermaid 版本检查图
-examples/vault/           英文示例库（CC BY 4.0）
+examples/vault-zh/        中文示例库（本说明的快速上手用它）
+examples/vault/           英文示例库
 examples/prompts/         评分与讲解的提示词模板
-docs/                     指南与规格说明（英文）
+docs/                     指南与规格说明（中英两版，中文是 *.zh-CN.md）
 tests/                    pytest 测试
 ```
 
@@ -211,9 +213,9 @@ tests/                    pytest 测试
 这是 0.1.0 版，2026 年 10 月由作者在约 8,600 张中文卡片的知识库上使用的工具整理而成。之后还会有变动。
 
 - 支持 macOS 和 Linux。不支持 Windows：事务锁用的是 `fcntl`。
-- 还没有生成配置文件、领域目录或分类体系文件的命令。领域目录和分类体系文件要手写一次；之后 `sb init --catalog <file>` 补上空的卡片登记表和各个目录（[docs/new-vault.md](docs/new-vault.md)）。
+- 还没有生成配置文件、领域目录或分类体系文件的命令。领域目录和分类体系文件要手写一次；之后 `sb init --catalog <file>` 补上空的卡片登记表和各个目录（[docs/new-vault.zh-CN.md](docs/new-vault.zh-CN.md)）。
 - 入库可以在已有支柱下新增主题，不能新增支柱或领域；这类材料记为 `needs_taxonomy`。
-- Agent Skill 只在 Claude Code 里完整跑过（示例库就是这样建成的）。Codex、Pi、无头会话和 MCP 宿主走同一套协议，但还没在真实宿主里测过。
+- Agent Skill 只在 Claude Code 里完整跑过（两个示例库都是这样建成的）。Codex、Pi、无头会话和 MCP 宿主走同一套协议，但还没在真实宿主里测过。
 - 宿主模式下，模型名由子代理自报。Claude Code 里的子代理都是 Claude 模型，所以那里的复核都记为同一家族。
 - API 执行器用录制的响应测试，没有对真实端点测试。
 - 图的各项阈值是从一个知识库和一次 50 张卡的试点里定的默认值，没有经过校准。
@@ -221,4 +223,4 @@ tests/                    pytest 测试
 
 ## 许可证
 
-代码采用 [MIT 许可证](LICENSE)。[`examples/vault/`](examples/vault/) 里的示例库（卡片、来源笔记、分类体系、地图页和复习日志）采用 [CC BY 4.0](examples/LICENSE)。
+本仓库的全部内容，包括两个示例库，都采用 [MIT 许可证](LICENSE)。

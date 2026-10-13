@@ -15,4 +15,6 @@ First public version.
 - Obsidian plugin SecondBrain Review: English and Chinese interface that follows the vault's language; today view and dashboard, flip review, Q&A review with LLM grading through AI Providers, card explanations with map context, reminders, one-time import of Spaced Repetition schedules.
 - Configuration in TOML, configurable folder layout, keys only from environment variables or commands.
 - `sb init --catalog <file>` puts a hand-written catalog into a vault, adds the empty card registry and folders, and lists the taxonomy files still to write.
-- English example vault (CC BY 4.0): 42 cards built with the Agent Skill and the tool's own ingest chain.
+- Two example vaults built with the Agent Skill and the tool's own ingest chain: English (42 cards) and Chinese (52 cards).
+- README and guides in English and Chinese (`*.zh-CN.md`).
+- MIT License for the whole repository, example vaults included.

@@ -1,0 +1,472 @@
+{
+  "notes": [
+    {
+      "id": "kc_cache-hit-miss",
+      "path": "10_Knowledge/computing/缓存与命中未命中.md",
+      "title": "缓存与命中未命中",
+      "domain": "computing",
+      "pillar": "系统",
+      "topic": "缓存",
+      "source_hash": "948ef92b4909fda1fdb38908d0638863713a62fdae6527e5b3cdab0cd991b11d"
+    },
+    {
+      "id": "kc_hit-ratio-average-access-time",
+      "path": "10_Knowledge/computing/命中率与平均访问时间.md",
+      "title": "命中率与平均访问时间",
+      "domain": "computing",
+      "pillar": "系统",
+      "topic": "缓存",
+      "source_hash": "948ef92b4909fda1fdb38908d0638863713a62fdae6527e5b3cdab0cd991b11d"
+    },
+    {
+      "id": "kc_locality-of-reference",
+      "path": "10_Knowledge/computing/访问局部性.md",
+      "title": "访问局部性",
+      "domain": "computing",
+      "pillar": "系统",
+      "topic": "缓存",
+      "source_hash": "948ef92b4909fda1fdb38908d0638863713a62fdae6527e5b3cdab0cd991b11d"
+    },
+    {
+      "id": "kc_lru-eviction-policy",
+      "path": "10_Knowledge/computing/LRU 淘汰策略.md",
+      "title": "LRU 淘汰策略",
+      "domain": "computing",
+      "pillar": "系统",
+      "topic": "缓存",
+      "source_hash": "948ef92b4909fda1fdb38908d0638863713a62fdae6527e5b3cdab0cd991b11d"
+    },
+    {
+      "id": "kc_lru-hash-linked-list",
+      "path": "10_Knowledge/computing/LRU 的哈希表加双向链表实现.md",
+      "title": "LRU 的哈希表加双向链表实现",
+      "domain": "computing",
+      "pillar": "系统",
+      "topic": "缓存",
+      "source_hash": "948ef92b4909fda1fdb38908d0638863713a62fdae6527e5b3cdab0cd991b11d"
+    },
+    {
+      "id": "kc_lru-scan-weakness",
+      "path": "10_Knowledge/computing/LRU 在大规模扫描下表现差.md",
+      "title": "LRU 在大规模扫描下表现差",
+      "domain": "computing",
+      "pillar": "系统",
+      "topic": "缓存",
+      "source_hash": "948ef92b4909fda1fdb38908d0638863713a62fdae6527e5b3cdab0cd991b11d"
+    },
+    {
+      "id": "kc_cache-invalidation",
+      "path": "10_Knowledge/computing/缓存失效.md",
+      "title": "缓存失效",
+      "domain": "computing",
+      "pillar": "系统",
+      "topic": "缓存",
+      "source_hash": "948ef92b4909fda1fdb38908d0638863713a62fdae6527e5b3cdab0cd991b11d"
+    },
+    {
+      "id": "kc_memory-stability",
+      "path": "10_Knowledge/learning/记忆的稳定性.md",
+      "title": "记忆的稳定性",
+      "domain": "learning",
+      "pillar": "记忆",
+      "topic": "遗忘",
+      "source_hash": "5a21fdfd90b1370f082d8b63973a7f125830d25ea5780d5da04dc45c6cd2621c"
+    },
+    {
+      "id": "kc_spacing-effect",
+      "path": "10_Knowledge/learning/间隔效应.md",
+      "title": "间隔效应",
+      "domain": "learning",
+      "pillar": "学习策略",
+      "topic": "间隔",
+      "source_hash": "5a21fdfd90b1370f082d8b63973a7f125830d25ea5780d5da04dc45c6cd2621c"
+    },
+    {
+      "id": "kc_effortful-retrieval-raises-stability",
+      "path": "10_Knowledge/learning/费力但成功的提取更能提高稳定性.md",
+      "title": "费力但成功的提取更能提高稳定性",
+      "domain": "learning",
+      "pillar": "学习策略",
+      "topic": "提取",
+      "source_hash": "5a21fdfd90b1370f082d8b63973a7f125830d25ea5780d5da04dc45c6cd2621c"
+    },
+    {
+      "id": "kc_expanding-review-intervals",
+      "path": "10_Knowledge/learning/逐步拉长复习间隔.md",
+      "title": "逐步拉长复习间隔",
+      "domain": "learning",
+      "pillar": "学习策略",
+      "topic": "间隔",
+      "source_hash": "5a21fdfd90b1370f082d8b63973a7f125830d25ea5780d5da04dc45c6cd2621c"
+    },
+    {
+      "id": "kc_scheduler-target-recall-probability",
+      "path": "10_Knowledge/learning/调度程序按目标回忆概率安排复习.md",
+      "title": "调度程序按目标回忆概率安排复习",
+      "domain": "learning",
+      "pillar": "学习策略",
+      "topic": "间隔",
+      "source_hash": "5a21fdfd90b1370f082d8b63973a7f125830d25ea5780d5da04dc45c6cd2621c"
+    },
+    {
+      "id": "kc_spacing-needs-active-recall",
+      "path": "10_Knowledge/learning/间隔需要主动回忆才有收益.md",
+      "title": "间隔需要主动回忆才有收益",
+      "domain": "learning",
+      "pillar": "学习策略",
+      "topic": "提取",
+      "source_hash": "5a21fdfd90b1370f082d8b63973a7f125830d25ea5780d5da04dc45c6cd2621c"
+    },
+    {
+      "id": "kc_forgetting-curve",
+      "path": "10_Knowledge/learning/遗忘曲线.md",
+      "title": "遗忘曲线",
+      "domain": "learning",
+      "pillar": "记忆",
+      "topic": "遗忘",
+      "source_hash": "5a21fdfd90b1370f082d8b63973a7f125830d25ea5780d5da04dc45c6cd2621c"
+    },
+    {
+      "id": "kc_flashcard-feedback",
+      "path": "10_Knowledge/learning/提取中的反馈与抽认卡.md",
+      "title": "提取中的反馈与抽认卡",
+      "domain": "learning",
+      "pillar": "学习策略",
+      "topic": "提取",
+      "source_hash": "7c351f3b97300755d068ac8fa8ce816b6f6ad09e0c3308f0372b88393815c4ae"
+    },
+    {
+      "id": "kc_illusion-of-fluency",
+      "path": "10_Knowledge/learning/流畅错觉.md",
+      "title": "流畅错觉",
+      "domain": "learning",
+      "pillar": "学习策略",
+      "topic": "提取",
+      "source_hash": "7c351f3b97300755d068ac8fa8ce816b6f6ad09e0c3308f0372b88393815c4ae"
+    },
+    {
+      "id": "kc_desirable-difficulties",
+      "path": "10_Knowledge/learning/必要难度.md",
+      "title": "必要难度",
+      "domain": "learning",
+      "pillar": "学习策略",
+      "topic": "练习设计",
+      "source_hash": "7c351f3b97300755d068ac8fa8ce816b6f6ad09e0c3308f0372b88393815c4ae"
+    },
+    {
+      "id": "kc_performance-vs-long-term-retention",
+      "path": "10_Knowledge/learning/练习期间的表现不能预测长期效果.md",
+      "title": "练习期间的表现不能预测长期效果",
+      "domain": "learning",
+      "pillar": "学习策略",
+      "topic": "练习设计",
+      "source_hash": "7c351f3b97300755d068ac8fa8ce816b6f6ad09e0c3308f0372b88393815c4ae"
+    },
+    {
+      "id": "kc_retrieval-practice",
+      "path": "10_Knowledge/learning/提取练习.md",
+      "title": "提取练习",
+      "domain": "learning",
+      "pillar": "学习策略",
+      "topic": "提取",
+      "source_hash": "7c351f3b97300755d068ac8fa8ce816b6f6ad09e0c3308f0372b88393815c4ae"
+    },
+    {
+      "id": "kc_interleaving",
+      "path": "10_Knowledge/learning/交错练习.md",
+      "title": "交错练习",
+      "domain": "learning",
+      "pillar": "学习策略",
+      "topic": "练习设计",
+      "source_hash": "7c351f3b97300755d068ac8fa8ce816b6f6ad09e0c3308f0372b88393815c4ae"
+    },
+    {
+      "id": "kc_conditional-probability",
+      "path": "10_Knowledge/statistics/条件概率的定义与计算.md",
+      "title": "条件概率的定义与计算",
+      "domain": "statistics",
+      "pillar": "概率",
+      "topic": "条件概率",
+      "source_hash": "f7aa13f714c806cccbda8193c874ede768d000bea7903ee6972296f50ae059eb"
+    },
+    {
+      "id": "kc_confusion-of-inverse",
+      "path": "10_Knowledge/statistics/逆概率混淆与检察官谬误.md",
+      "title": "逆概率混淆与检察官谬误",
+      "domain": "statistics",
+      "pillar": "概率",
+      "topic": "条件概率",
+      "source_hash": "f7aa13f714c806cccbda8193c874ede768d000bea7903ee6972296f50ae059eb"
+    },
+    {
+      "id": "kc_bayes-terms",
+      "path": "10_Knowledge/statistics/先验概率、似然与后验概率.md",
+      "title": "先验概率、似然与后验概率",
+      "domain": "statistics",
+      "pillar": "概率",
+      "topic": "贝叶斯推理",
+      "source_hash": "f7aa13f714c806cccbda8193c874ede768d000bea7903ee6972296f50ae059eb"
+    },
+    {
+      "id": "kc_evidence-strength",
+      "path": "10_Knowledge/statistics/证据应当让信念改变多少.md",
+      "title": "证据应当让信念改变多少",
+      "domain": "statistics",
+      "pillar": "概率",
+      "topic": "贝叶斯推理",
+      "source_hash": "f7aa13f714c806cccbda8193c874ede768d000bea7903ee6972296f50ae059eb"
+    },
+    {
+      "id": "kc_sensitivity",
+      "path": "10_Knowledge/statistics/灵敏度.md",
+      "title": "灵敏度",
+      "domain": "statistics",
+      "pillar": "概率",
+      "topic": "条件概率",
+      "source_hash": "f7aa13f714c806cccbda8193c874ede768d000bea7903ee6972296f50ae059eb"
+    },
+    {
+      "id": "kc_positive-predictive-value",
+      "path": "10_Knowledge/statistics/阳性预测值与基础率.md",
+      "title": "阳性预测值与基础率",
+      "domain": "statistics",
+      "pillar": "概率",
+      "topic": "贝叶斯推理",
+      "source_hash": "f7aa13f714c806cccbda8193c874ede768d000bea7903ee6972296f50ae059eb"
+    },
+    {
+      "id": "kc_base-rate-neglect",
+      "path": "10_Knowledge/statistics/基础率忽视.md",
+      "title": "基础率忽视",
+      "domain": "statistics",
+      "pillar": "概率",
+      "topic": "贝叶斯推理",
+      "source_hash": "f7aa13f714c806cccbda8193c874ede768d000bea7903ee6972296f50ae059eb"
+    },
+    {
+      "id": "kc_count-format",
+      "path": "10_Knowledge/statistics/计数形式比百分比更易看出正确答案.md",
+      "title": "计数形式比百分比更易看出正确答案",
+      "domain": "statistics",
+      "pillar": "概率",
+      "topic": "贝叶斯推理",
+      "source_hash": "f7aa13f714c806cccbda8193c874ede768d000bea7903ee6972296f50ae059eb"
+    },
+    {
+      "id": "kc_bayes-rule",
+      "path": "10_Knowledge/statistics/贝叶斯法则.md",
+      "title": "贝叶斯法则",
+      "domain": "statistics",
+      "pillar": "概率",
+      "topic": "贝叶斯推理",
+      "source_hash": "f7aa13f714c806cccbda8193c874ede768d000bea7903ee6972296f50ae059eb"
+    },
+    {
+      "id": "kc_screening-example",
+      "path": "10_Knowledge/statistics/低患病率下阳性检测的真实含义.md",
+      "title": "低患病率下阳性检测的真实含义",
+      "domain": "statistics",
+      "pillar": "概率",
+      "topic": "贝叶斯推理",
+      "source_hash": "f7aa13f714c806cccbda8193c874ede768d000bea7903ee6972296f50ae059eb"
+    },
+    {
+      "id": "kc_p-value-definition",
+      "path": "10_Knowledge/statistics/p 值的定义.md",
+      "title": "p 值的定义",
+      "domain": "statistics",
+      "pillar": "推断",
+      "topic": "假设检验",
+      "source_hash": "20ee79291f293d22ac3e8e457666724f8d6acfbbadf6df24aada33e32cd7d446"
+    },
+    {
+      "id": "kc_p-value-misreadings",
+      "path": "10_Knowledge/statistics/p 值的常见误读与 0.05 阈值.md",
+      "title": "p 值的常见误读与 0.05 阈值",
+      "domain": "statistics",
+      "pillar": "推断",
+      "topic": "假设检验",
+      "source_hash": "20ee79291f293d22ac3e8e457666724f8d6acfbbadf6df24aada33e32cd7d446"
+    },
+    {
+      "id": "kc_multiple-comparisons-false-discoveries",
+      "path": "10_Knowledge/statistics/多重比较导致虚假发现.md",
+      "title": "多重比较导致虚假发现",
+      "domain": "statistics",
+      "pillar": "推断",
+      "topic": "假设检验",
+      "source_hash": "20ee79291f293d22ac3e8e457666724f8d6acfbbadf6df24aada33e32cd7d446"
+    },
+    {
+      "id": "kc_multiple-comparisons-remedies",
+      "path": "10_Knowledge/statistics/多重比较的补救办法.md",
+      "title": "多重比较的补救办法",
+      "domain": "statistics",
+      "pillar": "推断",
+      "topic": "假设检验",
+      "source_hash": "20ee79291f293d22ac3e8e457666724f8d6acfbbadf6df24aada33e32cd7d446"
+    },
+    {
+      "id": "kc_ci-frequentist-meaning",
+      "path": "10_Knowledge/statistics/95% 置信区间的频率学派含义.md",
+      "title": "95% 置信区间的频率学派含义",
+      "domain": "statistics",
+      "pillar": "推断",
+      "topic": "估计",
+      "source_hash": "20ee79291f293d22ac3e8e457666724f8d6acfbbadf6df24aada33e32cd7d446"
+    },
+    {
+      "id": "kc_ci-width-precision",
+      "path": "10_Knowledge/statistics/置信区间的宽度反映估计精度.md",
+      "title": "置信区间的宽度反映估计精度",
+      "domain": "statistics",
+      "pillar": "推断",
+      "topic": "估计",
+      "source_hash": "20ee79291f293d22ac3e8e457666724f8d6acfbbadf6df24aada33e32cd7d446"
+    },
+    {
+      "id": "kc_statistical-vs-practical-significance",
+      "path": "10_Knowledge/statistics/统计显著性不等于实际显著性.md",
+      "title": "统计显著性不等于实际显著性",
+      "domain": "statistics",
+      "pillar": "推断",
+      "topic": "假设检验",
+      "source_hash": "20ee79291f293d22ac3e8e457666724f8d6acfbbadf6df24aada33e32cd7d446"
+    },
+    {
+      "id": "kc_big-o",
+      "path": "10_Knowledge/computing/大 O 记号.md",
+      "title": "大 O 记号",
+      "domain": "computing",
+      "pillar": "算法",
+      "topic": "复杂度",
+      "source_hash": "5dc5cc20ee6359f4698e2a2dc042226a1c1ffb859e7652c0fe3eaf5b1b464593"
+    },
+    {
+      "id": "kc_complexity-classes-order",
+      "path": "10_Knowledge/computing/常见复杂度类别的增长顺序.md",
+      "title": "常见复杂度类别的增长顺序",
+      "domain": "computing",
+      "pillar": "算法",
+      "topic": "复杂度",
+      "source_hash": "5dc5cc20ee6359f4698e2a2dc042226a1c1ffb859e7652c0fe3eaf5b1b464593"
+    },
+    {
+      "id": "kc_binary-search-midpoint-overflow",
+      "path": "10_Knowledge/computing/二分查找中点计算的溢出.md",
+      "title": "二分查找中点计算的溢出",
+      "domain": "computing",
+      "pillar": "算法",
+      "topic": "查找",
+      "source_hash": "5dc5cc20ee6359f4698e2a2dc042226a1c1ffb859e7652c0fe3eaf5b1b464593"
+    },
+    {
+      "id": "kc_logarithmic-time",
+      "path": "10_Knowledge/computing/对数时间.md",
+      "title": "对数时间",
+      "domain": "computing",
+      "pillar": "算法",
+      "topic": "复杂度",
+      "source_hash": "5dc5cc20ee6359f4698e2a2dc042226a1c1ffb859e7652c0fe3eaf5b1b464593"
+    },
+    {
+      "id": "kc_balanced-search-tree-lookup",
+      "path": "10_Knowledge/computing/平衡搜索树的查找代价.md",
+      "title": "平衡搜索树的查找代价",
+      "domain": "computing",
+      "pillar": "算法",
+      "topic": "查找",
+      "source_hash": "5dc5cc20ee6359f4698e2a2dc042226a1c1ffb859e7652c0fe3eaf5b1b464593"
+    },
+    {
+      "id": "kc_linear-search",
+      "path": "10_Knowledge/computing/线性查找.md",
+      "title": "线性查找",
+      "domain": "computing",
+      "pillar": "算法",
+      "topic": "查找",
+      "source_hash": "5dc5cc20ee6359f4698e2a2dc042226a1c1ffb859e7652c0fe3eaf5b1b464593"
+    },
+    {
+      "id": "kc_search-once-vs-many",
+      "path": "10_Knowledge/computing/一次查找与多次查找的取舍.md",
+      "title": "一次查找与多次查找的取舍",
+      "domain": "computing",
+      "pillar": "算法",
+      "topic": "查找",
+      "source_hash": "5dc5cc20ee6359f4698e2a2dc042226a1c1ffb859e7652c0fe3eaf5b1b464593"
+    },
+    {
+      "id": "kc_binary-search",
+      "path": "10_Knowledge/computing/二分查找.md",
+      "title": "二分查找",
+      "domain": "computing",
+      "pillar": "算法",
+      "topic": "查找",
+      "source_hash": "5dc5cc20ee6359f4698e2a2dc042226a1c1ffb859e7652c0fe3eaf5b1b464593"
+    },
+    {
+      "id": "kc_hash-function",
+      "path": "10_Knowledge/computing/哈希函数的要求.md",
+      "title": "哈希函数的要求",
+      "domain": "computing",
+      "pillar": "数据结构",
+      "topic": "哈希",
+      "source_hash": "0aa59fe4bfe6d25132befa6025e6cae9de5e84cb4692eddafc60c380478adff7"
+    },
+    {
+      "id": "kc_hash-table-lookup",
+      "path": "10_Knowledge/computing/哈希表的查找与平均代价.md",
+      "title": "哈希表的查找与平均代价",
+      "domain": "computing",
+      "pillar": "数据结构",
+      "topic": "哈希",
+      "source_hash": "0aa59fe4bfe6d25132befa6025e6cae9de5e84cb4692eddafc60c380478adff7"
+    },
+    {
+      "id": "kc_collision-resolution",
+      "path": "10_Knowledge/computing/冲突与两种解决办法.md",
+      "title": "冲突与两种解决办法",
+      "domain": "computing",
+      "pillar": "数据结构",
+      "topic": "哈希",
+      "source_hash": "0aa59fe4bfe6d25132befa6025e6cae9de5e84cb4692eddafc60c380478adff7"
+    },
+    {
+      "id": "kc_load-factor-resize",
+      "path": "10_Knowledge/computing/负载因子与哈希表扩容.md",
+      "title": "负载因子与哈希表扩容",
+      "domain": "computing",
+      "pillar": "数据结构",
+      "topic": "哈希",
+      "source_hash": "0aa59fe4bfe6d25132befa6025e6cae9de5e84cb4692eddafc60c380478adff7"
+    },
+    {
+      "id": "kc_amortised-constant-time",
+      "path": "10_Knowledge/computing/均摊常数时间.md",
+      "title": "均摊常数时间",
+      "domain": "computing",
+      "pillar": "算法",
+      "topic": "复杂度",
+      "source_hash": "0aa59fe4bfe6d25132befa6025e6cae9de5e84cb4692eddafc60c380478adff7"
+    },
+    {
+      "id": "kc_bloom-filter",
+      "path": "10_Knowledge/computing/布隆过滤器.md",
+      "title": "布隆过滤器",
+      "domain": "computing",
+      "pillar": "数据结构",
+      "topic": "概率型结构",
+      "source_hash": "0aa59fe4bfe6d25132befa6025e6cae9de5e84cb4692eddafc60c380478adff7"
+    },
+    {
+      "id": "kc_bloom-filter-prefilter",
+      "path": "10_Knowledge/computing/布隆过滤器作为慢速查找的前置检查.md",
+      "title": "布隆过滤器作为慢速查找的前置检查",
+      "domain": "computing",
+      "pillar": "数据结构",
+      "topic": "概率型结构",
+      "source_hash": "0aa59fe4bfe6d25132befa6025e6cae9de5e84cb4692eddafc60c380478adff7"
+    }
+  ]
+}

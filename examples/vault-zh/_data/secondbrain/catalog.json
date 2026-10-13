@@ -1,0 +1,63 @@
+{
+  "schema": "secondbrain-catalog/1",
+  "tracks": [
+    {
+      "id": "learning-science",
+      "title": "学习科学",
+      "domains": [
+        "learning"
+      ]
+    },
+    {
+      "id": "quantitative",
+      "title": "定量推理",
+      "domains": [
+        "statistics",
+        "computing"
+      ]
+    }
+  ],
+  "domains": {
+    "learning": {
+      "moc": "我们如何学习",
+      "question": "人是怎样学习的，又怎样把学到的东西留住？"
+    },
+    "statistics": {
+      "moc": "用数据推理",
+      "question": "数据里混着偶然和偏差，怎样从中得出可靠的结论？"
+    },
+    "computing": {
+      "moc": "计算基础",
+      "question": "程序怎样存放数据，又怎样快速找到数据？"
+    }
+  },
+  "relation_types": [
+    "depends_on",
+    "required_by",
+    "part_of",
+    "has_part",
+    "example_of",
+    "has_example",
+    "similar_to",
+    "contrasts_with"
+  ],
+  "inverse_relations": {
+    "depends_on": "required_by",
+    "required_by": "depends_on",
+    "part_of": "has_part",
+    "has_part": "part_of",
+    "example_of": "has_example",
+    "has_example": "example_of",
+    "similar_to": "similar_to",
+    "contrasts_with": "contrasts_with"
+  },
+  "relation_gloss": {
+    "depends_on": "要先理解目标卡",
+    "part_of": "本卡讲的是目标卡的一个组成部分",
+    "example_of": "本卡是目标卡的一个具体例子",
+    "similar_to": "同一个想法或机制出现在另一个场景",
+    "contrasts_with": "容易和目标卡混淆，区别很重要"
+  },
+  "domain_relations": {},
+  "language": "zh"
+}

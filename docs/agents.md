@@ -1,5 +1,7 @@
 # Running Second Brain with agents and models
 
+[中文](agents.zh-CN.md)
+
 The model work of an ingest (producing cards, reviewing them, proposing diagrams) can be done by sub-agents of a coding-agent harness, or by the tool calling API endpoints. Everything else is done by `sb`.
 
 ## Agent Skill
@@ -15,7 +17,7 @@ The agent coordinates. For each hand-off it starts a new sub-agent with a short 
 
 When the harness lets you choose models, give reviewers a model from a different family than the producer. A same-family review is accepted in host mode and recorded as `same_family: true` in the job. In Claude Code all sub-agents are Claude models, so every review there is same-family.
 
-The [example vault](../examples/vault/) was built this way in Claude Code: 7 sources, 34 sub-agents (producers on one Claude model, reviewers on another), 42 cards. Other harnesses (Codex, Pi and others) should work the same way, but they have not been tested.
+The [example vault](../examples/vault/) was built this way in Claude Code: 7 sources, 34 sub-agents (producers on one Claude model, reviewers on another), 42 cards. The [Chinese example vault](../examples/vault-zh/) was built the same way from Chinese notes: 7 sources, 31 sub-agents, 52 cards. Other harnesses (Codex, Pi and others) should work the same way, but they have not been tested.
 
 ### Without sub-agents
 

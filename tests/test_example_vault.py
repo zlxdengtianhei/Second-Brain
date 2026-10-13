@@ -107,7 +107,7 @@ def test_cards_have_english_sections_and_resolving_relations():
 
 
 def test_docs_state_the_vault_counts():
-    """The numbers the READMEs and the agents guide give for the example vault are the vault's."""
+    """The numbers the READMEs and the agents guides give for the English example vault are the vault's."""
     by_domain = {}
     for path in cards():
         domain = front_matter(path)['domain']
@@ -120,13 +120,16 @@ def test_docs_state_the_vault_counts():
     expected = {
         'README.md': [f'The example vault has {n} cards in three domains', f'{diagrams} of them with a diagram',
                       f'from {sources} short notes', f'{words[reviews]} reviews were logged'],
-        'README.zh-CN.md': [f'示例库有 {n} 张英文卡片，分属三个领域', f'其中 {diagrams} 张带图',
-                            f'从 {sources} 份短笔记', f'记了 {reviews} 次复习'],
         'examples/README.md': [f'{n} cards in three domains: `learning` ({by_domain["learning"]}), '
                                f'`statistics` ({by_domain["statistics"]}), `computing` ({by_domain["computing"]}); '
                                f'{diagrams} cards have a diagram',
                                f'the {sources} source notes', f'a review log with {reviews} reviews'],
+        'examples/README.zh-CN.md': [f'{n} 张卡片，分属三个领域：`learning`（{by_domain["learning"]}）、'
+                                     f'`statistics`（{by_domain["statistics"]}）、`computing`（{by_domain["computing"]}）；'
+                                     f'其中 {diagrams} 张带图'],
         'docs/agents.md': [f'{sources} sources, 34 sub-agents', f'{n} cards'],
+        'docs/agents.zh-CN.md': [f'{sources} 份来源，34 个子代理，{n} 张卡片'],
+        'README.zh-CN.md': ['[英文](examples/vault/)'],
     }
     for name, phrases in expected.items():
         text = (ROOT / name).read_text(encoding='utf-8')

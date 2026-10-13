@@ -1,5 +1,7 @@
 # Ingest: from an inbox file to cards
 
+[中文](ingest.zh-CN.md)
+
 This page describes what `sb ingest` does, what each check rejects, what is written, and how to recover. The [README](../README.md) has the short version.
 
 ## The inbox
