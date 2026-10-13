@@ -121,13 +121,15 @@ PAGES = {
             '## 今日复习', '',
             '```secondbrain-review',
             '```', '',
-            '[[{review}|打开今日复习]]：不依赖插件的今日复习页；页面缺失时运行 `sb today --apply`。', '',
+            '{review_link}', '',
             '面板由 SecondBrain Review 插件显示；终端里用 `sb review status` 看进度，`sb review queue` 看今天的卡。', '',
             '## 现在做什么', '',
             '1. 复习：用上面的面板，或终端 `sb review queue`。',
             '2. 新资料放进 `{inbox}/`，运行 `sb inbox list`，再 `sb ingest <文件>`。',
             '3. 未完成的任务：`sb job list`；部分写入的源：`sb ingest --retry <任务>`。',
         ],
+        'review_link': '[[{review}|打开今日复习]]：不依赖插件的今日复习页；页面缺失时运行 `sb today --apply`。',
+        'review_missing': '今日复习页还没有生成：运行 `sb today --apply`（不依赖插件）。',
         'domains_title': '## 领域入口',
         'map_line': '- [[{path}|{title}]] · {n} 张',
         'stats_title': '## 库存',
@@ -177,8 +179,7 @@ PAGES = {
             "## Today's review", '',
             '```secondbrain-review',
             '```', '',
-            "[[{review}|Open today's review page]]: works without the plugin; if the page is missing, "
-            'run `sb today --apply`.', '',
+            '{review_link}', '',
             'The dashboard comes from the SecondBrain Review plugin; in a terminal use `sb review status` '
             "for progress and `sb review queue` for today's cards.", '',
             '## What to do now', '',
@@ -186,6 +187,10 @@ PAGES = {
             '2. Put new material into `{inbox}/`, run `sb inbox list`, then `sb ingest <file>`.',
             '3. Unfinished jobs: `sb job list`; sources with pending cards: `sb ingest --retry <job>`.',
         ],
+        'review_link': "[[{review}|Open today's review page]]: works without the plugin; if the page is "
+                       'missing, run `sb today --apply`.',
+        'review_missing': "Today's review page has not been made yet: run `sb today --apply` "
+                          '(works without the plugin).',
         'domains_title': '## Maps',
         'map_line': '- [[{path}|{title}]] · cards: {n}',
         'stats_title': '## Inventory',

@@ -228,7 +228,11 @@ def entry_projection(snapshot, today: date, *, final_paths=(), removed_paths=(),
     rows += [f'| `{d}/` | {directory_counts[d]:,} |' for d in directory_counts]
     rows += ['', T['stats_note']]
     stats = '\n'.join(rows)
-    home = [line.format(inbox=lay.inbox, review=review_page(lay, today)[:-3]) for line in T['home']] + ['']
+    page = review_page(lay, today)
+    # link today's review page only when it exists or this write makes it, so the link resolves
+    made = page in set(final_paths) or (snapshot.root is not None and (snapshot.root / page).is_file())
+    review_line = T['review_link'].format(review=page[:-3]) if made else T['review_missing']
+    home = [line.format(inbox=lay.inbox, review_link=review_line) for line in T['home']] + ['']
     if lay.entry_docs:
         home += [' · '.join(f'[[{name[:-3]}]]' for name in lay.entry_docs), '']
     home += [T['domains_title'], '']

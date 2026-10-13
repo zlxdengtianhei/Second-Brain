@@ -105,6 +105,8 @@ def test_the_daily_review_page_shows_the_review_queue(vault, capsys):
     listed = re.findall(r'^- \[\[([^|\]]+)\|', page, re.M)
     assert listed == [c['path'][:-3] for c in queue['cards']]  # same cards, same order
     assert f"New cards not started yet: {queue['new_available']}; {queue['new_count']} of them" in page
+    assert "[[50_Reviews/Daily review 2026-10-13|Open today's review page]]" in (vault / 'HOME.md').read_text(
+        encoding='utf-8')  # written in the same transaction, so HOME links it
 
 
 def test_without_the_review_extra_daily_writes_home_and_today_explains(vault, capsys, monkeypatch):
