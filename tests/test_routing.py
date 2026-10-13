@@ -36,6 +36,31 @@ def test_the_source_domain_wins_over_a_large_domain_with_the_same_generic_words(
     assert routed['votes']['algorithms'] > 0.5
 
 
+def test_the_domain_size_correction_keeps_a_large_domain_from_winning_on_generic_hits(tmp_path, monkeypatch):
+    """Votes are divided by the square root of each domain's share of cards; without it the large domain wins."""
+    from secondbrain import index as index_module
+    root = build(tmp_path / 'vault')
+    snap = read_snapshot(root)
+    by_domain: dict = {}
+    for card in sorted(snap.cards.values(), key=lambda c: c.id):
+        by_domain.setdefault(card.domain, []).append({'id': card.id, 'domain': card.domain, 'title': card.title})
+    assert len(by_domain['agent-harness']) > 6 * len(by_domain['algorithms'])
+    # one passage of generic words hits only the large domain; one about sorting hits all sorting cards first
+    generic = by_domain['agent-harness'][:10]
+    sorting = by_domain['algorithms'][:4] + by_domain['agent-harness'][10:16]
+    monkeypatch.setattr(index_module, 'search_many', lambda root, snapshot, parts, k: [generic, sorting])
+    text = ' '.join(f'g{i}' for i in range(40)) + '\n\n' + ' '.join(f's{i}' for i in range(40))
+    raw: dict = {}
+    for hits in (generic, sorting):
+        total = sum(1 / (r + 1) for r in range(len(hits)))
+        for r, hit in enumerate(hits):
+            raw[hit['domain']] = raw.get(hit['domain'], 0) + (1 / (r + 1)) / total
+    assert max(raw, key=raw.get) == 'agent-harness'  # the same hits, uncorrected
+    routed = route(root, snap, text, domains=1)
+    assert routed['passages'] == 2 and routed['domains'] == ['algorithms']
+    assert routed['votes']['algorithms'] > routed['votes']['agent-harness']
+
+
 def test_prepare_freezes_the_routed_domains(tmp_path):
     root = build(tmp_path / 'vault')
     prepared = ingest.prepare(root, root / '00_Inbox' / 'practice.md')
@@ -66,7 +91,8 @@ def test_a_repair_round_gets_the_taxonomy_of_the_domain_the_reviewer_names(tmp_p
     root = build_ingest_vault(tmp_path / 'vault')
     config.activate(replace(config.current(), ingest=replace(config.current().ingest, candidate_domains=1)))
     review = first_review()
-    review['cards'][2].update(suggested_domain='transformer', reason='this belongs with the transformer cards')
+    # the field alone, with a reason that names no domain (the reason path is tested below)
+    review['cards'][2].update(suggested_domain='transformer', reason='this belongs with the decoder cards')
     produce, respond, seen = scripted([first_candidate(), repair_candidate()], [review, repair_review()])
     prepared = ingest.prepare(root, root / '00_Inbox' / SOURCE_NAME)
     [chunk] = jobs.read_input(root, prepared['job_id'])['chunks']
