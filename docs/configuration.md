@@ -147,7 +147,7 @@ Maps a substring of a model name to a family, for the independent-review check. 
 
 | Key | Default | Meaning |
 |---|---|---|
-| `language` | `en` | `en` or `zh`. Sets the section headings of new cards (`en`: Essence, Propositions, Diagram, Intuition and contrasts, Related, Review cards) and the fixed text of the generated pages: maps, `HOME.md` and the daily review page. Card text follows the language of the source. |
+| `language` | the vault's language | `en` or `zh`. Sets the section headings of new cards (`en`: Essence, Propositions, Diagram, Intuition and contrasts, Related, Review cards) and the fixed text of the generated pages: maps, `HOME.md` and the daily review page. Card text follows the language of the source. Without this key, `sb` uses the vault's language (recorded in the catalog, else found from its maps, else `en`). If this key names another language than the vault's, writes are refused until `sb language --set` switches the vault. |
 | `diagrams` | true | Run the diagram step after review ([diagrams.md](diagrams.md)). |
 
 ### `[taxonomy]` and `[git]`

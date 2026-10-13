@@ -95,7 +95,7 @@ The write-back rules for a pool card:
 
 A typical run: `audit-extract`, then `node tools/mermaid_check/check.mjs OUT/blocks.jsonl OUT/checks.jsonl`, then `audit-tier`, `prune`, `pool`, `packets` on the pool, the model answers, `apply --checker`, the rewrites, `old-audit-packets` and `old-audit-apply`, and finally `writeback` without `--write` to read the plan, then with `--write`. Run `sb diagrams <command> --help` for every option.
 
-The commands that read or write cards in a vault (`audit-extract`, `prune`, `writeback`) find the card sections by language: `--language en|zh` when given, else `[cards] language` of the config file, else the headings the cards use. They print the choice on stderr. `pool` reads `cards.jsonl`, so it follows the language that `audit-extract` used.
+The commands that read or write cards in a vault (`audit-extract`, `prune`, `writeback`) find the card sections by language: `--language en|zh` when given, else the vault's recorded language (`sb language`), else `[cards] language` of the config file, else the headings the cards use. They print the choice on stderr. `pool` reads `cards.jsonl`, so it follows the language that `audit-extract` used. `audit-extract` reads the cards under `--knowledge-dir`, else `[layout] knowledge` of the config file, else `10_Knowledge`.
 
 ## Checking against Obsidian's Mermaid
 

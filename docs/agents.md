@@ -8,14 +8,14 @@ The model work of an ingest (producing cards, reviewing them, proposing diagrams
 
 1. Install the package so that `sb` runs in your shell (see the README quick start), and set the vault with `SECONDBRAIN_VAULT` or the config file.
 2. Copy `skills/secondbrain/` into the skills folder of your harness. For Claude Code that is `~/.claude/skills/secondbrain/` (all projects) or `.claude/skills/secondbrain/` (one project). For other harnesses, see their documentation on Agent Skills.
-3. Start the harness from that shell. Its sub-agents run the `submit_cmd` of their hand-off themselves. That command already names the vault (`--vault`), the config file (`--config`, when one is used) and the state directory (when `SECONDBRAIN_STATE_DIR` is set), but it calls `sb` by name. So `sb` must be on the `PATH` of the sub-agents' shells: activate the virtual environment before you start the harness, or link `sb` into a folder that is on your `PATH`.
+3. Start the harness from that shell, so that the agent can run `sb` with the same vault. Its sub-agents run the `submit_cmd` of their hand-off themselves. That command names `sb` by its full path, the vault (`--vault`), the config file (`--config`, when one is used) and the state directory (when `SECONDBRAIN_STATE_DIR` is set), so a sub-agent reaches the same job even when its shell does not have your virtual environment.
 4. Ask the agent to process the inbox, or to make cards from a file.
 
 The agent coordinates. For each hand-off it starts a new sub-agent with a short fixed text that points to the task file, the answer file and the submit command; it does not add its own view of the material. `sb` checks each answer when it is submitted and returns errors to the sub-agent. The agent then runs `sb job advance <job_id> --executor host` until the job is `applied` or `partial`, and reports new cards, pending cards with the reviewer's reasons, duplicates and material that needs a new pillar or domain.
 
 When the harness lets you choose models, give reviewers a model from a different family than the producer. A same-family review is accepted in host mode and recorded as `same_family: true` in the job. In Claude Code all sub-agents are Claude models, so every review there is same-family.
 
-The [example vault](../examples/vault/) was built this way in Claude Code: 7 sources, 34 sub-agents (producers on one Claude model, reviewers on another), 42 cards. In that run the sub-agent shells did not have the virtual environment, so the coordinator wrote the full path of `sb` into each submit command. Other harnesses (Codex, Pi and others) should work the same way, but they have not been tested.
+The [example vault](../examples/vault/) was built this way in Claude Code: 7 sources, 34 sub-agents (producers on one Claude model, reviewers on another), 42 cards. Other harnesses (Codex, Pi and others) should work the same way, but they have not been tested.
 
 ### Without sub-agents
 

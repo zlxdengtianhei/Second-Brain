@@ -50,7 +50,7 @@ Then write it into the vault:
 sb init --catalog catalog.json
 ```
 
-The catalog is written once. To change it later, edit `_data/secondbrain/catalog.json` with care, or use the curation commands.
+The catalog is written once. `sb init` also records the vault's language in it: `[cards] language` from the config file if set, else the language of maps already in the folder, else English. `sb language` shows it; `sb language --set zh` switches it, and then `sb refresh --apply` and `sb docs --apply` rewrite the generated pages. To change other parts of the catalog later, edit `_data/secondbrain/catalog.json` with care, or use the curation commands.
 
 ## 3. Write one taxonomy file per MOC
 
