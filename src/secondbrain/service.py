@@ -122,13 +122,27 @@ def initialize(root: Path, catalog: dict, job_id: str = 'initialize-catalog'):
         catalog = {**catalog, 'language': language}
     raw = jobs.encoded(catalog)
     from . import layout as layouts
-    catalog_rel = layouts.of(root).catalog
-    existing = read_bytes(root, catalog_rel)
-    if existing is not None:
-        if existing == raw:
-            return {'status': 'unchanged'}
+    lay = layouts.of(root)
+    existing = read_bytes(root, lay.catalog)
+    if existing is not None and existing != raw:
         raise ValueError('a catalog exists already; change domains through a reviewed proposal')
-    return apply_changes(root, job_id, [Change(catalog_rel, None, raw)])
+    # what an ingest needs besides the catalog: an empty card registry and the card, taxonomy and inbox folders
+    changes = [] if existing is not None else [Change(lay.catalog, None, raw)]
+    if read_bytes(root, lay.registry) is None:
+        changes.append(Change(lay.registry, None, jobs.encoded({'notes': []})))
+    folders = [d for d in (lay.knowledge, lay.taxonomy, lay.inbox) if not (Path(root) / d).is_dir()]
+    if changes:
+        if existing is not None:  # an older `sb init` wrote the catalog only
+            job_id = f'{job_id}-{uuid.uuid4().hex[:12]}'
+        result = apply_changes(root, job_id, changes)
+    else:
+        result = {'status': 'unchanged'}
+    for folder in folders:
+        (Path(root) / folder).mkdir(parents=True, exist_ok=True)
+    # taxonomy files are the owner's to write (docs/new-vault.md); a domain without one gets no cards
+    missing = sorted({lay.taxonomy_path(d['moc']) for d in catalog['domains'].values()
+                      if not (Path(root) / lay.taxonomy_path(d['moc'])).is_file()})
+    return {**result, 'created_folders': folders, 'taxonomy_files_missing': missing}
 
 
 def set_language(root: Path, language: str, job_id: str | None = None):
