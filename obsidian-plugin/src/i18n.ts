@@ -116,6 +116,7 @@ const zh = {
 	"settings.explainTemplate": "讲解模板文件",
 	"settings.template.desc": "文件不存在时用内置模板。",
 	"settings.explainLimits": "讲解上下文上限：相关卡 / 本质字数 / 同主题卡 / 当前卡字数",
+	"settings.explainAnswerChars": "讲解篇幅上限（字）",
 	"settings.reminder": "提醒",
 	"settings.startupNotice": "每天第一次打开时提示到期数",
 	"settings.reminderTime": "日历提醒时间（HH:MM）",

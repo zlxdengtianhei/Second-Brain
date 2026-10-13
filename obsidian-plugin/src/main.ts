@@ -1,4 +1,4 @@
-import { Notice, Plugin, parseYaml, type TAbstractFile, TFile, type WorkspaceLeaf } from "obsidian";
+import { normalizePath, Notice, Plugin, parseYaml, type TAbstractFile, TFile, type WorkspaceLeaf } from "obsidian";
 import { extractReviewItems, sectionText } from "./registry";
 import { AiProvidersClient } from "./llm/ai";
 import { DEFAULT_EXPLAIN_TEMPLATE, DEFAULT_GRADE_TEMPLATE, parseTemplate, type Template } from "./llm/prompts";
@@ -6,7 +6,10 @@ import { t } from "./i18n";
 import { ReviewService } from "./service";
 import { mergeSettings, reviewDir, type ReviewSettings } from "./settings";
 import { type LoadedCard, ReviewModal } from "./ui/review-modal";
+import { buildIcs, reviewUri } from "./ics";
 import { ExplainView, VIEW_EXPLAIN } from "./ui/explain-view";
+import { Reminder } from "./ui/reminder";
+import { ReviewSettingTab } from "./ui/settings-tab";
 import { TodayBlock, TodayView, VIEW_TODAY } from "./ui/today-view";
 import type { IndexedCard } from "./vault/card-index";
 import { CardIndex } from "./vault/card-index";
@@ -52,6 +55,8 @@ export default class SecondBrainReviewPlugin extends Plugin {
 		this.addCommand({ id: "start-flip", name: t("cmd.flip"), callback: () => void this.startSession("flip") });
 		this.addCommand({ id: "start-qa", name: t("cmd.qa"), callback: () => void this.startSession("qa") });
 		this.addCommand({ id: "explain-card", name: t("cmd.explain"), callback: () => void this.explainActive() });
+		this.addCommand({ id: "write-ics", name: t("cmd.ics"), callback: () => void this.writeIcs() });
+		this.addSettingTab(new ReviewSettingTab(this.app, this));
 
 		this.app.workspace.onLayoutReady(() => void this.start());
 	}
@@ -60,6 +65,7 @@ export default class SecondBrainReviewPlugin extends Plugin {
 		this.index.rebuild();
 		this.index.watch((ref) => this.registerEvent(ref));
 		await Promise.all([this.loadTaxonomy(), this.service.reload()]);
+		new Reminder(this).start();
 		const onFileChange = (file: TAbstractFile) => {
 			if (this.service.store.isLogPath(file.path) && file.path !== this.service.store.ownPath()) this.scheduleReload();
 			if (file instanceof TFile && /\.ya?ml$/.test(file.path) && file.path.startsWith(this.settings.taxonomy + "/")) {
@@ -177,6 +183,24 @@ export default class SecondBrainReviewPlugin extends Plugin {
 
 	explainTemplate(): Promise<Template> {
 		return this.template(this.settings.explainTemplate, DEFAULT_EXPLAIN_TEMPLATE);
+	}
+
+	/** Write the daily reminder calendar file into the vault. */
+	async writeIcs(): Promise<void> {
+		const s = this.settings;
+		let text: string;
+		try {
+			const uri = reviewUri(this.app.vault.getName());
+			text = buildIcs({ time: s.reminderTime, uri, summary: t("ics.summary"), description: t("ics.description", { uri }), now: new Date() });
+		} catch (e) {
+			return void new Notice(String((e as Error).message ?? e));
+		}
+		const path = normalizePath(s.icsPath);
+		const dir = path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "";
+		const adapter = this.app.vault.adapter;
+		if (dir && !(await adapter.exists(dir))) await adapter.mkdir(dir);
+		await adapter.write(path, text);
+		new Notice(t("ics.done", { path, time: s.reminderTime }));
 	}
 
 	async saveSettings(): Promise<void> {
