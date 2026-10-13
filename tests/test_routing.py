@@ -213,3 +213,20 @@ def test_the_first_ingest_into_an_empty_vault_writes_cards_and_maps(tmp_path):
     assert result['status'] == 'applied' and result['new_card_count'] == 1
     assert (root / '10_Knowledge/sorting/Binary search needs a sorted range.md').is_file()
     assert (root / '20_MOCs/Sorting Map.md').is_file()
+
+
+def test_an_empty_vault_offers_the_domains_whose_words_the_source_uses(tmp_path):
+    names = ['calculus', 'linear-algebra', 'discrete-math', 'cooking', 'sorting', 'networks', 'gardening']
+    root = empty_vault(tmp_path / 'vault', names)
+    catalog_path = root / layouts.DEFAULT.catalog
+    catalog = json.loads(catalog_path.read_text(encoding='utf-8'))
+    catalog['domains']['networks']['question'] = 'How do packets find their way through routers?'
+    catalog_path.write_text(json.dumps(catalog), encoding='utf-8')
+    snap = read_snapshot(root)
+    text = 'Sorting practice: merge sort keeps equal keys in order; quick sort partitions around a pivot.'
+    routed = route(root, snap, text, domains=3)
+    assert routed['domains'] == ['sorting', 'calculus', 'linear-algebra'] and routed['filled'] == routed['domains']
+    text = 'Routers forward packets hop by hop.\n\nSorting the routing table by prefix length helps.'
+    assert route(root, snap, text, domains=3)['domains'] == ['networks', 'sorting', 'calculus']
+    # no shared words: empty domains in catalog order, as before
+    assert route(root, snap, 'Lorem ipsum dolor.', domains=3)['domains'] == names[:3]

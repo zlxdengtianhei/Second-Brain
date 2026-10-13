@@ -14,6 +14,7 @@ expected domains of all pending sources into the top three.
 """
 from __future__ import annotations
 
+import math
 import re
 
 from ..search import _tokenize
@@ -78,16 +79,45 @@ def route(root, snapshot, text: str, *, domains: int, neighbors: int = 8) -> dic
     best = sorted(card_score, key=lambda c: (-card_score[c], c))[:neighbors]
     chosen = order[:domains]
     # Domains without votes (no cards yet, or no matching cards) still need a chance:
-    # fill up to the limit, empty domains first, then in catalog order.
+    # fill up to the limit, first those whose name or question shares words with the
+    # text, then empty domains, then in catalog order.
     catalog_order = list((snapshot.catalog or {}).get('domains', {}))
     unvoted = [d for d in catalog_order if d not in chosen]
-    unvoted.sort(key=lambda d: (sizes.get(d, 0) > 0, catalog_order.index(d)))
+    match = name_match(snapshot, text)
+    unvoted.sort(key=lambda d: (-match.get(d, 0.0), sizes.get(d, 0) > 0, catalog_order.index(d)))
     filled = unvoted[:max(0, domains - len(chosen))]
     return {'domains': chosen + filled, 'filled': filled,
             'neighbors': [{'id': cid, 'title': snapshot.cards[cid].title, 'domain': snapshot.cards[cid].domain,
                            'essence': essence(snapshot.cards[cid])} for cid in best],
             'votes': {d: round(votes[d] / total, 3) for d in order[:6]},
             'passages': len(parts)}
+
+
+def name_match(snapshot, text: str) -> dict:
+    """``{domain: score}`` for domains whose name or question shares words with ``text``.
+
+    A domain's words are its slug, MOC title and question: Latin words and
+    CJK bigrams (single CJK characters match almost anything). Each shared
+    word counts log(D / df), where df is how many of the catalog's D domains
+    use it, so words every domain uses count nothing; the sum is divided by
+    the square root of the domain's word count, so a long question does not
+    win by length alone.
+    """
+    words = {}
+    for slug, entry in ((snapshot.catalog or {}).get('domains') or {}).items():
+        entry = entry if isinstance(entry, dict) else {}
+        own = ' '.join([slug.replace('-', ' ').replace('_', ' '), str(entry.get('moc') or ''),
+                        str(entry.get('question') or '')])
+        words[slug] = {t for t in _tokenize(own) if t.isascii() or len(t) > 1}
+    df: dict = {}
+    for tokens in words.values():
+        for t in tokens:
+            df[t] = df.get(t, 0) + 1
+    present = set(_tokenize(text))
+    total = len(words)
+    scores = {d: sum(math.log(total / df[t]) for t in tokens & present) / math.sqrt(len(tokens))
+              for d, tokens in words.items() if tokens}
+    return {d: v for d, v in scores.items() if v > 0}
 
 
 def essence(card) -> str:
