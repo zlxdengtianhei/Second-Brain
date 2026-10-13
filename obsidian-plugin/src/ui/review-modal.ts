@@ -71,6 +71,8 @@ export class ReviewModal extends Modal {
 		const row = root.createDiv({ cls: "sbr-row" });
 		const open = row.createEl("button", { cls: "sbr-link", text: t("session.openCard") });
 		open.onclick = () => void this.app.workspace.openLinkText(loaded.card.path, "", "tab");
+		const explain = row.createEl("button", { cls: "sbr-link", text: t("btn.explain") });
+		explain.onclick = () => void this.plugin.explainCard(loaded.card);
 		const skip = row.createEl("button", { cls: "sbr-link", text: t("session.skip") });
 		skip.onclick = () => {
 			this.queue.skip();

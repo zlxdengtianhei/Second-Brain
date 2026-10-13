@@ -20,6 +20,7 @@ export interface ReviewSettings {
 	explainEssenceChars: number;
 	explainSiblings: number;
 	explainCardChars: number;
+	explainAnswerChars: number;
 	reminderTime: string;
 	icsPath: string;
 	startupNotice: boolean;
@@ -40,6 +41,7 @@ export const DEFAULT_SETTINGS: ReviewSettings = {
 	explainEssenceChars: 120,
 	explainSiblings: 10,
 	explainCardChars: 6000,
+	explainAnswerChars: 600,
 	reminderTime: "09:00",
 	icsPath: "90_Meta/复习提醒.ics",
 	startupNotice: true,

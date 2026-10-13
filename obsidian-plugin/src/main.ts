@@ -6,6 +6,7 @@ import { t } from "./i18n";
 import { ReviewService } from "./service";
 import { mergeSettings, reviewDir, type ReviewSettings } from "./settings";
 import { type LoadedCard, ReviewModal } from "./ui/review-modal";
+import { ExplainView, VIEW_EXPLAIN } from "./ui/explain-view";
 import { TodayBlock, TodayView, VIEW_TODAY } from "./ui/today-view";
 import type { IndexedCard } from "./vault/card-index";
 import { CardIndex } from "./vault/card-index";
@@ -37,6 +38,7 @@ export default class SecondBrainReviewPlugin extends Plugin {
 		this.llm = new AiProvidersClient(this.app, () => this.settings.providerId);
 
 		this.registerView(VIEW_TODAY, (leaf: WorkspaceLeaf) => new TodayView(leaf, this));
+		this.registerView(VIEW_EXPLAIN, (leaf: WorkspaceLeaf) => new ExplainView(leaf, this));
 		this.registerMarkdownCodeBlockProcessor("secondbrain-review", (_src, el, ctx) => {
 			ctx.addChild(new TodayBlock(el, this));
 		});
@@ -137,8 +139,25 @@ export default class SecondBrainReviewPlugin extends Plugin {
 		};
 	}
 
+	/** Explain the card open in the editor. */
 	async explainActive(): Promise<void> {
-		new Notice("explain: not implemented yet");
+		const file = this.app.workspace.getActiveFile();
+		if (!file) return void new Notice(t("explain.noCard"));
+		const card = this.index.byPath(file.path);
+		if (!card) return void new Notice(t("explain.notCard"));
+		await this.explainCard(card);
+	}
+
+	async explainCard(card: IndexedCard): Promise<void> {
+		const { workspace } = this.app;
+		let leaf = workspace.getLeavesOfType(VIEW_EXPLAIN)[0];
+		if (!leaf) {
+			leaf = workspace.getRightLeaf(false) ?? workspace.getLeaf(true);
+			await leaf.setViewState({ type: VIEW_EXPLAIN, active: true });
+		}
+		await workspace.revealLeaf(leaf);
+		const view = leaf.view;
+		if (view instanceof ExplainView) await view.explain(card);
 	}
 
 	/** A template from the vault, or the built-in default when the file is missing. */
