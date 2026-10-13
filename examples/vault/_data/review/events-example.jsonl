@@ -1,0 +1,5 @@
+{"v":1,"ts":"2026-10-13T16:26:34.120+00:00","device":"example","card":"kc_forgetting-curve","mode":"agent","rating":3}
+{"v":1,"ts":"2026-10-13T16:26:34.418+00:00","device":"example","card":"kc_spacing-effect","mode":"agent","rating":2,"items":[{"q":"h:7d258a25","rating":3,"verdict":"hit"},{"q":"h:a0a6da9a","rating":2,"verdict":"partial"}],"grader":"example-grader"}
+{"v":1,"ts":"2026-10-13T16:26:34.744+00:00","device":"example","card":"kc_bayes-rule","mode":"agent","rating":1}
+{"v":1,"ts":"2026-10-13T16:26:35.221+00:00","device":"example","card":"kc_binary-search-procedure","mode":"agent","rating":4}
+{"v":1,"ts":"2026-10-13T16:26:35.479+00:00","device":"example","card":"kc_cache-basics","mode":"agent","rating":3}

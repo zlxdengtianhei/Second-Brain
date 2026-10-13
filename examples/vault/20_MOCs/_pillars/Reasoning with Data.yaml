@@ -1,0 +1,24 @@
+title: Reasoning with Data
+narrative: >-
+  Data mix signal with chance and bias. Probability tells us how to update
+  beliefs, sampling decides what the data can say, and inference states how
+  sure we can be.
+pillars:
+  - name: Probability
+    order: 1
+    why: How to reason about uncertain events and update beliefs with evidence.
+    topics:
+      - Conditional probability
+      - Bayesian reasoning
+  - name: Data collection
+    order: 2
+    why: How the way data are gathered limits what they can show.
+    topics:
+      - Sampling bias
+      - Chance and variation
+  - name: Inference
+    order: 3
+    why: How to state what the data support and how sure we can be.
+    topics:
+      - Estimation
+      - Hypothesis testing

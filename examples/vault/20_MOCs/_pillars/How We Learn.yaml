@@ -1,0 +1,24 @@
+title: How We Learn
+narrative: >-
+  Memories fade in a predictable way, and working memory can hold only a few
+  things at once. Study methods that respect these limits, such as spaced
+  reviews and recalling instead of rereading, make knowledge last.
+pillars:
+  - name: Memory
+    order: 1
+    why: What happens to what we learn over time, and how much we can hold at once.
+    topics:
+      - Forgetting
+      - Working memory
+  - name: Study strategies
+    order: 2
+    why: Which ways of studying lead to knowledge that lasts.
+    topics:
+      - Spacing
+      - Retrieval
+      - Practice design
+  - name: Instruction
+    order: 3
+    why: How the way material is presented changes what a learner can absorb.
+    topics:
+      - Cognitive load

@@ -1,0 +1,23 @@
+title: Computing Foundations
+narrative: >-
+  Programs are fast when they avoid work: they grow slowly with their input,
+  jump straight to data with hashing or halving, and keep hot data close in
+  caches.
+pillars:
+  - name: Algorithms
+    order: 1
+    why: How the cost of a method grows with its input.
+    topics:
+      - Complexity
+      - Searching
+  - name: Data structures
+    order: 2
+    why: How the layout of data decides which operations are cheap.
+    topics:
+      - Hashing
+      - Probabilistic structures
+  - name: Systems
+    order: 3
+    why: How real machines hide slow storage behind fast storage.
+    topics:
+      - Caching

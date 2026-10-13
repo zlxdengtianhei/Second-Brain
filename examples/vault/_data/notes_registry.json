@@ -1,0 +1,382 @@
+{
+  "notes": [
+    {
+      "id": "kc_cache-basics",
+      "path": "10_Knowledge/computing/Cache as a small fast copy of a larger slower store.md",
+      "title": "Cache as a small fast copy of a larger slower store",
+      "domain": "computing",
+      "pillar": "Systems",
+      "topic": "Caching",
+      "source_hash": "40169515563ffea61cc6daf6316d688d750bff6170c44dbb565859ba90c95d1c"
+    },
+    {
+      "id": "kc_hit-ratio",
+      "path": "10_Knowledge/computing/Hit ratio and average access time.md",
+      "title": "Hit ratio and average access time",
+      "domain": "computing",
+      "pillar": "Systems",
+      "topic": "Caching",
+      "source_hash": "40169515563ffea61cc6daf6316d688d750bff6170c44dbb565859ba90c95d1c"
+    },
+    {
+      "id": "kc_locality-of-reference",
+      "path": "10_Knowledge/computing/Locality of reference.md",
+      "title": "Locality of reference",
+      "domain": "computing",
+      "pillar": "Systems",
+      "topic": "Caching",
+      "source_hash": "40169515563ffea61cc6daf6316d688d750bff6170c44dbb565859ba90c95d1c"
+    },
+    {
+      "id": "kc_lru-eviction",
+      "path": "10_Knowledge/computing/LRU eviction and its implementation.md",
+      "title": "LRU eviction and its implementation",
+      "domain": "computing",
+      "pillar": "Systems",
+      "topic": "Caching",
+      "source_hash": "40169515563ffea61cc6daf6316d688d750bff6170c44dbb565859ba90c95d1c"
+    },
+    {
+      "id": "kc_cache-invalidation",
+      "path": "10_Knowledge/computing/Cache invalidation and stale copies.md",
+      "title": "Cache invalidation and stale copies",
+      "domain": "computing",
+      "pillar": "Systems",
+      "topic": "Caching",
+      "source_hash": "40169515563ffea61cc6daf6316d688d750bff6170c44dbb565859ba90c95d1c"
+    },
+    {
+      "id": "kc_memory-stability",
+      "path": "10_Knowledge/learning/Memory stability.md",
+      "title": "Memory stability",
+      "domain": "learning",
+      "pillar": "Memory",
+      "topic": "Forgetting",
+      "source_hash": "2d02b30e61aee4a9cf42511eae9ddc09c8d25d59af18d3e53258ca3d1f1526da"
+    },
+    {
+      "id": "kc_spacing-effect",
+      "path": "10_Knowledge/learning/The spacing effect.md",
+      "title": "The spacing effect",
+      "domain": "learning",
+      "pillar": "Study strategies",
+      "topic": "Spacing",
+      "source_hash": "2d02b30e61aee4a9cf42511eae9ddc09c8d25d59af18d3e53258ca3d1f1526da"
+    },
+    {
+      "id": "kc_effortful-retrieval-explanation",
+      "path": "10_Knowledge/learning/Why a delayed review raises stability more.md",
+      "title": "Why a delayed review raises stability more",
+      "domain": "learning",
+      "pillar": "Study strategies",
+      "topic": "Spacing",
+      "source_hash": "2d02b30e61aee4a9cf42511eae9ddc09c8d25d59af18d3e53258ca3d1f1526da"
+    },
+    {
+      "id": "kc_expanding-intervals",
+      "path": "10_Knowledge/learning/Expanding review intervals.md",
+      "title": "Expanding review intervals",
+      "domain": "learning",
+      "pillar": "Study strategies",
+      "topic": "Spacing",
+      "source_hash": "2d02b30e61aee4a9cf42511eae9ddc09c8d25d59af18d3e53258ca3d1f1526da"
+    },
+    {
+      "id": "kc_recall-target-scheduling",
+      "path": "10_Knowledge/learning/Scheduling reviews at a target recall probability.md",
+      "title": "Scheduling reviews at a target recall probability",
+      "domain": "learning",
+      "pillar": "Study strategies",
+      "topic": "Spacing",
+      "source_hash": "2d02b30e61aee4a9cf42511eae9ddc09c8d25d59af18d3e53258ca3d1f1526da"
+    },
+    {
+      "id": "kc_forgetting-curve",
+      "path": "10_Knowledge/learning/The forgetting curve.md",
+      "title": "The forgetting curve",
+      "domain": "learning",
+      "pillar": "Memory",
+      "topic": "Forgetting",
+      "source_hash": "2d02b30e61aee4a9cf42511eae9ddc09c8d25d59af18d3e53258ca3d1f1526da"
+    },
+    {
+      "id": "kc_spacing-needs-active-recall",
+      "path": "10_Knowledge/learning/Spacing needs active recall.md",
+      "title": "Spacing needs active recall",
+      "domain": "learning",
+      "pillar": "Study strategies",
+      "topic": "Retrieval",
+      "source_hash": "2d02b30e61aee4a9cf42511eae9ddc09c8d25d59af18d3e53258ca3d1f1526da"
+    },
+    {
+      "id": "kc_feedback-after-retrieval",
+      "path": "10_Knowledge/learning/Feedback after retrieval.md",
+      "title": "Feedback after retrieval",
+      "domain": "learning",
+      "pillar": "Study strategies",
+      "topic": "Retrieval",
+      "source_hash": "7da1d053904116e41ec9242cd15c3f3a219d1da124c25ed957feb2bdf585853c"
+    },
+    {
+      "id": "kc_illusion-of-fluency",
+      "path": "10_Knowledge/learning/Illusion of fluency.md",
+      "title": "Illusion of fluency",
+      "domain": "learning",
+      "pillar": "Study strategies",
+      "topic": "Retrieval",
+      "source_hash": "7da1d053904116e41ec9242cd15c3f3a219d1da124c25ed957feb2bdf585853c"
+    },
+    {
+      "id": "kc_interleaved-practice",
+      "path": "10_Knowledge/learning/Interleaved practice.md",
+      "title": "Interleaved practice",
+      "domain": "learning",
+      "pillar": "Study strategies",
+      "topic": "Practice design",
+      "source_hash": "7da1d053904116e41ec9242cd15c3f3a219d1da124c25ed957feb2bdf585853c"
+    },
+    {
+      "id": "kc_desirable-difficulties",
+      "path": "10_Knowledge/learning/Desirable difficulties.md",
+      "title": "Desirable difficulties",
+      "domain": "learning",
+      "pillar": "Study strategies",
+      "topic": "Practice design",
+      "source_hash": "7da1d053904116e41ec9242cd15c3f3a219d1da124c25ed957feb2bdf585853c"
+    },
+    {
+      "id": "kc_practice-performance-misleads",
+      "path": "10_Knowledge/learning/Practice performance misleads about learning.md",
+      "title": "Practice performance misleads about learning",
+      "domain": "learning",
+      "pillar": "Study strategies",
+      "topic": "Practice design",
+      "source_hash": "7da1d053904116e41ec9242cd15c3f3a219d1da124c25ed957feb2bdf585853c"
+    },
+    {
+      "id": "kc_retrieval-practice",
+      "path": "10_Knowledge/learning/Retrieval practice.md",
+      "title": "Retrieval practice",
+      "domain": "learning",
+      "pillar": "Study strategies",
+      "topic": "Retrieval",
+      "source_hash": "7da1d053904116e41ec9242cd15c3f3a219d1da124c25ed957feb2bdf585853c"
+    },
+    {
+      "id": "kc_big-o-notation",
+      "path": "10_Knowledge/computing/Big-O notation.md",
+      "title": "Big-O notation",
+      "domain": "computing",
+      "pillar": "Algorithms",
+      "topic": "Complexity",
+      "source_hash": "1b8473ef2e8b5ef96d6145ddbf51e4a64ca861460e2cbbe5c71d2b4e2ae5530c"
+    },
+    {
+      "id": "kc_big-o-growth-classes",
+      "path": "10_Knowledge/computing/Common Big-O growth classes.md",
+      "title": "Common Big-O growth classes",
+      "domain": "computing",
+      "pillar": "Algorithms",
+      "topic": "Complexity",
+      "source_hash": "1b8473ef2e8b5ef96d6145ddbf51e4a64ca861460e2cbbe5c71d2b4e2ae5530c"
+    },
+    {
+      "id": "kc_binary-search-procedure",
+      "path": "10_Knowledge/computing/Binary search procedure.md",
+      "title": "Binary search procedure",
+      "domain": "computing",
+      "pillar": "Algorithms",
+      "topic": "Searching",
+      "source_hash": "1b8473ef2e8b5ef96d6145ddbf51e4a64ca861460e2cbbe5c71d2b4e2ae5530c"
+    },
+    {
+      "id": "kc_binary-search-midpoint-overflow",
+      "path": "10_Knowledge/computing/Binary search midpoint overflow bug.md",
+      "title": "Binary search midpoint overflow bug",
+      "domain": "computing",
+      "pillar": "Algorithms",
+      "topic": "Searching",
+      "source_hash": "1b8473ef2e8b5ef96d6145ddbf51e4a64ca861460e2cbbe5c71d2b4e2ae5530c"
+    },
+    {
+      "id": "kc_linear-search-and-sorting-cost",
+      "path": "10_Knowledge/computing/Linear search versus sorting first.md",
+      "title": "Linear search versus sorting first",
+      "domain": "computing",
+      "pillar": "Algorithms",
+      "topic": "Searching",
+      "source_hash": "1b8473ef2e8b5ef96d6145ddbf51e4a64ca861460e2cbbe5c71d2b4e2ae5530c"
+    },
+    {
+      "id": "kc_logarithmic-time",
+      "path": "10_Knowledge/computing/Logarithmic time.md",
+      "title": "Logarithmic time",
+      "domain": "computing",
+      "pillar": "Algorithms",
+      "topic": "Complexity",
+      "source_hash": "1b8473ef2e8b5ef96d6145ddbf51e4a64ca861460e2cbbe5c71d2b4e2ae5530c"
+    },
+    {
+      "id": "kc_conditional-probability",
+      "path": "10_Knowledge/statistics/Conditional probability.md",
+      "title": "Conditional probability",
+      "domain": "statistics",
+      "pillar": "Probability",
+      "topic": "Conditional probability",
+      "source_hash": "a943deecfe0a61bc3da77fc188fb0642a1d3f7cb2e220f44b188aa78474f4916"
+    },
+    {
+      "id": "kc_confusion-of-the-inverse",
+      "path": "10_Knowledge/statistics/Confusion of the inverse.md",
+      "title": "Confusion of the inverse",
+      "domain": "statistics",
+      "pillar": "Probability",
+      "topic": "Conditional probability",
+      "source_hash": "a943deecfe0a61bc3da77fc188fb0642a1d3f7cb2e220f44b188aa78474f4916"
+    },
+    {
+      "id": "kc_bayes-rule",
+      "path": "10_Knowledge/statistics/Bayes' rule.md",
+      "title": "Bayes' rule",
+      "domain": "statistics",
+      "pillar": "Probability",
+      "topic": "Bayesian reasoning",
+      "source_hash": "a943deecfe0a61bc3da77fc188fb0642a1d3f7cb2e220f44b188aa78474f4916"
+    },
+    {
+      "id": "kc_evidence-strength-updates-belief",
+      "path": "10_Knowledge/statistics/How strongly evidence changes a belief.md",
+      "title": "How strongly evidence changes a belief",
+      "domain": "statistics",
+      "pillar": "Probability",
+      "topic": "Bayesian reasoning",
+      "source_hash": "a943deecfe0a61bc3da77fc188fb0642a1d3f7cb2e220f44b188aa78474f4916"
+    },
+    {
+      "id": "kc_positive-predictive-value",
+      "path": "10_Knowledge/statistics/Positive predictive value.md",
+      "title": "Positive predictive value",
+      "domain": "statistics",
+      "pillar": "Probability",
+      "topic": "Bayesian reasoning",
+      "source_hash": "a943deecfe0a61bc3da77fc188fb0642a1d3f7cb2e220f44b188aa78474f4916"
+    },
+    {
+      "id": "kc_base-rate-neglect",
+      "path": "10_Knowledge/statistics/Base rate neglect.md",
+      "title": "Base rate neglect",
+      "domain": "statistics",
+      "pillar": "Probability",
+      "topic": "Bayesian reasoning",
+      "source_hash": "a943deecfe0a61bc3da77fc188fb0642a1d3f7cb2e220f44b188aa78474f4916"
+    },
+    {
+      "id": "kc_screening-test-positive-result",
+      "path": "10_Knowledge/statistics/Screening test with a rare disease.md",
+      "title": "Screening test with a rare disease",
+      "domain": "statistics",
+      "pillar": "Probability",
+      "topic": "Bayesian reasoning",
+      "source_hash": "a943deecfe0a61bc3da77fc188fb0642a1d3f7cb2e220f44b188aa78474f4916"
+    },
+    {
+      "id": "kc_ci-meaning",
+      "path": "10_Knowledge/statistics/Meaning of a 95 percent confidence interval.md",
+      "title": "Meaning of a 95 percent confidence interval",
+      "domain": "statistics",
+      "pillar": "Inference",
+      "topic": "Estimation",
+      "source_hash": "6db20611a7f6de8d8b41ee113132f558e514c043c993b41e1ec7e7b575814f6d"
+    },
+    {
+      "id": "kc_p-value-meaning",
+      "path": "10_Knowledge/statistics/What a p-value is and is not.md",
+      "title": "What a p-value is and is not",
+      "domain": "statistics",
+      "pillar": "Inference",
+      "topic": "Hypothesis testing",
+      "source_hash": "6db20611a7f6de8d8b41ee113132f558e514c043c993b41e1ec7e7b575814f6d"
+    },
+    {
+      "id": "kc_statistical-vs-practical-significance",
+      "path": "10_Knowledge/statistics/Statistical significance versus practical significance.md",
+      "title": "Statistical significance versus practical significance",
+      "domain": "statistics",
+      "pillar": "Inference",
+      "topic": "Hypothesis testing",
+      "source_hash": "6db20611a7f6de8d8b41ee113132f558e514c043c993b41e1ec7e7b575814f6d"
+    },
+    {
+      "id": "kc_multiple-comparisons-problem",
+      "path": "10_Knowledge/statistics/Multiple comparisons inflate false discoveries.md",
+      "title": "Multiple comparisons inflate false discoveries",
+      "domain": "statistics",
+      "pillar": "Inference",
+      "topic": "Hypothesis testing",
+      "source_hash": "6db20611a7f6de8d8b41ee113132f558e514c043c993b41e1ec7e7b575814f6d"
+    },
+    {
+      "id": "kc_ci-width-precision",
+      "path": "10_Knowledge/statistics/Interval width shows estimate precision.md",
+      "title": "Interval width shows estimate precision",
+      "domain": "statistics",
+      "pillar": "Inference",
+      "topic": "Estimation",
+      "source_hash": "6db20611a7f6de8d8b41ee113132f558e514c043c993b41e1ec7e7b575814f6d"
+    },
+    {
+      "id": "kc_hash-function-properties",
+      "path": "10_Knowledge/computing/What makes a good hash function for a table.md",
+      "title": "What makes a good hash function for a table",
+      "domain": "computing",
+      "pillar": "Data structures",
+      "topic": "Hashing",
+      "source_hash": "56a0244c9bc5ca436cb6b5fac6e9b3aea9bada1f4f40601046189b58e65311d2"
+    },
+    {
+      "id": "kc_hash-table-lookup",
+      "path": "10_Knowledge/computing/Hash table lookup and its average and worst case cost.md",
+      "title": "Hash table lookup and its average and worst case cost",
+      "domain": "computing",
+      "pillar": "Data structures",
+      "topic": "Hashing",
+      "source_hash": "56a0244c9bc5ca436cb6b5fac6e9b3aea9bada1f4f40601046189b58e65311d2"
+    },
+    {
+      "id": "kc_hash-collisions-and-resolution",
+      "path": "10_Knowledge/computing/Hash collisions and how chaining and open addressing handle them.md",
+      "title": "Hash collisions and how chaining and open addressing handle them",
+      "domain": "computing",
+      "pillar": "Data structures",
+      "topic": "Hashing",
+      "source_hash": "56a0244c9bc5ca436cb6b5fac6e9b3aea9bada1f4f40601046189b58e65311d2"
+    },
+    {
+      "id": "kc_load-factor-and-amortised-resizing",
+      "path": "10_Knowledge/computing/Load factor, resizing and amortised constant insert time.md",
+      "title": "Load factor, resizing and amortised constant insert time",
+      "domain": "computing",
+      "pillar": "Data structures",
+      "topic": "Hashing",
+      "source_hash": "56a0244c9bc5ca436cb6b5fac6e9b3aea9bada1f4f40601046189b58e65311d2"
+    },
+    {
+      "id": "kc_bloom-filter-mechanism",
+      "path": "10_Knowledge/computing/Bloom filter operation and its one-sided error.md",
+      "title": "Bloom filter operation and its one-sided error",
+      "domain": "computing",
+      "pillar": "Data structures",
+      "topic": "Probabilistic structures",
+      "source_hash": "56a0244c9bc5ca436cb6b5fac6e9b3aea9bada1f4f40601046189b58e65311d2"
+    },
+    {
+      "id": "kc_bloom-filter-as-first-check",
+      "path": "10_Knowledge/computing/Bloom filter as a cheap first check and the rare-item false positive problem.md",
+      "title": "Bloom filter as a cheap first check and the rare-item false positive problem",
+      "domain": "computing",
+      "pillar": "Data structures",
+      "topic": "Probabilistic structures",
+      "source_hash": "56a0244c9bc5ca436cb6b5fac6e9b3aea9bada1f4f40601046189b58e65311d2"
+    }
+  ]
+}

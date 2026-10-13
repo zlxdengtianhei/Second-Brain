@@ -1,0 +1,62 @@
+{
+  "schema": "secondbrain-catalog/1",
+  "tracks": [
+    {
+      "id": "learning-science",
+      "title": "Learning science",
+      "domains": [
+        "learning"
+      ]
+    },
+    {
+      "id": "quantitative",
+      "title": "Quantitative reasoning",
+      "domains": [
+        "statistics",
+        "computing"
+      ]
+    }
+  ],
+  "domains": {
+    "learning": {
+      "moc": "How We Learn",
+      "question": "How do people learn, and how do they keep what they learn?"
+    },
+    "statistics": {
+      "moc": "Reasoning with Data",
+      "question": "How do we draw sound conclusions from data that contain chance and bias?"
+    },
+    "computing": {
+      "moc": "Computing Foundations",
+      "question": "How do programs store and find data quickly?"
+    }
+  },
+  "relation_types": [
+    "depends_on",
+    "required_by",
+    "part_of",
+    "has_part",
+    "example_of",
+    "has_example",
+    "similar_to",
+    "contrasts_with"
+  ],
+  "inverse_relations": {
+    "depends_on": "required_by",
+    "required_by": "depends_on",
+    "part_of": "has_part",
+    "has_part": "part_of",
+    "example_of": "has_example",
+    "has_example": "example_of",
+    "similar_to": "similar_to",
+    "contrasts_with": "contrasts_with"
+  },
+  "relation_gloss": {
+    "depends_on": "the target must be understood first",
+    "part_of": "the card describes a component of the target",
+    "example_of": "the card is a concrete case of the target",
+    "similar_to": "same idea or mechanism in another setting",
+    "contrasts_with": "easily confused with the target; the difference matters"
+  },
+  "domain_relations": {}
+}
