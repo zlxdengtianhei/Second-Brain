@@ -13,7 +13,7 @@ from secondbrain.diagrams.__main__ import main
 VAULT = Path(__file__).resolve().parents[1] / "fixtures" / "diagrams" / "vault"
 TCP = "10_Knowledge/networking/TCP 三次握手.md"
 BUBBLE = "10_Knowledge/algorithms/冒泡排序.md"
-SORTS = "10_Knowledge/algorithms/快速排序与归并排序.md"
+DRINKS = "10_Knowledge/beverages/茶与咖啡的提神方式.md"
 
 
 def card(ref: str) -> dict:
@@ -30,7 +30,7 @@ def test_read_card_fields_and_blocks():
     b = card(BUBBLE)
     assert "代码" in audit.sections(audit.split_frontmatter((VAULT / BUBBLE).read_text(encoding="utf-8"))[1])
     assert len(b["blocks"]) == 1 and b["related_titles"] == ["选择排序"]
-    assert card(SORTS)["blocks"] == []
+    assert card(DRINKS)["blocks"] == []
 
 
 def test_extract_writes_cards_and_checker_input(tmp_path):
