@@ -75,7 +75,7 @@ def _spec(kind: str) -> KindSpec:
         from . import domcreate as m
         return KindSpec('domain_create.md', 'review_domain_create.md', schemas.DOMAIN_CREATE,
                         schemas.REVIEW_BY_DOMAIN, m.validate, m.apply)
-    raise ValueError(f'该任务类型没有模型流程：{kind}')
+    raise ValueError(f'This job kind has no model steps: {kind}')
 
 
 def _open_run(root: Path, state: dict, role: str, chunk: str | None) -> dict | None:
@@ -266,7 +266,7 @@ def _repair_classification(root, state, packet, review, *, producer, reviewer, a
             or child_input.get('repair_parent_candidate') != state['candidate']['sha256']
             or child_input.get('repair_parent_review') != state['review']['sha256']
             or {x['id'] for x in child_input['cards']} != rejected_ids):
-        raise Conflict('修订子任务没有绑定本轮全部反例')
+        raise Conflict('The revision job does not bind every counterexample of this round')
     # Apply the parent first: it never writes the rejected ids, so the child
     # still consumes their unchanged bytes.
     if apply:

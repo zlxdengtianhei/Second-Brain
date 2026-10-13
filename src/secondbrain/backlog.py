@@ -34,19 +34,19 @@ def prepare(root: Path, *, job_id: str,
     silently ignored — the frozen plan can only be continued via ``resume``.
     """
     if not 1 <= batch_size <= 100:
-        raise ValueError('每批1–100张；全文过大时通过MCP完整读取')
+        raise ValueError('Batch size must be 1-100 cards; read longer cards in full through MCP')
     jobs.job_name(job_id)
     if len(job_id) > 115:
-        raise ValueError('任务ID过长：子任务ID需追加序号，总长不能超过120字符')
+        raise ValueError('Job id too long: child job ids add a number and must stay within 120 characters')
     snapshot = read_snapshot(root)
     classification.writable_snapshot(snapshot)
     if domain and domain not in snapshot.catalog['domains']:
-        raise ValueError('未知领域')
+        raise ValueError(f'Unknown domain: {domain}')
     old = {x['job_id']: x for x in jobs.list_jobs(root)}
     if job_id in old:
         state = jobs.load(root, job_id)
         if state['kind'] != 'classification-batch':
-            raise ValueError('该任务ID不是分类批次计划')
+            raise ValueError('This job id is not a classification batch plan')
         packet = jobs.read_input(root, job_id)
         _reject_frozen_change(packet, job_id, domain, batch_size,
                               repair_invalid, include_pending)
@@ -118,8 +118,8 @@ def _reject_frozen_change(packet: dict, job_id: str, domain: str | None,
     changed = sorted(k for k in frozen if frozen[k] != fresh[k])
     if changed:
         raise ValueError(
-            f'任务{job_id}已冻结参数，本次{changed}与冻结计划不同；'
-            f'继续请用 resume --job {job_id} 恢复本计划，或换新任务ID重新准备')
+            f'Job {job_id} has frozen parameters; {changed} differ from the frozen plan. '
+            f'Continue it with `sb resume --job {job_id}`, or prepare again under a new job id')
 
 
 def _materialize(root: Path, state: dict, *, snapshot=None) -> tuple[int, dict]:
@@ -140,7 +140,7 @@ def _materialize(root: Path, state: dict, *, snapshot=None) -> tuple[int, dict]:
                 if snapshot is None:
                     snapshot = read_snapshot(root)
                 if snapshot.fingerprint != packet['snapshot_fingerprint']:
-                    raise Conflict('尚未建立的子任务所依赖的准备快照已改变，请重新准备批次')
+                    raise Conflict('The vault changed since the batches were prepared; prepare the batches again')
                 classification.prepare(root, ids=plan['ids'], job_id=child_id, _snapshot=snapshot,
                                        repair_invalid=bool(packet.get('repair_invalid')))
                 created += 1
@@ -156,14 +156,14 @@ def verify_child(root: Path, plan: dict) -> dict:
     """Confirm a materialized child still matches its frozen plan entry."""
     state = jobs.load(root, plan['job_id'])
     if state['kind'] != 'classification':
-        raise ValueError(f'子任务{plan["job_id"]}不是分类任务')
+        raise ValueError(f'Child job {plan["job_id"]} is not a classification job')
     packet = jobs.read_input(root, plan['job_id'])
     actual = [c['id'] for c in packet['cards']]
     if (actual != plan['ids']
             or ('card_hashes' in plan and {c['id']: c['sha256'] for c in packet['cards']} != plan['card_hashes'])
             or ('taxonomy_sha256' in plan and packet['taxonomy_sha256'] != plan['taxonomy_sha256'])
             or ('repair_invalid' in plan and packet.get('repair_invalid') != plan['repair_invalid'])):
-        raise Conflict(f'子任务{plan["job_id"]}输入与冻结计划不一致，请重新准备该批次')
+        raise Conflict(f'Input of child job {plan["job_id"]} differs from the frozen plan; prepare that batch again')
     return state
 
 
@@ -215,12 +215,12 @@ def _run_locked(root: Path, job_id: str, *, producer, reviewer,
     reason, keeps a retryable error outcome instead of being auto-rerun.
     """
     if not 1 <= parallel <= 3:
-        raise ValueError('并发批次须为1–3')
+        raise ValueError('parallel must be 1-3')
     if max_batches is not None and max_batches < 1:
-        raise ValueError('max_batches须为正')
+        raise ValueError('max_batches must be positive')
     state = jobs.load(root, job_id)
     if state['kind'] != 'classification-batch':
-        raise ValueError('该任务不是分类批次计划')
+        raise ValueError('This job is not a classification batch plan')
     packet = jobs.read_input(root, job_id)
     children = packet['children']
     _materialize(root, state)

@@ -149,7 +149,7 @@ def test_original_card_change_aborts(tmp_path):
     before = (root / f'10_Knowledge/{SRC}/{CARD}.md').read_bytes()
     relocation_proposal(root)
     (root / f'10_Knowledge/{SRC}/{CARD}.md').write_bytes(before + b'<!-- human edit -->\n')
-    with pytest.raises(Conflict, match='卡片在准备后变化'):
+    with pytest.raises(Conflict, match='Card changed after preparation'):
         r.apply(root, 'relo')
     assert not (root / f'10_Knowledge/{DST}/{CARD}.md').exists()
 
@@ -166,7 +166,7 @@ def test_destination_occupied_is_rejected(tmp_path):
                          'title': '同名文件', 'domain': DST})
     (root / '_data/notes_registry.json').write_text(json.dumps(reg, ensure_ascii=False),
                                                     encoding='utf-8')
-    with pytest.raises(Conflict, match='移动新址已存在'):
+    with pytest.raises(Conflict, match='Move target exists already'):
         r.apply(root, 'relo')
     assert blocker.read_text().startswith('---')
     assert (root / f'10_Knowledge/{SRC}/{CARD}.md').exists()
@@ -227,7 +227,7 @@ def test_gap_or_unbound_domain_not_written(tmp_path):
     assert (root / f'10_Knowledge/{SRC}/{CARD}.md').read_bytes() == before
     r.prepare(root, source_jobs=['src-cls'], job_id='relo2')
     relocation_proposal(root, job_id='relo2', domain='newdomain')
-    with pytest.raises(ValueError, match='绑定目的域'):
+    with pytest.raises(ValueError, match='target domain bound at prepare'):
         r.apply(root, 'relo2')
     assert not (root / f'10_Knowledge/{DST}/{CARD}.md').exists()
 
@@ -241,13 +241,13 @@ def test_prepare_requires_suggested_domain_in_catalog(tmp_path):
     submit_reviewed(root, 'j1', {'items': [row]},
                     {'items': [{'id': CARD, 'decision': 'accept', 'reason': '核过'}]})
     cls.apply(root, 'j1')
-    with pytest.raises(ValueError, match='缺建议目的域'):
+    with pytest.raises(ValueError, match='No suggested_domain'):
         r.prepare(root, source_jobs=['j1'], job_id='r1')
     source_job(root, job_id='j2', suggested='newdomain')
-    with pytest.raises(ValueError, match='不在catalog'):
+    with pytest.raises(ValueError, match='not in the catalog'):
         r.prepare(root, source_jobs=['j2'], job_id='r2')
     source_job(root, job_id='j3', suggested=SRC)
-    with pytest.raises(ValueError, match='必须不同于当前域'):
+    with pytest.raises(ValueError, match='must differ from the current one'):
         r.prepare(root, source_jobs=['j3'], job_id='r3')
     # 复核revise的不入选：整批unchanged
     source_job(root, job_id='j4', accept=False)
@@ -298,5 +298,5 @@ def test_prior_domain_suggestion_cannot_authorize_changed_card(tmp_path):
     source_job(root)
     p = root / f'10_Knowledge/{SRC}/{CARD}.md'
     p.write_bytes(p.read_bytes() + b'changed meaning')
-    with pytest.raises(Conflict, match='所据卡片已变化'):
+    with pytest.raises(Conflict, match='card behind a reviewed move suggestion has changed'):
         r.prepare(root, source_jobs=['src-cls'], job_id='relo')

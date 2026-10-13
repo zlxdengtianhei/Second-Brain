@@ -186,7 +186,7 @@ def test_nested_pillar_extension_cannot_be_silently_deleted(tmp_path):
                        taxonomies={MOC: current})
     curation.prepare(root, [DOM], job_id='nested')
     submit_reviewed(root, 'nested', proposal([item(DOM, single_taxonomy(), [EXISTING])]), review_for([DOM]))
-    with pytest.raises(curation.CurationError, match='未知字段 pillars'):
+    with pytest.raises(curation.CurationError, match='unknown field pillars'):
         curation.apply(root, 'nested')
 
 

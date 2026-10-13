@@ -178,13 +178,13 @@ def test_prepare_interruption_recoverable_without_orphaned_subtasks(tmp_path, mo
 def test_same_job_changed_params_explicitly_rejected(tmp_path):
     root = build_batch_vault(tmp_path)
     backlog.prepare(root, job_id="b4", batch_size=2)
-    with pytest.raises(ValueError, match="已冻结"):
+    with pytest.raises(ValueError, match="frozen parameters"):
         backlog.prepare(root, job_id="b4", domain=DOMAIN)
-    with pytest.raises(ValueError, match="已冻结"):
+    with pytest.raises(ValueError, match="frozen parameters"):
         backlog.prepare(root, job_id="b4", batch_size=3)
-    with pytest.raises(ValueError, match="已冻结"):
+    with pytest.raises(ValueError, match="frozen parameters"):
         backlog.prepare(root, job_id="b4", repair_invalid=True)
-    with pytest.raises(ValueError, match="已冻结"):
+    with pytest.raises(ValueError, match="frozen parameters"):
         backlog.prepare(root, job_id="b4", include_pending=True)
     # Exact same parameters are fine and resume the plan.
     assert backlog.prepare(root, job_id="b4", batch_size=2)["resumed"] is True
@@ -231,11 +231,11 @@ def test_historical_prepared_work_is_not_repeated(tmp_path):
 
 def test_prepare_validation_errors(tmp_path):
     root = build_batch_vault(tmp_path)
-    with pytest.raises(ValueError, match="1–100"):
+    with pytest.raises(ValueError, match="1-100"):
         backlog.prepare(root, job_id="v1", batch_size=0)
-    with pytest.raises(ValueError, match="未知领域"):
+    with pytest.raises(ValueError, match="Unknown domain"):
         backlog.prepare(root, job_id="v2", domain="nope")
-    with pytest.raises(ValueError, match="任务ID过长"):
+    with pytest.raises(ValueError, match="Job id too long"):
         backlog.prepare(root, job_id="v" * 120)
 
 
@@ -369,7 +369,7 @@ def test_child_bound_to_wrong_input_is_rejected_from_plan(tmp_path, monkeypatch)
     result = backlog.run(root, "pm", **EX, apply=True)
     assert result["status"] == "partial"
     errored = next(o for o in result["outcomes"] if o["job_id"] == target["job_id"])
-    assert "输入与冻结计划不一致" in errored["error"]
+    assert "differs from the frozen plan" in errored["error"]
     assert not any(c["job_id"] == target["job_id"] for c in calls)
     assert sum(1 for o in result["outcomes"] if o.get("reviewed")) == 3
 
@@ -378,13 +378,13 @@ def test_run_validation_limits(tmp_path):
     root = build_batch_vault(tmp_path)
     classification.prepare(root, ids=["card_miss_a1"], job_id="classy")
     backlog.prepare(root, job_id="lim", batch_size=100)
-    with pytest.raises(ValueError, match="1–3"):
+    with pytest.raises(ValueError, match="1-3"):
         backlog.run(root, "lim", **EX, parallel=0)
-    with pytest.raises(ValueError, match="1–3"):
+    with pytest.raises(ValueError, match="1-3"):
         backlog.run(root, "lim", **EX, parallel=4)
     with pytest.raises(ValueError, match="max_batches"):
         backlog.run(root, "lim", **EX, max_batches=0)
-    with pytest.raises(ValueError, match="不是分类批次计划"):
+    with pytest.raises(ValueError, match="not a classification batch plan"):
         backlog.run(root, "classy", **EX)
 
 
@@ -552,7 +552,7 @@ def test_cli_backlog_param_change_rejected_with_error(tmp_path, capsys):
                    "--batch-size", "3", "--prepare-only"])
     assert rc == 2
     err = json.loads(capsys.readouterr().err)
-    assert "已冻结" in err["error"]
+    assert "frozen parameters" in err["error"]
 
 
 def test_cli_resume_non_batch_routes_to_runner(tmp_path, monkeypatch, capsys):

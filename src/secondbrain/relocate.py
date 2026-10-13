@@ -42,18 +42,18 @@ def prepare(root_, *, source_jobs, job_id, ids=None):
     """Freeze a relocation batch from independently reviewed domain-review rows."""
     snapshot = read_snapshot(root_)
     if snapshot.root.resolve() != root_.resolve():
-        raise ValueError('批次快照不属于该知识库')
+        raise ValueError('The batch snapshot belongs to another vault')
     writable_snapshot(snapshot)
     if (not isinstance(source_jobs, list) or not source_jobs
             or len(source_jobs) != len(set(source_jobs))):
-        raise ValueError('source_jobs必须是非空且不重复的classification任务ID列表')
+        raise ValueError('source_jobs must be a non-empty list of distinct classification job ids')
     catalog_domains = set((snapshot.catalog.get('domains') or {})
                           if isinstance(snapshot.catalog, dict) else {})
     selected, evidence = {}, {}
     for jid in source_jobs:
         state = jobs.load(root_, jid)
         if state['kind'] != 'classification':
-            raise ValueError(f'来源任务不是classification：{jid}')
+            raise ValueError(f'Source job is not a classification job: {jid}')
         for value in cls.reviewed_rows_with_repairs(root_, jid):
             row, finding = value['row'], value['finding']
             if row.get('disposition') != 'needs_domain_review' or finding['decision'] != 'accept':
@@ -63,24 +63,24 @@ def prepare(root_, *, source_jobs, job_id, ids=None):
             reviewed_state = jobs.load(root_, value['job_id'])
             cid = row['id']
             if cid not in snapshot.cards:
-                raise ValueError(f'核验通过的卡已不存在：{cid}')
+                raise ValueError(f'A reviewed card no longer exists: {cid}')
             if snapshot.cards[cid].sha256 != row['input_sha256']:
-                raise Conflict(f'已核迁域建议所据卡片已变化：{cid}')
+                raise Conflict(f'The card behind a reviewed move suggestion has changed: {cid}')
             suggested = row.get('suggested_domain')
             if not isinstance(suggested, str) or not suggested:
-                raise ValueError(f'缺建议目的域（suggested_domain）：{cid}')
+                raise ValueError(f'No suggested_domain: {cid}')
             if suggested not in catalog_domains:
-                raise ValueError(f'目的域不在catalog（新域另行裁定）：{suggested}')
+                raise ValueError(f'Target domain is not in the catalog (new domains are a separate decision): {suggested}')
             if suggested == snapshot.cards[cid].domain:
-                raise ValueError(f'目的域必须不同于当前域：{cid}')
+                raise ValueError(f'Target domain must differ from the current one: {cid}')
             if cid in selected and selected[cid] != suggested:
-                raise Conflict(f'同一张卡被建议到不同目的域：{cid}')
+                raise Conflict(f'The same card is suggested for different target domains: {cid}')
             selected[cid] = suggested
             evidence[value['job_id']] = {'candidate_sha256': reviewed_state['candidate']['sha256'],
                                          'review_sha256': reviewed_state['review']['sha256']}
     if ids is not None:
         if len(ids) != len(set(ids)) or any(i not in selected for i in ids):
-            raise ValueError('卡ID重复或不在独立核验通过的needs_domain_review集合')
+            raise ValueError('Card ids repeat or are not among the reviewed needs_domain_review items')
         selected = {i: selected[i] for i in ids}
     cards = [snapshot.cards[cid] for cid in selected]
     cards.sort(key=lambda c: (c.domain, c.id))
@@ -104,30 +104,30 @@ def validate(packet, proposal):
     """classification式全覆盖/版本/引用规则；assigned须落在绑定目的域及该域合法pillar/topic。"""
     rows = proposal.get('items')
     if not isinstance(rows, list):
-        raise ValueError('迁移提案须为 {items:[...]}')
+        raise ValueError('A move proposal must be {items:[...]}')
     expected = {c['id']: c for c in packet['cards']}
     ids = [r.get('id') for r in rows if isinstance(r, dict)]
     if len(ids) != len(rows) or len(ids) != len(set(ids)) or set(ids) != set(expected):
-        raise ValueError('迁移提案必须覆盖本批全部ID且各一次')
+        raise ValueError('A move proposal must cover every id of the batch exactly once')
     for row in rows:
         card = expected[row['id']]
         if row.get('input_sha256') != card['sha256']:
-            raise Conflict(f'提案版本错：{row["id"]}')
+            raise Conflict(f'Wrong input_sha256 in the proposal: {row["id"]}')
         if row.get('disposition') not in {'assigned', 'taxonomy_gap'}:
-            raise ValueError(f'没有明确处理状态：{row["id"]}')
+            raise ValueError(f'No valid disposition: {row["id"]}')
         problem = check_verbatim(card['body'], row.get('evidence_quote'))
         if problem:
-            raise ValueError(f'证据不是卡正文逐字片段：{row["id"]}（{problem}）')
+            raise ValueError(f'Evidence is not a verbatim quote of the card body: {row["id"]} ({problem})')
         if not isinstance(row.get('reason'), str) or not row['reason'].strip():
-            raise ValueError(f'迁移理由缺失：{row["id"]}')
+            raise ValueError(f'Move reason missing: {row["id"]}')
         if row['disposition'] != 'assigned':
             continue
         if row.get('domain') != packet['destinations'].get(row['id']):
-            raise ValueError(f'assigned必须落在prepare绑定目的域：{row["id"]}')
+            raise ValueError(f'An assigned item must use the target domain bound at prepare: {row["id"]}')
         if not row.get('pillar') or not row.get('topic'):
-            raise ValueError(f'不能只填一个迁移分类字段：{row["id"]}')
+            raise ValueError(f'Fill both pillar and topic, not only one: {row["id"]}')
         if (row['pillar'], row['topic']) not in _packet_pairs(packet, row['domain']):
-            raise ValueError(f'分类不在该域策展体系中：{row["id"]}')
+            raise ValueError(f"Classification is not in this domain's taxonomy: {row['id']}")
     return rows
 
 
@@ -144,7 +144,7 @@ def apply(root_, job_id):
     from .projections import entry_projection, review_projection
     state = jobs.load(root_, job_id)
     if state['kind'] != 'relocation':
-        raise ValueError('任务类型不是迁移')
+        raise ValueError('This job is not a move job')
     if state['status'] in {'applied', 'published', 'partial'}:
         return state
     resumed = jobs.resume_transaction(root_, job_id)
@@ -157,13 +157,13 @@ def apply(root_, job_id):
     snapshot = read_snapshot(root_)
     writable_snapshot(snapshot)
     if taxonomy_fingerprint(snapshot, packet['taxonomy_scope']) != packet['taxonomy_sha256']:
-        raise Conflict('分类体系在准备后变化，请重备受影响卡片')
+        raise Conflict('The taxonomy changed after preparation; prepare the affected cards again')
     inputs = {c['id']: c for c in packet['cards']}
     pending, moves = [], []
     for row in rows:
         card = snapshot.cards.get(row['id'])
         if card is None or card.sha256 != inputs[row['id']]['sha256']:
-            raise Conflict(f'卡片在准备后变化：{row["id"]}')
+            raise Conflict(f'Card changed after preparation: {row["id"]}')
         decision = findings[row['id']]
         if decision['decision'] != 'accept' or row['disposition'] != 'assigned':
             pending.append({'id': row['id'], 'disposition': row['disposition'],
@@ -186,7 +186,7 @@ def apply(root_, job_id):
         for row in active:
             if row['id'] in obstacles:
                 pending.append({'id': row['id'], 'disposition': 'assigned',
-                                'reason': '迁移会留下旧路径或目录相对链接，未迁',
+                                'reason': 'Not moved: links to its old path or folder-relative links would break',
                                 'proposal': row, 'referencing_files': obstacles[row['id']]})
         active = [row for row in active if row['id'] not in obstacles]
     if not active:
@@ -200,7 +200,7 @@ def apply(root_, job_id):
     for rel, raw in documents.items():
         sha = digest(raw)
         if rel in observed and observed[rel] != sha:
-            raise Conflict(f'扫描链接时快照输入已变化：{rel}')
+            raise Conflict(f'A snapshot input changed while links were scanned: {rel}')
         observed[rel] = sha
     checks = cls.snapshot_checks(replace(snapshot, read_hashes=observed), changes)
     return jobs.finish_transaction(root_, job_id,
@@ -215,10 +215,10 @@ def _stage_moves(root_, snapshot, packet, moves):
         card = snapshot.cards[row['id']]
         dest = packet['destinations'][row['id']]
         if (row['pillar'], row['topic']) not in category_pairs(snapshot, dest):
-            raise ValueError(f'分类不在该域策展体系中：{card.id}')
+            raise ValueError(f"Classification is not in this domain's taxonomy: {card.id}")
         new_path = layouts.of(root_).card_path(dest, card.path.rsplit("/", 1)[1])
         if read_bytes(root_, new_path) is not None:
-            raise Conflict(f'移动新址已存在：{new_path}')
+            raise Conflict(f'Move target exists already: {new_path}')
         new_raw, new_fm, new_body = _relocated_bytes(card, dest, row)
         changes.append(Change(new_path, None, new_raw))
         changes.append(Change(card.path, card.sha256, None))
@@ -243,7 +243,7 @@ def _relocated_bytes(card, dest, row):
     raw = patch_frontmatter(card.raw, patches)
     fm, body = parse_note(raw)
     if body != card.body:
-        raise ValueError(f'迁移补丁意外修改正文：{card.id}')
+        raise ValueError(f'The move patch would change the card body: {card.id}')
     return raw, fm, body
 
 
@@ -252,16 +252,16 @@ def _registry_change(root_, moved):
     registry_rel = layouts.of(root_).registry
     raw = read_bytes(root_, registry_rel)
     if raw is None:
-        raise ValueError('缺少notes_registry，不能迁移')
+        raise ValueError('notes_registry is missing; cannot move cards')
     data = json.loads(raw)
     notes = data.get('notes')
     if not isinstance(notes, list):
-        raise ValueError('registry notes不是列表')
+        raise ValueError('registry notes is not a list')
     index = {n['id']: i for i, n in enumerate(notes) if isinstance(n, dict)}
     for card, dest in moved:
         i = index.get(card.id)
         if i is None:
-            raise ValueError(f'registry缺卡：{card.id}')
+            raise ValueError(f'Card missing from the registry: {card.id}')
         note = dict(notes[i])
         note['path'] = layouts.of(root_).card_path(dest, card.path.rsplit("/", 1)[1])
         note['domain'] = dest
@@ -352,6 +352,6 @@ def _iter_md(root_):
             rel = str(full.relative_to(root_)).replace(os.sep, '/')
             raw = read_bytes(root_, rel)
             if raw is None:
-                raise Conflict(f'扫描链接时文件消失：{rel}')
+                raise Conflict(f'A file disappeared while links were scanned: {rel}')
             raw.decode('utf-8')
             yield rel, raw

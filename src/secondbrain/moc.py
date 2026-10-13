@@ -192,7 +192,7 @@ def learning_order(cards):
         issues.append({
             "code": "learning_order_cycle",
             "card_ids": cycle_nodes,
-            "detail": "先修边存在环，已保留全部卡，顺序按卡 ID 稳定补齐",
+            "detail": "Prerequisite edges form a cycle; every card is kept and the rest follow in card id order",
         })
         order.extend(remaining)
     return [by_id[cid] for cid in order], issues
@@ -214,21 +214,26 @@ def _classify(card, pillar_topics):
     ``pillar_topics`` maps valid pillar name -> set of valid topic names. A
     missing pillar/topic is *unclassified*; a pillar or topic not in this MOC's
     taxonomy is *illegal* (kept here so the residual lists it, never dropped).
+    The note is ``(label key, args)``; :func:`_note` renders it in a language.
     """
-    L = labels.moc()
     p = card.fm.get("pillar")
     t = card.fm.get("topic")
     if not p and not t:
-        return "missing", L["missing_both"]
+        return "missing", ("missing_both", ())
     if not p:
-        return "missing", L["missing_pillar"]
+        return "missing", ("missing_pillar", ())
     if not t:
-        return "missing", L["missing_topic"]
+        return "missing", ("missing_topic", ())
     if p not in pillar_topics:
-        return "invalid", L["bad_pillar"] % (p,)
+        return "invalid", ("bad_pillar", (p,))
     if t not in pillar_topics[p]:
-        return "invalid", L["bad_topic"] % (t, p)
+        return "invalid", ("bad_topic", (t, p))
     return "classified", None
+
+
+def _note(note, lang=None):
+    key, args = note
+    return labels.moc(lang)[key] % args
 
 
 def _taxonomy_structure(taxonomy, moc_title, issues):
@@ -242,7 +247,8 @@ def _taxonomy_structure(taxonomy, moc_title, issues):
     if not isinstance(taxonomy, dict):
         if taxonomy is None:
             issues.append({"code": "missing_taxonomy", "moc": moc_title,
-                           "detail": "没有 _pillars/<标题>.yaml，域卡并入待分类"})
+                           "detail": "No taxonomy file (<taxonomy folder>/<map title>.yaml); "
+                                     "the cards are listed as unclassified"})
         return [], {}, "", []
     narr = taxonomy.get("narrative") or ""
     bridges = taxonomy.get("bridges")
@@ -437,14 +443,14 @@ def _process_moc(snapshot, moc_title, moc_domains, domain_to_moc, issues):
         if state == "classified":
             buckets.setdefault((card.fm["pillar"], card.fm["topic"]), []).append(card)
         elif state == "missing":
-            missing.append((card, note))
+            missing.append((card, _note(note)))
         else:
-            invalid.append((card, note))
+            invalid.append((card, _note(note)))
             issues.append({"code": "invalid_classification", "card": card.id,
-                           "detail": note, "moc": moc_title, "domain": card.domain})
+                           "detail": _note(note, "en"), "moc": moc_title, "domain": card.domain})
     if missing:
         issues.append({"code": "unclassified", "moc": moc_title, "count": len(missing),
-                       "detail": "缺 pillar/topic，留在待分类页且未计入任何支柱"})
+                       "detail": "pillar or topic missing; listed on the unclassified pages and counted under no pillar"})
 
     seg = _safe_segment(moc_title, "moc")
     moc_root = snapshot.layout.mocs if getattr(snapshot, "layout", None) else MOC_ROOT
@@ -608,7 +614,7 @@ def build_mocs(snapshot, *, affected_domains=None):
     if no_moc:
         issues.append({"code": "domain_without_moc",
                        "domains": sorted(no_moc),
-                       "detail": "下列 domain 在 catalog 中没有可解析的 moc"})
+                       "detail": "These catalog domains have no usable moc"})
 
     if affected_domains is None:
         scoped = set(moc_to_domains)
@@ -618,7 +624,7 @@ def build_mocs(snapshot, *, affected_domains=None):
             moc = domain_to_moc.get(dom)
             if moc is None:
                 issues.append({"code": "domain_not_in_catalog", "domain": dom,
-                               "detail": "domain 不在 catalog.domains"})
+                               "detail": "domain is not in catalog.domains"})
                 continue
             scoped.add(moc)
 
@@ -641,7 +647,7 @@ def build_mocs(snapshot, *, affected_domains=None):
             if isinstance(tgt, str) and tgt and tgt not in known:
                 issues.append({"code": "unknown_relation_target", "card": cid,
                                "target": tgt, "type": rel.get("type"),
-                               "detail": "关系目标不是库内卡 ID"})
+                               "detail": "Relation target is not a card id in this vault"})
 
     # Cards outside all catalog domains cannot reach any domain entry.
     unknown_domain = sorted(cid for cid, c in snapshot.cards.items()
@@ -649,7 +655,7 @@ def build_mocs(snapshot, *, affected_domains=None):
     if unknown_domain:
         issues.append({"code": "card_without_domain_mapping",
                        "card_ids": unknown_domain,
-                       "detail": "下列卡 domain 不在 catalog 中，无法经域入口到达"})
+                       "detail": "These cards have a domain outside the catalog; no map reaches them"})
 
     # Deterministic dedup.
     seen = set()

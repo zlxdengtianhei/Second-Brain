@@ -38,7 +38,7 @@ def prepare(root: Path, *, ids: list[str] | None = None, domain: str | None = No
     writable_snapshot(snapshot)
     if ids is not None:
         if len(ids) != len(set(ids)) or any(i not in snapshot.cards for i in ids):
-            raise ValueError('卡ID重复或不存在')
+            raise ValueError('Card ids repeated or unknown')
         cards = [snapshot.cards[i] for i in ids]
     else:
         def eligible(c):
@@ -48,7 +48,7 @@ def prepare(root: Path, *, ids: list[str] | None = None, domain: str | None = No
     cards.sort(key=lambda c: (c.domain, c.id))
     if limit is not None:
         if limit < 1:
-            raise ValueError('batch size必须为正')
+            raise ValueError('Batch size must be positive')
         cards = cards[:limit]
     if not cards:
         return {'status': 'unchanged', 'job_id': job_id, 'input_count': 0}
@@ -76,7 +76,7 @@ def validate(packet: dict, proposal: dict, *, check_evidence: bool = True,
              check_assignment: bool = True) -> list[dict]:
     rows = proposal.get('items')
     if not isinstance(rows, list):
-        raise ValueError('分类提案须为 {items:[...]}')
+        raise ValueError('A classification proposal must be {items:[...]}')
     expected = {c['id']: c for c in packet['cards']}
     ids = [r.get('id') for r in rows if isinstance(r, dict)]
     if len(ids) != len(rows) or len(ids) != len(set(ids)) or set(ids) != set(expected):
@@ -86,12 +86,13 @@ def validate(packet: dict, proposal: dict, *, check_evidence: bool = True,
         unknown = sorted(set(ids) - set(expected))
         detail = []
         if missing:
-            detail.append('缺：' + '、'.join(missing[:12]) + (f' 等{len(missing)}个' if len(missing) > 12 else ''))
+            detail.append('missing: ' + ', '.join(missing[:12])
+                          + (f' and more ({len(missing)} in all)' if len(missing) > 12 else ''))
         if dupes:
-            detail.append('重复：' + '、'.join(dupes[:8]))
+            detail.append('repeated: ' + ', '.join(dupes[:8]))
         if unknown:
-            detail.append('不在本批：' + '、'.join(unknown[:8]))
-        raise ValueError('分类提案必须覆盖本批全部ID且各一次（' + '；'.join(detail) + '）')
+            detail.append('not in this batch: ' + ', '.join(unknown[:8]))
+        raise ValueError('A classification proposal must cover every id of the batch exactly once (' + '; '.join(detail) + ')')
     version_errors = []
     for row in rows:
         card = expected[row['id']]
@@ -107,23 +108,24 @@ def validate(packet: dict, proposal: dict, *, check_evidence: bool = True,
             exp = card['sha256']
             pos = next((i for i, (a, b) in enumerate(zip(exp, got)) if a != b), min(len(exp), len(got)))
             version_errors.append(
-                f'{row["id"]} 应为 {exp}；实交串与期望值在第 {pos} 位起不同'
-                f'（实交片段 {got[max(0, pos - 4):pos + 8]!r}，全长 {len(got)}，'
-                f'注意不可见字符/全角字符/长度）')
+                f'{row["id"]} should be {exp}; the submitted value differs from position {pos} on '
+                f'(submitted part {got[max(0, pos - 4):pos + 8]!r}, length {len(got)}; '
+                f'check for invisible or full-width characters and the length)')
     if version_errors:
-        raise Conflict('提案版本错（逐项列出期望值，按冻结包修正后重交）：' + '；'.join(version_errors))
+        raise Conflict('Wrong input_sha256 in the proposal (expected values listed; fix them from the frozen packet '
+                       'and submit again): ' + '; '.join(version_errors))
     for row in rows:
         card = expected[row['id']]
         if row.get('disposition') not in {'assigned', 'taxonomy_gap', 'needs_domain_review'}:
-            raise ValueError(f'没有明确处理状态：{row["id"]}')
+            raise ValueError(f'No valid disposition: {row["id"]}')
         if check_evidence:
             problem = check_verbatim(card['body'], row.get('evidence_quote'))
             if problem:
-                raise ValueError(f'证据不是卡正文逐字片段：{row["id"]}（{problem}）')
+                raise ValueError(f'Evidence is not a verbatim quote of the card body: {row["id"]} ({problem})')
         if not isinstance(row.get('reason'), str) or not row['reason'].strip():
-            raise ValueError(f'分类理由缺失：{row["id"]}')
+            raise ValueError(f'Classification reason missing: {row["id"]}')
         if check_assignment and row['disposition'] == 'assigned' and (not row.get('pillar') or not row.get('topic')):
-            raise ValueError(f'不能只填一个分类字段：{row["id"]}')
+            raise ValueError(f'Fill both pillar and topic, not only one: {row["id"]}')
     return rows
 
 
@@ -139,18 +141,18 @@ def _frozen_category_pairs(packet: dict, domain: str) -> set[tuple[str, str]]:
 
 def _validate_candidate_shape(packet: dict, candidate: dict) -> list[dict]:
     if not isinstance(candidate, dict) or not isinstance(candidate.get('items'), list):
-        raise ValueError('分类提案须为 {items:[...]}')
+        raise ValueError('A classification proposal must be {items:[...]}')
     rows = candidate['items']
     for row in rows:
         if not isinstance(row, dict):
-            raise ValueError('分类提案每项必须是对象')
+            raise ValueError('Every item of a classification proposal must be an object')
         cid = row.get('id')
         if not isinstance(cid, str) or not cid:
-            raise ValueError('分类提案ID必须是非空字符串')
+            raise ValueError('Every classification proposal id must be a non-empty string')
         disposition = row.get('disposition')
         if not isinstance(disposition, str) or disposition not in {
                 'assigned', 'taxonomy_gap', 'needs_domain_review'}:
-            raise ValueError(f'没有明确处理状态：{cid}')
+            raise ValueError(f'No valid disposition: {cid}')
     return rows
 
 
@@ -163,90 +165,90 @@ def validate_submission(packet: dict, payload: dict, *, role: str,
         for row in rows:
             for key in ('pillar', 'topic'):
                 if key in row and row[key] is not None and not isinstance(row[key], str):
-                    raise ValueError(f'{key}必须为null或字符串：{row["id"]}')
+                    raise ValueError(f'{key} must be null or a string: {row["id"]}')
             card = next(c for c in packet['cards'] if c['id'] == row['id'])
             if 'domain' in row and (not isinstance(row['domain'], str)
                                     or row['domain'] != card.get('domain')):
-                raise Conflict(f'分类提交不能迁移域：{row["id"]}')
+                raise Conflict(f'A classification submission cannot move a card to another domain: {row["id"]}')
             if row['disposition'] == 'assigned':
                 if (not isinstance(row.get('pillar'), str) or not row['pillar'].strip()
                         or not isinstance(row.get('topic'), str) or not row['topic'].strip()):
-                    raise ValueError(f'assigned分类字段必须是非空字符串：{row["id"]}')
+                    raise ValueError(f'An assigned item needs non-empty pillar and topic strings: {row["id"]}')
                 if (row['pillar'], row['topic']) not in _frozen_category_pairs(packet, card.get('domain')):
-                    raise ValueError(f'分类不在冻结策展体系中：{row["id"]}')
+                    raise ValueError(f'Classification is not in the frozen taxonomy: {row["id"]}')
         return payload
     if role != 'reviewer':
-        raise ValueError(f'未知提交角色：{role}')
+        raise ValueError(f'Unknown submission role: {role}')
     if candidate is None:
-        raise ValueError('复核提交缺少候选')
+        raise ValueError('A review submission needs the candidate it reviews')
     candidate_rows = _validate_candidate_shape(packet, candidate)
     validate(packet, candidate, check_evidence=False, check_assignment=False)
     review_items = payload.get('items') if isinstance(payload, dict) else None
     if not isinstance(review_items, list):
-        raise ValueError('复核须为 {items:[{id,decision,reason}]}')
+        raise ValueError('A review must be {items:[{id,decision,reason}]}')
     for finding in review_items:
         if not isinstance(finding, dict) or not isinstance(finding.get('id'), str) or not finding['id']:
-            raise ValueError('复核项ID必须是非空字符串')
+            raise ValueError('Every review item id must be a non-empty string')
         if (not isinstance(finding.get('decision'), str)
                 or finding['decision'] not in {'accept', 'revise'}
                 or not isinstance(finding.get('reason'), str)
                 or not finding['reason'].strip()):
-            raise ValueError('每项复核必须有明确判定与具体理由')
+            raise ValueError('Every review item needs a decision and a specific reason')
     findings = review_rows(candidate_rows, payload)
     inputs = {c['id']: c for c in packet['cards']}
     for row in candidate_rows:
         card = inputs[row['id']]
         if 'domain' in row and (not isinstance(row['domain'], str)
                                 or row['domain'] != card.get('domain')):
-            raise Conflict(f'分类提交不能迁移域：{row["id"]}')
+            raise Conflict(f'A classification submission cannot move a card to another domain: {row["id"]}')
         if findings[row['id']]['decision'] != 'accept':
             continue
         for key in ('pillar', 'topic'):
             if key in row and row[key] is not None and not isinstance(row[key], str):
-                raise ValueError(f'{key}必须为null或字符串：{row["id"]}')
+                raise ValueError(f'{key} must be null or a string: {row["id"]}')
         if check_verbatim(card['body'], row.get('evidence_quote')):
-            raise ValueError(f'已接受项证据不是卡正文逐字片段：{row["id"]}')
+            raise ValueError(f'Evidence of an accepted item is not a verbatim quote of the card body: {row["id"]}')
         if row['disposition'] == 'assigned':
             if (row['pillar'], row['topic']) not in _frozen_category_pairs(packet, card.get('domain')):
-                raise ValueError(f'分类不在冻结策展体系中：{row["id"]}')
+                raise ValueError(f'Classification is not in the frozen taxonomy: {row["id"]}')
     return payload
 
 
 def evidence_errors(packet: dict, rows: list[dict]) -> dict[str, str]:
     inputs = {c['id']: c for c in packet['cards']}
-    return {r['id']: '引文不是冻结正文逐字片段，必须修订后重新独立复核'
+    return {r['id']: 'The quote is not verbatim from the frozen card body; revise it and have it reviewed again'
             for r in rows if check_verbatim(inputs[r['id']]['body'], r.get('evidence_quote'))}
 
 
 def require_accepted_evidence(packet, rows, findings):
     for cid in evidence_errors(packet, rows):
         if findings[cid]['decision'] == 'accept':
-            raise ValueError(f'已接受项证据不是卡正文逐字片段：{cid}')
+            raise ValueError(f'Evidence of an accepted item is not a verbatim quote of the card body: {cid}')
 
 
 def review_rows(rows: list[dict], review: dict) -> dict[str, dict]:
     findings = review.get('items')
     if not isinstance(findings, list):
-        raise ValueError('复核须为 {items:[{id,decision,reason}]}')
+        raise ValueError('A review must be {items:[{id,decision,reason}]}')
     ids = [x.get('id') for x in findings if isinstance(x, dict)]
     if len(ids) != len(findings) or len(ids) != len(set(ids)) or set(ids) != {x['id'] for x in rows}:
-        raise ValueError('独立复核没有逐项覆盖全部候选')
+        raise ValueError('The independent review does not cover every candidate item')
     for x in findings:
         if x.get('decision') not in {'accept', 'revise'} or not isinstance(x.get('reason'), str) or not x['reason'].strip():
-            raise ValueError('每项复核必须有明确判定与具体理由')
+            raise ValueError('Every review item needs a decision and a specific reason')
     return {x['id']: x for x in findings}
 
 
 def stage_changes(snapshot: Snapshot, packet: dict, rows: list[dict], findings: dict[str, dict]):
     require_accepted_evidence(packet, rows, findings)
     if taxonomy_fingerprint(snapshot, packet.get('taxonomy_scope')) != packet['taxonomy_sha256']:
-        raise Conflict('分类体系在准备后变化，请重备受影响卡片')
+        raise Conflict('The taxonomy changed after preparation; prepare the affected cards again')
     inputs = {c['id']: c for c in packet['cards']}
     pending, changes, updated = [], [], dict(snapshot.cards)
     for row in rows:
         card = snapshot.cards.get(row['id'])
         if card is None or card.sha256 != inputs[row['id']]['sha256']:
-            raise Conflict(f'卡片在准备后变化：{row["id"]}')
+            raise Conflict(f'Card changed after preparation: {row["id"]}')
         decision = findings[row['id']]
         if decision['decision'] != 'accept' or row['disposition'] != 'assigned':
             pending.append({'id': row['id'], 'disposition': row['disposition'],
@@ -254,19 +256,19 @@ def stage_changes(snapshot: Snapshot, packet: dict, rows: list[dict], findings: 
                             'proposal': row})
             continue
         if (row['pillar'], row['topic']) not in category_pairs(snapshot, card.domain):
-            raise ValueError(f'分类不在该域策展体系中：{card.id}')
+            raise ValueError(f"Classification is not in this domain's taxonomy: {card.id}")
         old_pair = (card.fm.get('pillar'), card.fm.get('topic'))
         may_repair = packet.get('repair_invalid') is True and all(old_pair) and old_pair not in category_pairs(snapshot, card.domain)
         for key in ['pillar', 'topic']:
             if not may_repair and card.fm.get(key) and card.fm[key] != row[key]:
-                raise Conflict(f'本次只补空字段，不能覆盖已有{key}：{card.id}')
+                raise Conflict(f'This run only fills empty fields and cannot overwrite the existing {key}: {card.id}')
         patches = {k: row[k] for k in ['pillar', 'topic'] if not card.fm.get(k) or (may_repair and card.fm.get(k) != row[k])}
         if not patches:
             continue
         raw = patch_frontmatter(card.raw, patches)
         fm, body = parse_note(raw)
         if body != card.body:
-            raise ValueError(f'分类补丁意外修改正文：{card.id}')
+            raise ValueError(f'The classification patch would change the card body: {card.id}')
         changes.append(Change(card.path, card.sha256, raw))
         updated[card.id] = replace(card, raw=raw, fm=fm, body=body, sha256=digest(raw))
     return changes, replace(snapshot, cards=updated), pending
@@ -287,7 +289,7 @@ def snapshot_checks(snapshot: Snapshot, changes: list[Change]) -> dict:
     for change in changes:
         if change.relative_path in checks:
             if checks[change.relative_path] != change.before_sha256:
-                raise Conflict(f'投影输入在读取后变化：{change.relative_path}')
+                raise Conflict(f'A projection input changed after it was read: {change.relative_path}')
             del checks[change.relative_path]
     return checks
 
@@ -296,7 +298,7 @@ def apply(root: Path, job_id: str) -> dict:
     from .moc import build_mocs
     state = jobs.load(root, job_id)
     if state['kind'] != 'classification':
-        raise ValueError('任务类型不是分类')
+        raise ValueError('This job is not a classification job')
     if state['status'] in {'applied', 'published', 'partial'}:
         return state
     resumed = jobs.resume_transaction(root, job_id)
@@ -333,7 +335,7 @@ def reviewed_rows_with_repairs(root: Path, job_id: str, *, _depth: int = 0) -> l
     root_rows = None
     while current_id:
         if current_id in seen:
-            raise Conflict('修订子任务链存在循环')
+            raise Conflict('The chain of revision jobs has a cycle')
         seen.add(current_id)
         state = jobs.load(root, current_id)
         packet = jobs.read_input(root, current_id)
@@ -353,9 +355,9 @@ def reviewed_rows_with_repairs(root: Path, job_id: str, *, _depth: int = 0) -> l
                 or child_packet.get('repair_parent_candidate') != state['candidate']['sha256']
                 or child_packet.get('repair_parent_review') != state['review']['sha256']
                 or {c['id'] for c in child_packet['cards']} != rejected):
-            raise Conflict('修订子任务不属于该复核版本的反例集')
+            raise Conflict('The revision job does not belong to the counterexamples of this review')
         parent_cards = {c['id']: c for c in packet['cards']}
         if any(c != parent_cards[c['id']] for c in child_packet['cards']):
-            raise Conflict('修订卡片全文版本与父任务不同')
+            raise Conflict('The revised cards differ from the versions in the parent job')
         current_id = child_id
     return [resolved[r['id']] for r in root_rows]

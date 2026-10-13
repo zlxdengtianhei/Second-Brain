@@ -35,7 +35,7 @@ def _record_checks(checks, reads, *, exclude=()):
             continue
         observed = None if raw is None else digest(raw)
         if rel in checks and checks[rel] != observed:
-            raise Conflict(f'投影依赖在读取期间变化：{rel}')
+            raise Conflict(f'A projection input changed while it was read: {rel}')
         checks[rel] = observed
 
 
@@ -62,14 +62,14 @@ def _scan_markers(text):
         kind, name = match.group(1), match.group(2)
         if kind == 'BEGIN':
             if active is not None:
-                return False, f'{name}受控标记嵌套（当前活动块：{active}）'
+                return False, f'{name}: generated-block markers are nested (open block: {active})'
             active = name
         elif active != name:
-            return False, f'{name}受控标记结构残缺（当前活动块：{active}）'
+            return False, f'{name}: generated-block markers are incomplete (open block: {active})'
         else:
             active = None
     if active is not None:
-        return False, f'{active}受控标记结构残缺'
+        return False, f'{active}: generated-block markers are incomplete'
     return True, None
 
 
@@ -84,7 +84,7 @@ def _marker_status(text, name, *, allow_zero=False):
     ends = len(tokens) - begins
     expected = {(0, 0), (1, 1)} if allow_zero else {(1, 1)}
     if (begins, ends) not in expected:
-        return False, f'{name}受控标记数量异常（BEGIN={begins}, END={ends}）'
+        return False, f'{name}: wrong number of generated-block markers (BEGIN={begins}, END={ends})'
     return True, None
 
 
@@ -95,13 +95,13 @@ def _replace_or_insert_entry(raw: bytes, migration: bytes) -> bytes:
     if start >= 0:
         stop = raw.find(end, start)
         if stop < 0:
-            raise Conflict('secondbrain-entry受控块结构残缺')
+            raise Conflict('The secondbrain-entry block is incomplete')
         stop += len(end)
         return raw[:start] + migration + raw[stop:]
     stats_end = b'<!-- GENERATED:END kb-stats -->'
     stop = raw.find(stats_end)
     if stop < 0:
-        raise Conflict('kb-stats受控块缺失，无法插入secondbrain-entry')
+        raise Conflict('No kb-stats block, so there is no place to insert the secondbrain-entry block')
     stop += len(stats_end)
     return raw[:stop] + migration + raw[stop:]
 
@@ -110,14 +110,14 @@ def _validate_generated_document(raw: bytes, name: str) -> None:
     try:
         text = raw.decode('utf-8')
     except UnicodeDecodeError as exc:
-        raise Conflict(f'{name}生成结果不是UTF-8') from exc
+        raise Conflict(f'{name}: generated text is not UTF-8') from exc
     valid, detail = _scan_markers(text)
     if not valid:
-        raise Conflict(f'{name}生成结果受控标记无效：{detail}')
+        raise Conflict(f'{name}: generated text has invalid markers: {detail}')
     for marker, allow_zero in [('kb-stats', False), ('secondbrain-entry', False), ('kb-dirs', True)]:
         valid, detail = _marker_status(text, marker, allow_zero=allow_zero)
         if not valid:
-            raise Conflict(f'{name}生成结果标记数量无效：{detail}')
+            raise Conflict(f'{name}: generated text has a wrong number of markers: {detail}')
 
 
 def _directory_counts(root, final_paths):
@@ -253,12 +253,13 @@ def entry_projection(snapshot, today: date, *, final_paths=(), reads=None) -> Pr
     for name in lay.entry_docs:
         raw = _read(snapshot.root, name, reads)
         if raw is None:
-            issues.append({'path': name, 'code': 'missing_document', 'detail': '文档缺失，未宣称docs完成'})
+            issues.append({'path': name, 'code': 'missing_document',
+                           'detail': 'Document missing; its generated blocks were not refreshed'})
             continue
         try:
             text = raw.decode()
         except UnicodeDecodeError:
-            issues.append({'path': name, 'code': 'invalid_document_encoding', 'detail': '文档不是UTF-8，保留原文'})
+            issues.append({'path': name, 'code': 'invalid_document_encoding', 'detail': 'Document is not UTF-8; left unchanged'})
             continue
         for marker, allow_zero, code in [
                 ('kb-stats', False, 'missing_or_duplicate_stats_markers'),
@@ -301,7 +302,7 @@ def _merge_projections(projections):
     for projection in projections:
         for path, data in projection.files.items():
             if path in files:
-                raise ValueError(f'投影路径重复：{path}')
+                raise ValueError(f'Two projections write the same path: {path}')
             files[path] = data
         issues.extend(projection.issues)
         metrics.update(projection.metrics)
@@ -376,18 +377,18 @@ def generate(root: Path, *, job_id: str, apply: bool = False, today: date | None
             frozen = jobs.read_input(root, job_id)
             requested_kind = 'daily' if reviews and entries else ('today' if reviews else 'docs')
             if frozen.get('projection') != requested_kind:
-                raise Conflict('准备任务的投影类型已变化，拒绝重建旧输入')
+                raise Conflict('The prepared job is for another projection kind; not rebuilding its input')
             frozen_options = frozen.get('options') or {'reviews': True, 'entries': True}
             requested_options = {'reviews': reviews, 'entries': entries}
             if refresh_mocs is not None:
                 requested_options['refresh_mocs'] = bool(refresh_mocs)
             for key, value in requested_options.items():
                 if bool(frozen_options.get(key, False)) != bool(value):
-                    raise Conflict('准备任务的options已变化，拒绝重建旧输入')
+                    raise Conflict('The prepared job has other options; not rebuilding its input')
             if today is not None and frozen.get('date') != today.isoformat():
-                raise Conflict('准备任务的date已变化，拒绝重建旧输入')
+                raise Conflict('The prepared job has another date; not rebuilding its input')
             if generated_at is not None and frozen.get('generated_at') != generated_at:
-                raise Conflict('准备任务的generated_at已变化，拒绝重建旧输入')
+                raise Conflict('The prepared job has another generated_at; not rebuilding its input')
             today = date.fromisoformat(frozen['date'])
             generated_at = frozen.get('generated_at') or datetime.now().astimezone().isoformat(timespec='seconds')
             refresh_mocs = bool(frozen_options.get('refresh_mocs', False))
@@ -417,7 +418,7 @@ def generate(root: Path, *, job_id: str, apply: bool = False, today: date | None
             return jobs.resume_transaction(root, job_id) or state
         frozen = jobs.read_input(root, job_id)
     if frozen.get('snapshot_fingerprint') and frozen['snapshot_fingerprint'] != s.fingerprint:
-        raise Conflict('准备任务的snapshot fingerprint已变化，拒绝重建旧输入')
+        raise Conflict('The vault changed since the job was prepared (snapshot fingerprint); not rebuilding its input')
     # Existing prepared input is authoritative; never rebuild it with new options.
     today = date.fromisoformat(frozen['date'])
     generated_at = frozen.get('generated_at') or generated_at

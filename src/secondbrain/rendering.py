@@ -328,7 +328,7 @@ def normalize_markdown(text: str) -> tuple[str, int, list[str]]:
     """整份 markdown 的公式归一：跳过 frontmatter 与代码围栏，逐行 normalize_math。
 
     返回 (归一文本, 改动区段总数, issues)。issues 是改动样例（最多 2 条，每条
-    「旧行\\n新行」两行字符串），无改动为空——与旧 fix_math 的 samples 同义。
+    「old 行\\nnew 行」两行字符串），无改动为空——与旧 fix_math 的 samples 同义。
 
     幂等：归一结果再过一遍不变（自测见 tests/test_rendering.py），渲染器每次
     重渲可无脑调用：既修新文本也自愈旧文本。
@@ -352,6 +352,6 @@ def normalize_markdown(text: str) -> tuple[str, int, list[str]]:
         if k:
             total += k
             if len(issues) < 2:
-                issues.append(f"    旧 {ln.strip()[:78]}\n    新 {new.strip()[:78]}")
+                issues.append(f"    old {ln.strip()[:78]}\n    new {new.strip()[:78]}")
             lines[i] = new
     return head + "\n".join(lines), total, issues

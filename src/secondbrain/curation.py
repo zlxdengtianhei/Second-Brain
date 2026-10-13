@@ -51,7 +51,7 @@ class CurationError(ValueError):
 def _domain_moc(catalog, domain):
     meta = (catalog or {}).get("domains", {}).get(domain)
     if not isinstance(meta, dict) or not isinstance(meta.get("moc"), str) or not meta["moc"]:
-        raise CurationError(f"domain {domain!r} 不在 catalog，拒绝新增 domain")
+        raise CurationError(f"domain {domain!r} is not in the catalog; curation does not add domains")
     return meta["moc"]
 
 
@@ -69,9 +69,9 @@ def _moc_to_domains(catalog):
 def _actual_domains(snapshot, requested):
     """Expand ``requested`` to every domain sharing a MOC (shared-MOC coverage)."""
     if not requested:
-        raise CurationError("至少指定一个现有 domain")
+        raise CurationError("Name at least one existing domain")
     if len(set(requested)) != len(requested):
-        raise CurationError("domains 不能重复")
+        raise CurationError("Domains must not repeat")
     moc_to_domains = _moc_to_domains(snapshot.catalog)
     actual = set()
     for dom in requested:
@@ -119,10 +119,10 @@ def prepare(root: Path, domains: list[str], *, job_id: str,
     actual = _actual_domains(snapshot, domains)
     if selected_ids is not None:
         if isinstance(selected_ids, (str, bytes)) or not isinstance(selected_ids, list):
-            raise CurationError("selected_ids 必须是卡ID列表")
+            raise CurationError("selected_ids must be a list of card ids")
         eligible = {c.id for c in snapshot.cards.values() if c.domain in actual}
         if len(set(selected_ids)) != len(selected_ids) or not set(selected_ids) <= eligible:
-            raise CurationError('selected_ids重复、不存在或不属于本次领域')
+            raise CurationError('selected_ids repeat, do not exist or are outside these domains')
     cards = _cards_for_packet(snapshot, actual, selected_ids)
     packet = {
         "kind": "curation",
@@ -146,45 +146,45 @@ def prepare(root: Path, domains: list[str], *, job_id: str,
 
 def _normalise_taxonomy(tx, domain, moc_title):
     if not isinstance(tx, dict):
-        raise CurationError(f"{domain}: taxonomy 必须是映射")
+        raise CurationError(f"{domain}: the taxonomy must be a mapping")
     title = tx.get("title")
     if title != moc_title:
         raise CurationError(
-            f"{domain}: taxonomy.title={title!r} 必须等于 catalog MOC 名 {moc_title!r}")
+            f"{domain}: taxonomy.title={title!r} must equal the catalog map name {moc_title!r}")
     narrative = tx.get("narrative")
     if not isinstance(narrative, str) or not narrative.strip():
-        raise CurationError(f"{domain}: taxonomy 缺少叙事")
+        raise CurationError(f"{domain}: the taxonomy has no narrative")
     bridges = tx.get("bridges")
     if bridges is not None and not isinstance(bridges, list):
-        raise CurationError(f"{domain}: bridges 必须是列表")
+        raise CurationError(f"{domain}: bridges must be a list")
     pillars = tx.get("pillars")
     if not isinstance(pillars, list) or not pillars:
-        raise CurationError(f"{domain}: taxonomy 至少需要一个支柱")
+        raise CurationError(f"{domain}: the taxonomy needs at least one pillar")
     seen_names = set()
     seen_orders = set()
     for p in pillars:
         name = p.get("name") if isinstance(p, dict) else None
         if not isinstance(name, str) or not name.strip():
-            raise CurationError(f"{domain}: 支柱缺少非空 name")
+            raise CurationError(f"{domain}: a pillar has no name")
         if name in seen_names:
-            raise CurationError(f"{domain}: 支柱 name 重复 {name!r}")
+            raise CurationError(f"{domain}: pillar name repeated: {name!r}")
         seen_names.add(name)
         why = p.get("why")
         if not isinstance(why, str) or not why.strip():
-            raise CurationError(f"{domain}: 支柱 {name!r} 缺少 why")
+            raise CurationError(f"{domain}: pillar {name!r} has no why")
         order = p.get("order")
         if not isinstance(order, int) or isinstance(order, bool) or order <= 0:
-            raise CurationError(f"{domain}: 支柱 {name!r} 的 order 必须是正整数")
+            raise CurationError(f"{domain}: the order of pillar {name!r} must be a positive integer")
         if order in seen_orders:
-            raise CurationError(f"{domain}: 支柱 order 重复 {order}")
+            raise CurationError(f"{domain}: pillar order repeated: {order}")
         seen_orders.add(order)
         topics = p.get("topics")
         if not isinstance(topics, list) or not topics:
-            raise CurationError(f"{domain}: 支柱 {name!r} 的 topics 必须非空")
+            raise CurationError(f"{domain}: pillar {name!r} needs topics")
         if any(not isinstance(t, str) or not t.strip() for t in topics):
-            raise CurationError(f"{domain}: 支柱 {name!r} 的 topics 只能是非空字符串")
+            raise CurationError(f"{domain}: the topics of pillar {name!r} must be non-empty strings")
         if len({t for t in topics}) != len(topics):
-            raise CurationError(f"{domain}: 支柱 {name!r} 的 topic 名称重复")
+            raise CurationError(f"{domain}: pillar {name!r} repeats a topic name")
 
 
 def _deep_keys_equal_preserved(current, proposed, domain):
@@ -195,9 +195,9 @@ def _deep_keys_equal_preserved(current, proposed, domain):
         if k in owned:
             continue
         if k not in proposed:
-            missing.append(f"未知字段 {k!r} 被删除")
+            missing.append(f"unknown field {k!r} was removed")
         elif proposed[k] != current[k]:
-            missing.append(f"未知字段 {k!r} 被改动")
+            missing.append(f"unknown field {k!r} was changed")
     for collection, identity, known in [
         ('pillars', 'name', {'name', 'order', 'why', 'topics'}),
         ('bridges', 'moc', {'moc', 'why', 'links'}),
@@ -213,9 +213,9 @@ def _deep_keys_equal_preserved(current, proposed, domain):
             new = indexed.get(old.get(identity), {})
             for key, value in old.items():
                 if key not in known and (key not in new or new[key] != value):
-                    missing.append(f'未知字段 {collection}.{old.get(identity)}.{key} 被删除或改动')
+                    missing.append(f'unknown field {collection}.{old.get(identity)}.{key} was removed or changed')
     if missing:
-        raise CurationError(f"{domain}: " + "；".join(sorted(missing)))
+        raise CurationError(f"{domain}: " + "; ".join(sorted(missing)))
 
 
 def _moc_card_ids(packet, domain, catalog):
@@ -229,11 +229,11 @@ def validate(packet: dict, proposal: dict) -> list[dict]:
     """Mechanical checks only — never a semantic self-approval."""
     rows = proposal.get("items")
     if not isinstance(rows, list):
-        raise CurationError("策展提案须为 {items:[...]}")
+        raise CurationError("A curation proposal must be {items:[...]}")
     expected = set(packet["domains"])
     ids = [r.get("domain") for r in rows if isinstance(r, dict)]
     if len(ids) != len(rows) or len(ids) != len(set(ids)) or set(ids) != expected:
-        raise CurationError("策展提案必须覆盖 prepare 的全部实际 domain 且各一次")
+        raise CurationError("A curation proposal must cover every prepared domain exactly once")
     taxon = packet.get("taxonomy") or {}
     packet_tax = taxon.get("taxonomies") or {}
     by_moc = {}
@@ -243,12 +243,12 @@ def validate(packet: dict, proposal: dict) -> list[dict]:
         _normalise_taxonomy(row.get("taxonomy"), domain, moc)
         reason = row.get("reason")
         if not isinstance(reason, str) or not reason.strip():
-            raise CurationError(f"{domain}: 理由必须是具体字符串")
+            raise CurationError(f"{domain}: the reason must be a specific string")
         coverage = row.get("coverage_ids")
         if not isinstance(coverage, list) or not coverage:
-            raise CurationError(f"{domain}: 必须用coverage_ids引用该MOC现有卡作为依据")
+            raise CurationError(f"{domain}: cite existing cards of this map in coverage_ids as evidence")
         if row.get('source_quotes'):
-            raise CurationError(f"{domain}: 策展只以现有卡为证据，不接受source_quotes")
+            raise CurationError(f"{domain}: curation takes existing cards as evidence; source_quotes are not accepted")
         known = _moc_card_ids(packet, domain, packet.get("catalog"))
         # id 分隔符（-/_）转抄错误是本系统已知撞车族：先按去分隔符归一，
         # 唯一匹配则替换成规范 id；多义或无匹配再报错并给出最接近候选。
@@ -265,9 +265,9 @@ def validate(packet: dict, proposal: dict) -> list[dict]:
                 coverage[i] = candidates[0]
             else:
                 close = difflib.get_close_matches(str(cid), sorted(known), n=3, cutoff=0.6)
-                bad.append(f'{cid}（最接近：{"、".join(close) or "无"}）')
+                bad.append(f'{cid} (closest: {", ".join(close) or "none"})')
         if bad:
-            raise CurationError(f"{domain}: coverage_ids 引用不是该 MOC 的现有卡：{'；'.join(bad)}")
+            raise CurationError(f"{domain}: coverage_ids that are not existing cards of this map: {'; '.join(bad)}")
         # 非策展顶层字段（如既有 YAML 的 source）由服务端按现状补齐，与
         # _merge_taxonomy 的保留语义一致；模型只需设计策展字段，不转抄元数据。
         current_tax = packet_tax.get(moc) or {}
@@ -281,24 +281,24 @@ def validate(packet: dict, proposal: dict) -> list[dict]:
     for moc, txs in by_moc.items():
         base = txs[0]
         if any(tx != base for tx in txs[1:]):
-            raise CurationError(f"MOC {moc!r} 的多个 domain 给出了不同 taxonomy，拒绝")
+            raise CurationError(f"The domains of map {moc!r} propose different taxonomies; rejected")
     return rows
 
 
 def review_rows(rows: list[dict], review: dict) -> dict[str, dict]:
     findings = review.get("items")
     if not isinstance(findings, list):
-        raise CurationError("复核须为 {items:[{domain,decision,reason}]}")
+        raise CurationError("A review must be {items:[{domain,decision,reason}]}")
     doms = [x.get("domain") for x in findings if isinstance(x, dict)]
     if len(doms) != len(findings) or len(doms) != len(set(doms)) or \
             set(doms) != {r["domain"] for r in rows}:
-        raise CurationError("独立复核没有逐域覆盖全部候选")
+        raise CurationError("The independent review does not cover every candidate domain")
     out = {}
     for x in findings:
         if x.get("decision") not in {"accept", "revise"}:
-            raise CurationError(f"{x.get('domain')}: 复核必须有 accept|revise 判定")
+            raise CurationError(f"{x.get('domain')}: the review decision must be accept or revise")
         if not isinstance(x.get("reason"), str) or not x["reason"].strip():
-            raise CurationError(f"{x.get('domain')}: 复核理由必须具体")
+            raise CurationError(f"{x.get('domain')}: the review reason must be specific")
         out[x["domain"]] = x
     return out
 
@@ -329,7 +329,7 @@ def _merge_taxonomy(current, proposed_tx):
         if k in OWNED_KEYS:
             continue
         if k not in base or base[k] != current[k]:
-            raise CurationError(f"未知字段 {k!r} 在合并时丢失或改变")
+            raise CurationError(f"unknown field {k!r} was lost or changed in the merge")
     return base
 
 
@@ -354,7 +354,7 @@ def _occupied_removed(snapshot, packet, rows_by_domain_moc):
         prior = snapshot.taxonomies.get(moc) or {}
         prior_pairs = {(p['name'], t) for p in prior.get('pillars', []) for t in p.get('topics', [])}
         if not prior_pairs <= pairs:
-            raise CurationError(f'策展扩展不能删除既有类别：{moc}')
+            raise CurationError(f'Extending a taxonomy cannot remove existing categories: {moc}')
     for card in snapshot.cards.values():
         moc = None
         meta = (snapshot.catalog or {}).get("domains", {}).get(card.domain)
@@ -367,7 +367,8 @@ def _occupied_removed(snapshot, packet, rows_by_domain_moc):
         prior_pairs = {(p['name'], t) for p in prior.get('pillars', []) for t in p.get('topics', [])}
         if (pillar, topic) in prior_pairs and (pillar, topic) not in pairs_by_moc[moc]:
             raise CurationError(
-                f"删除会令现有卡非法：{card.id} pillar={pillar!r} topic={topic!r}，请保留旧类")
+                f"Removing this would make an existing card invalid: {card.id} pillar={pillar!r} "
+                f"topic={topic!r}; keep the old category")
 
 
 def _taxonomy_changes(root, snapshot, packet, rows, moc_taxonomies):
@@ -403,7 +404,7 @@ def apply(root: Path, job_id: str) -> dict:
     from .moc import build_mocs
     state = jobs.load(root, job_id)
     if state["kind"] != "curation":
-        raise CurationError("任务类型不是策展")
+        raise CurationError("This job is not a curation job")
     if state["status"] in {"applied", "published", "partial", "rolled_back"}:
         return state
     resumed = jobs.resume_transaction(root, job_id)
@@ -422,12 +423,12 @@ def apply(root: Path, job_id: str) -> dict:
         return jobs.update(root, job_id, status="needs_revision", pending=pending,
                            applied_paths=[])
     if not all(x["decision"] == "accept" for x in findings.values()):
-        raise CurationError("内部不一致：复核并非全部 accept")
+        raise CurationError("Internal inconsistency: not every review item is accept")
 
     snapshot = read_snapshot(root)
     writable_snapshot(snapshot)
     if taxonomy_fingerprint(snapshot, packet.get("taxonomy_scope")) != packet["taxonomy_sha256"]:
-        raise Conflict("策展体系（catalog/taxonomy）在准备后变化，请重建任务")
+        raise Conflict("The catalog or taxonomy changed after preparation; prepare the job again")
 
     _occupied_removed(snapshot, packet, rows)
 

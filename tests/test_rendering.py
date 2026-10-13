@@ -217,7 +217,7 @@ def test_normalize_markdown_interface_and_issues():
     assert isinstance(normalized, str)
     assert isinstance(total, int) and total > 0
     assert isinstance(issues, list) and len(issues) == 2
-    assert all(i.startswith("    旧 ") and "\n    新 " in i for i in issues)
+    assert all(i.startswith("    old ") and "\n    new " in i for i in issues)
     # 无改动文档：零计数、空 issues、文本原样
     untouched, t0, i0 = normalize_markdown("纯中文正文，没有公式。\n\n`O(n)` 与 [[链接]] 与 https://example.com/x_y\n")
     assert untouched == "纯中文正文，没有公式。\n\n`O(n)` 与 [[链接]] 与 https://example.com/x_y\n"

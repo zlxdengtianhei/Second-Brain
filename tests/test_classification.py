@@ -45,7 +45,7 @@ def test_valid_existing_category_cannot_be_overwritten(tmp_path):
     row['topic'] = '另一个合法主题'
     before = path.read_bytes()
     submit_reviewed(root, 'overwrite', {'items': [row]}, review)
-    with pytest.raises(Conflict, match='不能覆盖已有topic'):
+    with pytest.raises(Conflict, match='cannot overwrite the existing topic'):
         c.apply(root, 'overwrite')
     assert path.read_bytes() == before
 
@@ -56,7 +56,7 @@ def test_accidental_body_edit_is_rejected_before_write(tmp_path, monkeypatch):
     submit_reviewed(root, 'classify', {'items': [row]}, review)
     real = c.patch_frontmatter
     monkeypatch.setattr(c, 'patch_frontmatter', lambda raw, updates: real(raw, updates) + b'changed body')
-    with pytest.raises(ValueError, match='意外修改正文'):
+    with pytest.raises(ValueError, match='would change the card body'):
         c.apply(root, 'classify')
     assert path.read_bytes() == before
 
@@ -95,13 +95,13 @@ def test_bad_quote_cannot_be_accepted_or_counted_as_reviewed(tmp_path):
     root, path, row, review = ready(tmp_path)
     before = path.read_bytes()
     row['evidence_quote'] = '不在冻结正文里的词'
-    with pytest.raises(ValueError, match='逐字'):
+    with pytest.raises(ValueError, match='verbatim'):
         submit_reviewed(root, 'classify', {'items': [row]}, review)
     state = jobs.load(root, 'classify')
     assert state['candidate'] is None and state['review'] is None
     assert [r['status'] for r in jobs.list_runs(root, 'classify')] == ['started']
     packet = jobs.read_input(root, 'classify')
-    with pytest.raises(ValueError, match='已接受项证据'):
+    with pytest.raises(ValueError, match='Evidence of an accepted item'):
         c.require_accepted_evidence(packet, [row], {row['id']: review['items'][0]})
     assert path.read_bytes() == before
 
@@ -129,7 +129,7 @@ def test_unrelated_taxonomy_change_does_not_invalidate_frozen_classification(tmp
     assert len(changes) == 1 and pending == []
     altered = json.loads(json.dumps(snapshot.taxonomies))
     altered[MOC]['narrative'] = '同域实际变动'
-    with pytest.raises(Conflict, match='分类体系'):
+    with pytest.raises(Conflict, match='taxonomy changed'):
         c.stage_changes(replace(snapshot, taxonomies=altered), jobs.read_input(root, 'classify'), [row], {EXISTING: review['items'][0]})
 
 
@@ -166,7 +166,7 @@ def test_stale_projection_cannot_overwrite_another_completed_batch(tmp_path, mon
             c.apply(root, 'other')
         return real(snapshot, today)
     monkeypatch.setattr(projections, 'entry_projection', interleave)
-    with pytest.raises(Conflict, match='read changed after|依赖|读取后'):
+    with pytest.raises(Conflict, match='changed after it was|changed while it was read'):
         c.apply(root, 'first')
     assert b'pillar: null' in path.read_bytes()
     assert b'pillar: null' not in other.read_bytes()
