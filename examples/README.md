@@ -22,7 +22,7 @@ How it was made:
 4. Five reviews were logged with `sb review log --device example`, so the review status shows a few learned cards next to new ones.
 5. After a tool update, the maps and `HOME.md` were regenerated with `sb refresh --apply` and `sb docs --apply`.
 
-`tests/test_example_vault.py` checks that a fresh copy reports no problems, that the maps and `HOME.md` match the cards, that relations and links resolve, and that all text is English.
+`tests/test_example_vault.py` checks that a fresh copy reports no problems, that the maps and `HOME.md` match the cards, that relations and links resolve, that all text is English, and that the counts given here, in both READMEs and in docs/agents.md are the vault's.
 
 License: the vault content is under CC BY 4.0; the prompt templates and plugin settings are under MIT ([LICENSE](LICENSE)).
 

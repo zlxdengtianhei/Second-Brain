@@ -2,8 +2,8 @@
 
 The vault was built by the real ingest chain; these tests guard what a visitor
 sees in a fresh copy with no config file: no problems, maps and HOME that
-match the cards, English text only, links and relations that resolve, and the
-two untouched inbox notes.
+match the cards, English text only, links and relations that resolve, the
+two untouched inbox notes, and the counts the READMEs give.
 """
 from __future__ import annotations
 
@@ -104,6 +104,34 @@ def test_cards_have_english_sections_and_resolving_relations():
             cross_domain += front_matter(target)['domain'] != fm['domain']
     assert cross_domain >= 2
     assert sum('```mermaid' in p.read_text(encoding='utf-8') for p in cards()) >= 3
+
+
+def test_docs_state_the_vault_counts():
+    """The numbers the READMEs and the agents guide give for the example vault are the vault's."""
+    by_domain = {}
+    for path in cards():
+        domain = front_matter(path)['domain']
+        by_domain[domain] = by_domain.get(domain, 0) + 1
+    n, diagrams = len(cards()), sum('```mermaid' in p.read_text(encoding='utf-8') for p in cards())
+    sources = sum(p.is_dir() for p in (EXAMPLE / '40_Sources').iterdir())
+    reviews = len((EXAMPLE / '_data/review/events-example.jsonl').read_text(encoding='utf-8').splitlines())
+    words = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten']
+    assert len(by_domain) == 3
+    expected = {
+        'README.md': [f'The example vault has {n} cards in three domains', f'{diagrams} of them with a diagram',
+                      f'from {sources} short notes', f'{words[reviews]} reviews were logged'],
+        'README.zh-CN.md': [f'示例库有 {n} 张英文卡片，分属三个领域', f'其中 {diagrams} 张带图',
+                            f'从 {sources} 份短笔记', f'记了 {reviews} 次复习'],
+        'examples/README.md': [f'{n} cards in three domains: `learning` ({by_domain["learning"]}), '
+                               f'`statistics` ({by_domain["statistics"]}), `computing` ({by_domain["computing"]}); '
+                               f'{diagrams} cards have a diagram',
+                               f'the {sources} source notes', f'a review log with {reviews} reviews'],
+        'docs/agents.md': [f'{sources} sources, 34 sub-agents', f'{n} cards'],
+    }
+    for name, phrases in expected.items():
+        text = (ROOT / name).read_text(encoding='utf-8')
+        for phrase in phrases:
+            assert phrase in text, (name, phrase)
 
 
 def test_wiki_links_resolve():
