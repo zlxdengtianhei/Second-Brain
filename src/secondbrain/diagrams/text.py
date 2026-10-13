@@ -7,6 +7,7 @@ paraphrases score low even when they are faithful.
 from __future__ import annotations
 
 import re
+import string
 
 _CJK_RUN = re.compile(r"[一-鿿]+")
 _LATIN = re.compile(r"[A-Za-z][A-Za-z0-9_\-]+|\d+")
@@ -42,7 +43,7 @@ _TEX_SYMBOLS = {
         "varsigma sigma tau upsilon phi chi psi omega".split())},
     "varepsilon": "ε", "vartheta": "θ", "varphi": "φ", "Gamma": "Γ", "Delta": "Δ", "Theta": "Θ",
     "Lambda": "Λ", "Xi": "Ξ", "Pi": "Π", "Sigma": "Σ", "Phi": "Φ", "Psi": "Ψ", "Omega": "Ω",
-    "sum": "Σ", "prod": "∏", "sqrt": "√", "partial": "∂", "nabla": "∇", "int": "∫", "infty": "∞",
+    "sum": "Σ", "prod": "Π", "sqrt": "√", "partial": "∂", "nabla": "∇", "int": "∫", "infty": "∞",
     "cdot": "·", "times": "×", "div": "÷", "pm": "±", "leq": "≤", "le": "≤", "geq": "≥", "ge": "≥",
     "neq": "≠", "ne": "≠", "approx": "≈", "in": "∈", "oplus": "⊕", "otimes": "⊗", "odot": "⊙",
 }
@@ -51,6 +52,8 @@ _TEX_FORMAT = set("frac dfrac tfrac left right mathrm mathbf mathit mathcal math
                   "operatorname hat bar tilde vec dot ddot overline underline widehat displaystyle quad qquad "
                   "big Big bigg Bigg limits".split())
 _TEX_CMD = re.compile(r"\\([A-Za-z]+)")
+# Case folding stays within ASCII: lower() would turn the sum sign Σ into sigma.
+_ASCII_LOWER = str.maketrans(string.ascii_uppercase, string.ascii_lowercase)
 _MATH_SPAN = re.compile(r"\$\$(.+?)\$\$|\$(.+?)\$", re.S)
 _NUMBER_WORDS = {w: i for i, w in enumerate(
     "zero one two three four five six seven eight nine ten eleven twelve".split())}
@@ -68,7 +71,8 @@ def plain_math(s: str) -> str:
         if name in _TEX_SYMBOLS:
             return f" {_TEX_SYMBOLS[name]} "
         return " " if name in _TEX_FORMAT else f" {name} "
-    return _TEX_CMD.sub(sub, s).replace("∑", "Σ").replace("−", "-")
+    # the n-ary signs and their Greek look-alikes are one token each
+    return _TEX_CMD.sub(sub, s).replace("∑", "Σ").replace("∏", "Π").replace("−", "-")
 
 
 def _stem(w: str) -> str:
@@ -95,7 +99,7 @@ def grounding_tokens(s: str) -> set[str]:
     Request-ACK', 'S_i' in 'S_i', 'σ(Wx + b)' in '$\\sigma(Wx+b)$'. tokens()
     keeps the original rule because the audit reproduces published numbers.
     """
-    s = strip_markup(plain_math(s)).lower()
+    s = strip_markup(plain_math(s)).translate(_ASCII_LOWER)  # Σ must stay Σ, not become σ
     out = {_stem(w) for w in _WORD.findall(s)}
     out.update(_SYMBOLS.findall(s))
     for run in _CJK_RUN.findall(s):
@@ -114,7 +118,9 @@ def source_tokens(s: str) -> set[str]:
     """
     out = grounding_tokens(s)
     for m in _MATH_SPAN.finditer(s):
-        out.update(ch for ch in plain_math(m.group(1) or m.group(2)).lower() if "a" <= ch <= "z")
+        # letters of the formula itself, not of command names such as \log
+        body = _TEX_CMD.sub(lambda c: f" {_TEX_SYMBOLS.get(c.group(1), '')} ", m.group(1) or m.group(2))
+        out.update(ch for ch in body.translate(_ASCII_LOWER) if "a" <= ch <= "z")
     counts = [_CN_NUMBERS.get(x, None) if not x.isdigit() else int(x) for x in _COUNT_CN.findall(s)]
     counts += [int(x) if x.isdigit() else _NUMBER_WORDS[x.lower()] for x in _COUNT_EN.findall(s)]
     for n in counts:

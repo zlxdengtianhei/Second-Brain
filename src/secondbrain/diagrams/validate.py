@@ -14,7 +14,7 @@ corpus run through tools/mermaid_check.
 | V7 | structure, state and sequence links are labelled; a decision has 2+ labelled exits |
 | V8 | a card with 2+ propositions gets a diagram citing 2+ sources (E counts) |
 | V10 | labels are plain text, not TeX |
-| V11 | a data diagram shows its inputs (no incoming edge) and outputs (no outgoing edge) |
+| V11 | a data diagram shows its inputs (outgoing edges only) and outputs (incoming edges only) |
 
 Thresholds are recommended defaults set from the distribution of existing
 diagrams and a 50-card pilot; they are not calibrated.
@@ -230,11 +230,17 @@ def check(ir: DiagramIR, card: Card, limits: Limits = DEFAULT_LIMITS) -> tuple[l
                 errors.append(Issue("V11", "a data diagram shows where data enters (role input) and where it "
                                            "leaves (role output)"))
             for n in inputs:
+                where = f"nodes[{ir.nodes.index(n)}]"
                 if shape.indeg.get(n.key):
-                    errors.append(Issue("V11", f"input «{n.label}» has an incoming edge", f"nodes[{ir.nodes.index(n)}]"))
+                    errors.append(Issue("V11", f"input «{n.label}» has an incoming edge", where))
+                if not shape.outs.get(n.key):
+                    errors.append(Issue("V11", f"input «{n.label}» feeds nothing; add its outgoing edge", where))
             for n in outputs:
+                where = f"nodes[{ir.nodes.index(n)}]"
                 if shape.outs.get(n.key):
-                    errors.append(Issue("V11", f"output «{n.label}» has an outgoing edge", f"nodes[{ir.nodes.index(n)}]"))
+                    errors.append(Issue("V11", f"output «{n.label}» has an outgoing edge", where))
+                if not shape.indeg.get(n.key):
+                    errors.append(Issue("V11", f"output «{n.label}» receives nothing; add its incoming edge", where))
 
     for i, n in enumerate(ir.nodes):
         if title_match(n.label, list(card.related_titles)):

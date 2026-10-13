@@ -431,3 +431,22 @@ def test_arrows_field_and_retired_data_role():
     report = validate(data, card)
     assert report.ok and report.ir.nodes[1].role == "step"
     assert [w.code for w in report.warnings] == ["W0"]
+
+
+def test_v4_case_folding_never_turns_the_sum_sign_into_sigma():
+    src = r"交叉熵 $H = -\sum_i y_i \log p_i$，其中 $p_i$ 是预测概率"
+    assert _first_node_v4("σ", src) != []          # no sigma on the card
+    assert _first_node_v4("σ(z)", src) != []
+    assert _first_node_v4("Σ y_i log p_i", src) == []
+    assert _first_node_v4("Π p_i", r"联合概率 $\prod_i p_i$") == []
+    assert _first_node_v4("π", r"联合概率 $\prod_i p_i$") != []
+    assert "g" not in source_tokens(src)            # letters of \log are not formula letters
+    assert {"σ", "w", "x", "b"} <= source_tokens(r"输出为 $\sigma(Wx+b)$")
+
+
+def test_v11_inputs_feed_and_outputs_receive():
+    data, card = _dataflow()
+    data["edges"] = [e for e in data["edges"] if e["from"] != "x" and e["to"] != "y"]
+    data["edges"].append({"from": "f", "to": "add", "label": "F(x)", "p": ["P1"]})
+    report = validate(data, card)
+    assert [(i.code, i.where) for i in report.errors if i.code == "V11"] == [("V11", "nodes[0]"), ("V11", "nodes[3]")]
