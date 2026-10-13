@@ -6,6 +6,7 @@ For each card in `candidate.cards` decide:
 - `accept`: one recallable unit, faithful to the chunk (check the `source_quotes` and the propositions against the text), correctly classified (domain by use, legal or well-proposed topic), relations that make sense, 2–4 useful flashcards.
 - `duplicate`: the same knowledge already exists; give the existing card id in `duplicate_of`. `near_duplicates` shows the closest existing cards with their full text. A related card that adds something new is not a duplicate.
 - `revise`: anything else. Give a concrete, checkable reason (what is wrong, where), not general advice.
+  When the card belongs to another domain, put that domain's slug (from `domains`) in `suggested_domain`; the producer then gets its taxonomy in the repair round.
 
 For each proposed new topic (`candidate.new_topics`) decide `accept` or `revise`: is the boundary clear, is it really missing from the taxonomy (not a synonym or a sub-case of an existing topic), and would more than this one card belong there over time?
 

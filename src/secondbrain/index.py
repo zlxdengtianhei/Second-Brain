@@ -124,33 +124,22 @@ def _query_terms(conn, qtokens: list[str]) -> list[str]:
     return present[:MAX_QUERY_TERMS]
 
 
-def search(root, snapshot: Snapshot, query: str, limit: int = 12) -> list[dict]:
-    """Top ``limit`` cards by BM25; same result shape as the in-memory ranker."""
-    if not isinstance(query, str):
-        raise SearchError('query must be a string')
+def _check_limit(limit) -> None:
     if isinstance(limit, bool) or not isinstance(limit, int) or limit < 1:
         raise SearchError('limit must be a positive integer')
-    if not fts5_available():
-        return memory_search(snapshot, query, limit=limit)
-    try:
-        path = index_path(root)
-    except (OSError, ValueError):
-        return memory_search(snapshot, query, limit=limit)
+
+
+def _query(conn, snapshot: Snapshot, query: str, limit: int) -> list[dict]:
     qtokens = _tokenize(query)
     if not qtokens:
         return []
-    conn = _connect(path)
-    try:
-        sync(conn, snapshot)
-        terms = _query_terms(conn, qtokens)
-        if not terms:
-            return []
-        match = ' OR '.join('"' + t.replace('"', '""') + '"' for t in terms)
-        rows = conn.execute(
-            'SELECT docs.id, bm25(fts) AS score FROM fts JOIN docs ON docs.rowid = fts.rowid '
-            'WHERE fts MATCH ? ORDER BY score, docs.id LIMIT ?', (match, limit)).fetchall()
-    finally:
-        conn.close()
+    terms = _query_terms(conn, qtokens)
+    if not terms:
+        return []
+    match = ' OR '.join('"' + t.replace('"', '""') + '"' for t in terms)
+    rows = conn.execute(
+        'SELECT docs.id, bm25(fts) AS score FROM fts JOIN docs ON docs.rowid = fts.rowid '
+        'WHERE fts MATCH ? ORDER BY score, docs.id LIMIT ?', (match, limit)).fetchall()
     out = []
     for cid, score in rows:
         card = snapshot.cards.get(cid)
@@ -160,3 +149,33 @@ def search(root, snapshot: Snapshot, query: str, limit: int = 12) -> list[dict]:
                     'score': round(-score, 6),
                     'snippet': _snippet(card, card.body.lower() if card.body else '', terms)})
     return out
+
+
+def search(root, snapshot: Snapshot, query: str, limit: int = 12) -> list[dict]:
+    """Top ``limit`` cards by BM25; same result shape as the in-memory ranker."""
+    if not isinstance(query, str):
+        raise SearchError('query must be a string')
+    return search_many(root, snapshot, [query], limit)[0]
+
+
+def search_many(root, snapshot: Snapshot, queries: list[str], limit: int = 12) -> list[list[dict]]:
+    """``search`` for several queries with one index synchronization.
+
+    Long texts rank badly as one query (only the rarest terms survive), so
+    callers that route a whole passage split it and query each part.
+    """
+    if not all(isinstance(q, str) for q in queries):
+        raise SearchError('queries must be strings')
+    _check_limit(limit)
+    if not fts5_available():
+        return [memory_search(snapshot, q, limit=limit) for q in queries]
+    try:
+        path = index_path(root)
+    except (OSError, ValueError):
+        return [memory_search(snapshot, q, limit=limit) for q in queries]
+    conn = _connect(path)
+    try:
+        sync(conn, snapshot)
+        return [_query(conn, snapshot, q, limit) for q in queries]
+    finally:
+        conn.close()

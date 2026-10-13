@@ -40,6 +40,7 @@ from ..store import Change, Conflict, digest, read_bytes
 from ..vault import Card, parse_note, patch_frontmatter, read_snapshot
 from . import card_diagrams
 from .chunking import chunk_text
+from .routing import route
 
 KIND = 'ingest'
 METHOD = 'ingest/3'
@@ -89,12 +90,6 @@ def read_source(path: Path, settings: config.Settings) -> tuple[bytes, str]:
                       '(set [ingest] converter = "markitdown" for PDF/DOCX/HTML)')
 
 
-def _essence(card: Card) -> str:
-    match = re.search(r'^## [^\n]*\n+([^\n#][^\n]*)', card.body, re.M)
-    text = match.group(1) if match else card.body.strip().split('\n', 1)[0]
-    return text.strip()[:200]
-
-
 def _topic_counts(snapshot) -> dict:
     counts: dict = {}
     for c in snapshot.cards.values():
@@ -103,19 +98,6 @@ def _topic_counts(snapshot) -> dict:
             counts.setdefault(c.domain, {}).setdefault(f'{p}\x1f{t}', 0)
             counts[c.domain][f'{p}\x1f{t}'] += 1
     return counts
-
-
-def _chunk_context(root, snapshot, text: str, settings) -> tuple[list, list]:
-    from ..index import search
-    hits = search(root, snapshot, text, 20)
-    votes: dict = {}
-    for rank, hit in enumerate(hits):
-        votes[hit['domain']] = votes.get(hit['domain'], 0) + (20 - rank)
-    domains = [d for d, _ in sorted(votes.items(), key=lambda kv: (-kv[1], kv[0]))
-               if d in snapshot.catalog.get('domains', {})][:settings.ingest.candidate_domains]
-    neighbors = [{'id': h['id'], 'title': h['title'], 'domain': h['domain'],
-                  'essence': _essence(snapshot.cards[h['id']])} for h in hits[:8]]
-    return domains, neighbors
 
 
 def prepare(root: Path, source: Path, *, settings: config.Settings | None = None) -> dict:
@@ -149,8 +131,9 @@ def prepare(root: Path, source: Path, *, settings: config.Settings | None = None
     validate_catalog(snapshot.catalog)
     chunks = []
     for chunk in chunk_text(text, settings.ingest.chunk_chars):
-        domains, neighbors = _chunk_context(root, snapshot, text[chunk['start']:chunk['end']], settings)
-        chunks.append({**chunk, 'candidate_domains': domains, 'neighbors': neighbors})
+        routed = route(root, snapshot, text[chunk['start']:chunk['end']], domains=settings.ingest.candidate_domains)
+        chunks.append({**chunk, 'candidate_domains': routed['domains'], 'neighbors': routed['neighbors'],
+                       'routing': {'votes': routed['votes'], 'passages': routed['passages']}})
     domains = sorted(snapshot.catalog['domains'])
     packet = {
         'kind': KIND, 'method_version': METHOD,
@@ -245,6 +228,14 @@ def _legal_pairs(packet: dict, domain: str) -> set:
             for t in p.get('topics', []) if isinstance(t, str)}
 
 
+def _legal_listing(packet: dict, domain: str) -> str:
+    """``Pillar: topic, topic; Pillar: topic`` for error messages a repair round can act on."""
+    tax = _taxonomy_of(packet, domain)
+    rows = [f'{p["name"]}: {", ".join(t for t in p.get("topics", []) if isinstance(t, str))}'
+            for p in tax.get('pillars', []) if isinstance(p, dict)]
+    return '; '.join(rows) or '(no curated topics yet; propose one in new_topics)'
+
+
 def _relation_types(catalog: dict) -> list:
     rels = list(catalog.get('relation_types') or [])
     for words in (catalog.get('domain_relations') or {}).values():
@@ -309,10 +300,29 @@ def producer_packet(root: Path, state: dict, packet: dict, slot: str) -> dict:
                      'flashcards_per_card': [2, 4], 'id_prefix': packet['settings']['id_prefix']}}
     if rnd:
         prev_slot = _slot_name(base, rnd - 1)
-        out['previous_candidate'] = jobs.artifact(root, state, 'candidate', prev_slot)
-        out['review_findings'] = _findings(jobs.artifact(root, state, 'review', prev_slot))
+        previous = jobs.artifact(root, state, 'candidate', prev_slot)
+        findings = _findings(jobs.artifact(root, state, 'review', prev_slot))
+        out['previous_candidate'] = previous
+        out['review_findings'] = findings
         out['kept_slugs'] = sorted(_accepted_so_far(root, state, base, rnd))
+        wanted = list(chunk['candidate_domains'])
+        for domain in _domains_named(packet, findings) + [c.get('domain') for c in previous.get('cards', [])]:
+            if domain in packet['catalog']['domains'] and domain not in wanted:
+                wanted.append(domain)
+        out['candidate_taxonomies'] = _candidate_taxonomies(packet, wanted)
     return out
+
+
+def _domains_named(packet: dict, findings: dict) -> list:
+    """Domains a reviewer asked for: ``suggested_domain`` fields, or domain names in the reasons."""
+    names = sorted(packet['catalog']['domains'], key=len, reverse=True)
+    found = []
+    for row in findings.get('cards', []) + findings.get('new_topics', []) + [findings.get('coverage') or {}]:
+        if isinstance(row.get('suggested_domain'), str):
+            found.append(row['suggested_domain'])
+        text = str(row.get('reason') or '')
+        found += [d for d in names if re.search(r'(?<![\w-])' + re.escape(d) + r'(?![\w-])', text)]
+    return list(dict.fromkeys(found))
 
 
 def _findings(review: dict) -> dict:
@@ -343,6 +353,8 @@ def review_packet(root: Path, state: dict, packet: dict, slot: str) -> dict:
            'near_duplicates': {c['slug']: _neighbors_for(root, snapshot, c)
                                for c in candidate.get('cards', []) if isinstance(c, dict) and c.get('slug')},
            'taxonomies': _candidate_taxonomies(packet, domains),
+           'domains': [{'slug': d, 'question': m.get('question')}
+                       for d, m in sorted(packet['catalog']['domains'].items())],
            'relation_types': _relation_types(packet['catalog']),
            'other_chunks_cards': _other_cards(root, state, packet, base)}
     if rnd:
@@ -461,7 +473,8 @@ def validate_candidate(packet: dict, payload: dict, *, slot: str, other_cards: l
             errors.append(f'{where}.status must be confirmed or needs-review')
         domain = c.get('domain')
         if domain not in catalog['domains']:
-            errors.append(f'{where}.domain {domain!r} is not a catalog domain')
+            errors.append(f'{where}.domain {domain!r} is not a catalog domain; '
+                          f'legal domains: {", ".join(sorted(catalog["domains"]))}')
         else:
             pair = (c.get('pillar'), c.get('topic'))
             if pair not in _legal_pairs(packet, domain):
@@ -469,7 +482,8 @@ def validate_candidate(packet: dict, payload: dict, *, slot: str, other_cards: l
                     used_topics.add((domain, *pair))
                 elif (domain, *pair) not in known_topics:
                     errors.append(f'{where}: ({pair[0]!r}, {pair[1]!r}) is neither a topic of {domain} '
-                                  'nor a new topic proposed for this source')
+                                  'nor a new topic proposed for this source; legal topics of '
+                                  f'{domain}: {_legal_listing(packet, domain)}')
         if not isinstance(c.get('essence'), str) or not c['essence'].strip():
             errors.append(f'{where}.essence must be one non-empty sentence')
         props = c.get('propositions')
@@ -565,7 +579,7 @@ def validate_candidate(packet: dict, payload: dict, *, slot: str, other_cards: l
     return payload
 
 
-def validate_review(candidate: dict, review: dict, existing_ids: set) -> dict:
+def validate_review(candidate: dict, review: dict, existing_ids: set, domains=()) -> dict:
     errors = []
     if not isinstance(review, dict):
         raise IngestError('review must be a JSON object')
@@ -583,6 +597,8 @@ def validate_review(candidate: dict, review: dict, existing_ids: set) -> dict:
             errors.append(f'{row["slug"]}: decision must be accept, revise or duplicate')
         if row.get('decision') == 'duplicate' and row.get('duplicate_of') not in existing_ids:
             errors.append(f'{row["slug"]}: duplicate_of must be an existing card id')
+        if row.get('suggested_domain') is not None and row['suggested_domain'] not in domains:
+            errors.append(f'{row["slug"]}: suggested_domain must be one of {", ".join(sorted(domains))}')
         if not isinstance(row.get('reason'), str) or not row['reason'].strip():
             errors.append(f'{row["slug"]}: every decision needs a concrete reason')
     if sorted(seen) != sorted(slugs):
@@ -616,7 +632,7 @@ def validate_submission(packet: dict, payload: dict, *, role: str, candidate=Non
         return card_diagrams.validate_answer(payload)
     existing_ids, existing_titles = _vault_ids_titles(root)
     if role == 'reviewer':
-        return validate_review(candidate, payload, existing_ids)
+        return validate_review(candidate, payload, existing_ids, packet['catalog']['domains'])
     base, rnd = _base(chunk), _round(chunk)
     return validate_candidate(packet, payload, slot=chunk,
                               other_cards=_other_cards(root, state, packet, base),

@@ -90,7 +90,7 @@ REVIEW_CARDS = {
         'cards': {'type': 'array', 'items': {
             'type': 'object', 'required': ['slug', 'decision', 'reason'],
             'properties': {'slug': _STR, 'decision': {'type': 'string', 'enum': ['accept', 'revise', 'duplicate']},
-                           'duplicate_of': _NSTR, 'reason': _STR}}},
+                           'duplicate_of': _NSTR, 'suggested_domain': _NSTR, 'reason': _STR}}},
         'new_topics': {'type': 'array', 'items': {
             'type': 'object', 'required': ['domain', 'pillar', 'name', 'decision', 'reason'],
             'properties': {'domain': _STR, 'pillar': _STR, 'name': _STR, 'decision': _DECISION, 'reason': _STR}}},
