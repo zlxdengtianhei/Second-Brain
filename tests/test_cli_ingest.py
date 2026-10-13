@@ -217,3 +217,26 @@ def test_submit_commands_reach_the_same_config_and_state(tmp_path, capsys, monke
     done = subprocess.run(runnable, shell=True, capture_output=True, text=True, env=env)
     assert done.returncode == 0, done.stderr
     assert json.loads(done.stdout)['run_id'] == handoff['run_id']
+
+
+def test_after_an_interruption_the_open_run_is_handed_out_again_and_its_answer_can_be_submitted(tmp_path, capsys):
+    import shlex
+    root = build_ingest_vault(tmp_path / 'vault')
+    code, [waiting], _ = run(capsys, root, 'ingest', '--all', '--executor', 'host')
+    first = waiting['handoffs'][0]
+    job_id = waiting['job_id']
+    # a sub-agent wrote its answer; the coordinator stopped before the answer was submitted
+    Path(first['output_path']).write_text(json.dumps(first_candidate()), encoding='utf-8')
+    keys = ('run_id', 'packet_path', 'output_path', 'submit_cmd')
+    code, state, _ = run(capsys, root, 'job', 'advance', job_id, '--executor', 'host')
+    [again] = state['handoffs']
+    assert code == 0 and {k: again[k] for k in keys} == {k: first[k] for k in keys}
+    code, packet, _ = run(capsys, root, 'job', 'packet', job_id, '--role', 'producer')
+    assert {k: packet[k] for k in keys} == {k: first[k] for k in keys}
+    # the coordinator submits the file unchanged with the model it started the sub-agent with
+    argv = shlex.split(first['submit_cmd'].replace('<model id>', 'gpt-test'))
+    assert cli.main(argv[argv.index('--vault'):]) == 0
+    capsys.readouterr()
+    code, state, _ = run(capsys, root, 'job', 'advance', job_id, '--executor', 'host')
+    assert [h['step'] for h in state['handoffs']] == ['review']
+    assert jobs.load_run(root, job_id, first['run_id'])['status'] == 'submitted'

@@ -658,3 +658,21 @@ def test_an_unregistered_card_is_named_when_writing_is_refused(tmp_path):
     message = str(err.value)
     assert 'unresolved problem' in message and ('Stray note.md' in message or 'card_stray' in message)
     assert not any('一' <= ch <= '鿿' for ch in message)
+
+
+def test_home_counts_folders_and_cards_as_the_ingest_leaves_the_vault(tmp_path):
+    root = build_ingest_vault(tmp_path / 'vault')  # default after_ingest = move
+    config.activate(replace(config.current(), card_language='en'))
+    _, result, _ = run_default(root, layouts.DEFAULT)
+    assert result['status'] == 'applied' and result['inbox_moved']
+    home = (root / 'HOME.md').read_text(encoding='utf-8')
+    table = {d: int(n.replace(',', '')) for d, n in re.findall(r'^\| `([^`]+)/` \| ([\d,]+) \|$', home, re.M)}
+
+    def on_disk(folder):
+        base = root / folder
+        return sum(1 for p in base.rglob('*') if p.is_file() and not any(
+            x.startswith('.') for x in p.relative_to(base).parts)) if base.is_dir() else 0
+    assert table and table == {d: on_disk(d) for d in table}
+    assert table['00_Inbox'] == 0  # the source has moved to 40_Sources in the same transaction
+    cards = int(re.search(r'\*\*cards: ([\d,]+)\*\*', home)[1].replace(',', ''))  # the inventory line
+    assert cards == len(read_snapshot(root).cards) == table['10_Knowledge']

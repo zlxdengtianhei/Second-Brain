@@ -42,7 +42,7 @@ For each hand-off start a **new** sub-agent (no shared history with you or other
 - `role: producer` (steps `produce`, `repair`, `diagram`) → text from `references/subagent-producer.md`;
 - `role: reviewer` (step `review`) → text from `references/subagent-reviewer.md`. When the host lets you choose, use a model from a different family than the producer. When the host offers only one family (for example, all sub-agents run models of one vendor), still start a new sub-agent for each review: `sb` accepts it in host mode, marks the job `same_family: true`, and you report that (section 5).
 
-Fill in the three values from the hand-off (`packet_path`, `output_path`, `submit_cmd`) and nothing else. The sub-agent submits its own answer with `sb job submit`; `sb` checks it on the spot and returns errors to the sub-agent, not to you. `submit_cmd` starts with the absolute path of the `sb` program you are running, so it works in a sub-agent shell that does not have `sb` on its `PATH`. The sub-agent must be able to read and write files and run that command on the same machine.
+Fill in the three values from the hand-off (`packet_path`, `output_path`, `submit_cmd`) and nothing else. The sub-agent submits its own answer with `sb job submit`; `sb` checks the answer's form on the spot and returns errors to the sub-agent, not to you. Diagram answers are also checked card by card at the next `sb job advance`: a diagram that fails comes back as one rewrite hand-off (chunk `dg01.r1` …, section 4), which goes to a new sub-agent like any other. `submit_cmd` starts with the absolute path of the `sb` program you are running, so it works in a sub-agent shell that does not have `sb` on its `PATH`. The sub-agent must be able to read and write files and run that command on the same machine.
 
 ## 4. Advance until the job is written
 
@@ -78,5 +78,6 @@ A `partial` job wrote the accepted cards and kept the rest pending. `sb ingest -
 ## Stability
 
 - All progress is in the job directory. After an interruption or a context compaction, run `sb inbox list` and `sb job list`, then `sb job show <job_id>` for unfinished jobs, and continue with section 4.
+- If you were interrupted while sub-agents worked, `sb job advance <job_id> --executor host` (or `sb job packet`) hands out the same open runs again, with the same `output_path` and `submit_cmd`. When a sub-agent you started has already written its answer to `output_path` but did not submit it, run that `submit_cmd` yourself with `<model id>` set to the model you started the sub-agent with; do not change the answer. If `sb` rejects it, or you do not know which model wrote it, give the same hand-off to a new sub-agent: it writes `output_path` again and submits. Use `sb job abandon` only to give a run up.
 - A run id accepts one answer; a different second answer is refused.
 - If you cannot start sub-agents, see `references/harness-notes.md` (API executor or headless sessions).

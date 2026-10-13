@@ -1160,7 +1160,7 @@ def _current_taxonomy(snapshot, domain: str) -> dict:
 
 def apply_job(root: Path, job_id: str, settled: list[dict] | None = None) -> dict:
     from ..moc import build_mocs
-    from ..projections import entry_projection
+    from ..projections import entry_projection, planned_paths
     state = jobs.load(root, job_id)
     if state.get('commit_intent'):
         return jobs.resume_transaction(root, job_id) or jobs.load(root, job_id)
@@ -1359,9 +1359,13 @@ def apply_job(root: Path, job_id: str, settled: list[dict] | None = None) -> dic
         projection = build_mocs(projected, affected_domains=affected)
         changes.extend(projection_changes(root, projection))
         projection_metrics = projection.metrics
-        changes.extend(projection_changes(root, entry_projection(projected, today)))
     if move:
         changes.append(Change(source['inbox_path'], digest(inbox_now), None))
+    if affected:
+        # last, so its folder table counts the vault as this transaction leaves it
+        written, removed = planned_paths(changes)
+        changes.extend(projection_changes(root, entry_projection(projected, today, final_paths=written,
+                                                                 removed_paths=removed)))
     result = {'status': status, 'new_card_count': len(produced), 'produced': produced,
               'pending': pending, 'needs_taxonomy': needs_taxonomy,
               'duplicates': [d for o in settled for d in o['duplicates']],

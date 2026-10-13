@@ -160,11 +160,11 @@ def test_stale_projection_cannot_overwrite_another_completed_batch(tmp_path, mon
                     {'items': [{**review['items'][0], 'id': other_id}]})
     real = projections.entry_projection
     once = []
-    def interleave(snapshot, today):
+    def interleave(snapshot, today, **kwargs):
         if not once:
             once.append(True)
             c.apply(root, 'other')
-        return real(snapshot, today)
+        return real(snapshot, today, **kwargs)
     monkeypatch.setattr(projections, 'entry_projection', interleave)
     with pytest.raises(Conflict, match='changed after it was|changed while it was read'):
         c.apply(root, 'first')

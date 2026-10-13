@@ -113,8 +113,14 @@ def _validate_generated_document(raw: bytes, name: str) -> None:
             raise Conflict(f'{name}: generated text has a wrong number of markers: {detail}')
 
 
-def _directory_counts(root, final_paths):
-    """Count the original directory members plus absent paths planned this round."""
+def planned_paths(changes) -> tuple[set, set]:
+    """(paths a change set writes, paths it removes), for counting the vault as the write leaves it."""
+    return ({c.relative_path for c in changes if c.after is not None},
+            {c.relative_path for c in changes if c.after is None})
+
+
+def _directory_counts(root, final_paths, removed=()):
+    """Count the files of each folder as they will be: on disk, plus planned writes, minus removals."""
     from . import layout as layouts
     directories = layouts.of(root).counted_dirs
     counts = {}
@@ -126,10 +132,10 @@ def _directory_counts(root, final_paths):
                 if p.is_file() and not p.is_symlink() and not any(
                         x.startswith('.') for x in p.relative_to(folder).parts):
                     existing.add(p.relative_to(root).as_posix())
-    planned = set(final_paths)
+    final = (existing | set(final_paths)) - set(removed)
     for directory in directories:
         prefix = directory + '/'
-        counts[directory] = len({p for p in existing | planned if p.startswith(prefix)})
+        counts[directory] = len({p for p in final if p.startswith(prefix)})
     return counts
 
 
@@ -200,13 +206,19 @@ def review_projection(snapshot, today: date, *, extra_targets=(), generated_at=N
                        f'{lay.projections}/kb_review.json': jobs.encoded(site)}, counts, issues)
 
 
-def entry_projection(snapshot, today: date, *, final_paths=(), reads=None) -> Projection:
+def entry_projection(snapshot, today: date, *, final_paths=(), removed_paths=(), reads=None) -> Projection:
+    """HOME and the generated blocks of the entry docs.
+
+    ``snapshot`` is the vault as the current write leaves it; ``final_paths``
+    and ``removed_paths`` are the files that write creates and removes, so the
+    folder table counts the same state as the card count.
+    """
     reads = {} if reads is None else reads
     lay = _layout(snapshot)
     counts = Counter(c.domain for c in snapshot.cards.values())
     missing = sum(not c.fm.get('pillar') or not c.fm.get('topic') for c in snapshot.cards.values())
     catalog = snapshot.catalog
-    directory_counts = _directory_counts(snapshot.root, final_paths)
+    directory_counts = _directory_counts(snapshot.root, final_paths, removed_paths)
     T = labels.pages()
     rows = [T['inventory'].format(date=today, cards=len(snapshot.cards), domains=len(catalog['domains']),
                                   missing=missing), '', *T['track_table']]

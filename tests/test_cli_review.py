@@ -115,6 +115,7 @@ def test_without_the_review_extra_daily_writes_home_and_today_explains(vault, ca
     monkeypatch.setattr(reviews, '_registry', missing)
     code, _, err = run(capsys, vault, 'today', '--apply')
     assert code == 2 and 'secondbrain[review]' in err
+    (vault / 'HOME.md').write_text('# old home\n', encoding='utf-8')  # the ingest left HOME current
     code, result, err = run(capsys, vault, 'daily', '--apply')
     assert code == 0, err
     assert 'HOME.md' in result['applied_paths'] and not any('50_Reviews' in p for p in result['applied_paths'])

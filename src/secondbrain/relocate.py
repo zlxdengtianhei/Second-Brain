@@ -141,7 +141,7 @@ def _packet_pairs(packet, domain):
 def apply(root_, job_id):
     """Move only accepted, ``assigned`` cards whose move breaks no link; the rest stay pending with the files that refer to them."""
     from .moc import build_mocs
-    from .projections import entry_projection, review_projection
+    from .projections import entry_projection, planned_paths, review_projection
     from .reviews import available as reviews_available
     state = jobs.load(root_, job_id)
     if state['kind'] != 'relocation':
@@ -177,7 +177,9 @@ def apply(root_, job_id):
     while active:
         changes, projected, moved, affected = _stage_moves(root_, snapshot, packet, active)
         projection = build_mocs(projected, affected_domains=affected)
-        entries = entry_projection(projected, date.today())
+        written, removed = planned_paths(changes)
+        entries = entry_projection(projected, date.today(), final_paths=written | set(projection.files),
+                                   removed_paths=removed)
         # the daily review page reads the review registry, which needs the review extra
         reviews = (review_projection(projected, date.today(), extra_targets=entries.files)
                    if reviews_available() else None)

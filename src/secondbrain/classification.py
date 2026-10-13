@@ -321,8 +321,10 @@ def apply(root: Path, job_id: str) -> dict:
     projection = build_mocs(projected, affected_domains=affected)
     changes.extend(projection_changes(root, projection))
     from datetime import date
-    from .projections import entry_projection
-    changes.extend(projection_changes(root, entry_projection(projected, date.today())))
+    from .projections import entry_projection, planned_paths
+    written, removed = planned_paths(changes)
+    changes.extend(projection_changes(root, entry_projection(projected, date.today(), final_paths=written,
+                                                             removed_paths=removed)))
     return jobs.finish_transaction(root, job_id,
         {'status': 'partial' if pending else 'applied', 'pending': pending,
          'classified_count': len([c for c in changes if snapshot.layout.is_card(c.relative_path)]),
