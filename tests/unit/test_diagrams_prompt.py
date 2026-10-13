@@ -66,7 +66,7 @@ def test_prompt_states_the_core_rules():
                    "3+ named states and 3+ labelled transitions", "a chain of 3+ links citing 3+ different sources",
                    "structure 3+ links unless paths merge", "no edge labels overlapping", "state diagrams scale to fit",
                    "On skip, code handles the old diagram", "an overlapping pair of CJK characters",
-                   "even when the text lists them in order", "unless E names one result both sides lead to",
+                   "even when the text lists them in order", "credits it to each path", "would redraw its structure or one formula",
                    "steps whose order the card does not state", "at any length", "accumulator",
                    "Over the whole diagram", "paths that split and never meet are a list",
                    "any `output` has incoming edges only"):

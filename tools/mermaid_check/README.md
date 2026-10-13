@@ -30,7 +30,7 @@ The browser is found from `--browser PATH`, the `MERMAID_CHECK_BROWSER` environm
 node check.mjs [options] IN.jsonl [OUT.jsonl]
 ```
 
-Each input line is `{"id": ..., "text": "<mermaid source>"}`. Each output line has `id`, `ok`, and when relevant `error`, `type`, `direction`, `nodes`, `edges`, `subgraphs`, `actors`, `messages`, `width`, `height`, `label_overlaps` (pairs of edge labels covering each other by more than 10% of the smaller one), `render_error`, `label_text`. A one-line summary goes to stderr. Exit code 1 means at least one block failed; 2 means a usage or setup error.
+Each input line is `{"id": ..., "text": "<mermaid source>"}`. Each output line has `id`, `ok`, and when relevant `error`, `type`, `direction`, `nodes`, `edges`, `subgraphs`, `actors`, `messages`, `width`, `height`, `label_overlaps` (pairs of edge labels covering each other by more than 10% of the smaller one), `render_error`, `label_text`. A one-line summary goes to stderr. Exit code 1 means at least one block failed; 2 means a usage or setup error, or a browser that could not be started or stopped responding: the tool gives the browser 120 s to start and starts it twice before it gives up, opens a new browser once when a page cannot be opened, and then stops with a message on stderr that says how many results it wrote. It passes `--disable-dev-shm-usage` (a small `/dev/shm` on Linux runners crashes pages), and `--no-sandbox` when it runs as root (CI containers).
 
 | Option | Effect |
 |---|---|

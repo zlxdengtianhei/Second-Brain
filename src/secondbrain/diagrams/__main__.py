@@ -228,7 +228,7 @@ def cmd_writeback(a) -> dict:
     outcomes = [o for path in a.outcomes for o in audit.read_jsonl(path)]
     audits = [v for path in a.old_audit for v in audit.read_jsonl(path)]
     actions = rejudge.plan(pool, outcomes, _writeback_policy(a), audits)
-    touched = [x["ref"] for x in actions if x["action"] in ("replace", "remove")]
+    touched = [x["ref"] for x in actions if x["action"] in rejudge.WRITES]
     rows = rejudge.apply(a.vault, actions, write=a.write, fmt=_card_format(a, touched))
     _write_jsonl(a.dir / ("writeback_manifest.jsonl" if a.write else "writeback_plan.jsonl"), rows)
     _write_jsonl(a.dir / "writeback_mermaid.jsonl",

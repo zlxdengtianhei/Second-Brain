@@ -186,3 +186,5 @@ def test_tier_rows_carry_what_the_writeback_guard_reads():
     rows = audit.tier(cards, checks).cards
     assert (rows["x.md"]["has_essence"], rows["x.md"]["n_props"]) == (False, 2)
     assert (rows["y.md"]["has_essence"], rows["y.md"]["n_props"]) == (True, 2)
+    assert rows["x.md"]["graph"] == {"labels": [label for _, label, _ in GROUNDED],
+                                     "edges": [[0, 1], [1, 2], [1, 3]]}  # for spotting a redraw of it

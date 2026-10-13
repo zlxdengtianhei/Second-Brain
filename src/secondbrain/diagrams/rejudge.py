@@ -30,12 +30,23 @@ Two refinements after the second pilot:
   audit:misleading, draw:weak/audit:...); any other row, including one
   without a category, keeps it (audit:unsure).
 
+Two more after the third pilot:
+- a new flowchart with the old flowchart's shape (same node and edge counts
+  and degrees) and largely its words only redraws it: it is not written and
+  the card follows the skip rules, rule draw:same_as_old/... (needs the
+  graph that audit-tier records for each old flowchart);
+- an old flowchart that stays and renders wider than the reading width with
+  direction LR or RL is turned upright as prune does for the keep tier
+  (action direction_tb, rule ...+tb); one that stays wide but cannot be
+  turned is marked ...+wide.
+
 Only the diagram section changes, byte for byte. Every write is guarded by the
 file hash recorded at audit time, and nothing is written without write=True.
 """
 from __future__ import annotations
 
 import hashlib
+import re
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
@@ -43,8 +54,9 @@ from typing import Any, Iterable
 
 from .audit import DEFAULT_FORMAT, CardFormat
 from .oldcheck import REMOVE_CATEGORIES
-from .prune import PrunePolicy, _diffstat, delete_section
+from .prune import PrunePolicy, _diffstat, delete_section, direction_tb
 from .staleness import read_marker
+from .text import tokens
 from .validate import strong_enough as _strong_refs
 
 
@@ -63,7 +75,8 @@ def select_pool(tiers: dict[str, dict[str, Any]], policy: PrunePolicy = PrunePol
             continue
         rows.append({"ref": ref, "pool_reason": reason, "domain": t.get("domain"), "tier_why": t.get("why"),
                      "n_props": t.get("n_props", 0), "has_essence": t.get("has_essence", True),
-                     "old_parses": bool(t["ok"]), "sha256": t["sha256"]})
+                     "old_parses": bool(t["ok"]), "sha256": t["sha256"],
+                     "old_direction": t.get("direction"), "old_width": t.get("width"), "old_graph": t.get("graph")})
     return rows
 
 
@@ -120,10 +133,12 @@ def replace_section(text: str, mermaid: str, fmt: CardFormat = DEFAULT_FORMAT) -
 
 @dataclass(frozen=True)
 class WritebackPolicy:
-    """What a skip does to an old diagram, beyond 'keep it if it parses'."""
+    """What a skip does to an old diagram, beyond 'keep it if it parses'; when a kept one is turned upright."""
 
     delete_review_on_skip: str = "remove"  # or "keep"
     remove_domains: tuple[str, ...] = ()
+    width_limit: int = 700
+    same_words_min: float = 0.3  # share of label words a same-shape redraw keeps (pilots: 0.33-1.0)
 
     def __post_init__(self) -> None:
         if self.delete_review_on_skip not in ("remove", "keep"):
@@ -150,15 +165,64 @@ def strong_enough(mermaid: str, n_props: int, has_essence: bool = True) -> bool:
     return m is not None and _strong_refs(m.props, n_props, has_essence)
 
 
+_NODE = re.compile(r'^\s+(n\d+)(?:\[\(|\(\[|\[/|\[\\|\[|\{)"(.*)"')
+_EDGE = re.compile(r'^\s+(n\d+) -->(?:\|".*"\|)? (n\d+)\s*$')
+
+
+def graph_of_mermaid(mermaid: str) -> dict[str, Any] | None:
+    """Node labels and edges of a flowchart written by emit.emit(); None for other forms."""
+    lines = mermaid.splitlines()
+    if not any(line.startswith("flowchart") for line in lines):
+        return None
+    index: dict[str, int] = {}
+    labels: list[str] = []
+    edges = []
+    for line in lines:
+        e = _EDGE.match(line)
+        if e:
+            edges.append((e.group(1), e.group(2)))
+            continue
+        n = _NODE.match(line)
+        if n:
+            index[n.group(1)] = len(labels)
+            labels.append(n.group(2))
+    return {"labels": labels, "edges": [[index[a], index[b]] for a, b in edges if a in index and b in index]}
+
+
+def _shape(graph: dict[str, Any]) -> tuple:
+    pairs = {tuple(e) for e in graph["edges"]}
+    deg = [[0, 0] for _ in graph["labels"]]
+    for a, b in pairs:
+        deg[a][1] += 1
+        deg[b][0] += 1
+    return len(graph["labels"]), len(pairs), sorted(map(tuple, deg))
+
+
+def same_structure(mermaid: str, old_graph: dict[str, Any] | None, min_words: float = 0.3) -> bool:
+    """Whether a new flowchart only redraws the old one.
+
+    Same shape (node and distinct edge counts, and the in/out degree of every
+    node, which an isomorphic redraw keeps) and at least min_words of the two
+    diagrams' label words shared (Jaccard over tokens()), so a diagram with a
+    common small shape but other content is not caught.
+    """
+    new = graph_of_mermaid(mermaid)
+    if new is None or not old_graph or not old_graph.get("labels") or _shape(new) != _shape(old_graph):
+        return False
+    a, b = tokens(" ".join(new["labels"])), tokens(" ".join(old_graph["labels"]))
+    return bool(a | b) and len(a & b) / len(a | b) >= min_words
+
+
 def audit_candidates(pool: list[dict[str, Any]], outcomes: Iterable[dict[str, Any]] | None = None,
                      policy: WritebackPolicy = WritebackPolicy()) -> list[dict[str, Any]]:
     """Pool rows whose old diagram would stay: the cards the old-diagram audit is for.
 
-    With outcomes: the rows planned as keep_old. Without: every row that a
-    skip would leave as keep_old, so the audit can run beside the draw step.
+    With outcomes: the rows planned as keep_old (or direction_tb, which keeps
+    it upright). Without: every row that a skip would leave as keep_old, so
+    the audit can run beside the draw step.
     """
     if outcomes is not None:
-        keep = {a["ref"] for a in plan(pool, outcomes, policy) if a["action"] == "keep_old"}
+        keep = {a["ref"] for a in plan(pool, outcomes, policy) if a["action"] in ("keep_old", "direction_tb")}
         return [p for p in pool if p["ref"] in keep]
     return [p for p in pool if _skip_rule(p, policy)[0] == "keep_old"]
 
@@ -184,19 +248,28 @@ def plan(pool: list[dict[str, Any]], outcomes: Iterable[dict[str, Any]],
         if o is None or o.get("status") not in ("draw", "skip"):
             actions.append({**row, "action": "pending", "rule": "pending",
                             "status_in": o.get("status") if o else None})
-        elif o["status"] == "draw" and o.get("mermaid") and (
-                not p["old_parses"] or strong_enough(o["mermaid"], p.get("n_props", 0), p.get("has_essence", True))):
+        elif o["status"] == "draw" and o.get("mermaid") and (not p["old_parses"] or (
+                strong_enough(o["mermaid"], p.get("n_props", 0), p.get("has_essence", True))
+                and not same_structure(o["mermaid"], p.get("old_graph"), policy.same_words_min))):
             actions.append({**row, "action": "replace", "rule": "draw", "mermaid": o["mermaid"]})
         else:
             action, rule = _skip_rule(p, policy)
-            weak = "draw:weak/" if o["status"] == "draw" else ""
+            prefix = ""
+            if o["status"] == "draw":
+                weak = not strong_enough(o.get("mermaid") or "", p.get("n_props", 0), p.get("has_essence", True))
+                prefix = "draw:weak/" if weak else "draw:same_as_old/"
             v = verdicts.get(p["ref"])
             if action == "keep_old" and v:
                 category = v.get("category") if v.get("category") in REMOVE_CATEGORIES + ("useful",) else "unsure"
                 rule = f"audit:{category}"
                 if v.get("verdict") == "remove" and category in REMOVE_CATEGORIES:
                     action = "remove"
-            actions.append({**row, "action": action, "rule": weak + rule, "reason": (v or o).get("reason", "")})
+            if action == "keep_old" and (p.get("old_width") or 0) > policy.width_limit:
+                if p.get("old_direction") in ("LR", "RL"):
+                    action, rule = "direction_tb", rule + "+tb"
+                else:
+                    rule += "+wide"
+            actions.append({**row, "action": action, "rule": prefix + rule, "reason": (v or o).get("reason", "")})
     for ref in sorted(set(final) - in_pool):
         actions.append({"ref": ref, "action": "not_in_pool", "rule": "not_in_pool",
                         "status_in": final[ref].get("status")})
@@ -211,13 +284,16 @@ def summary(actions: list[dict[str, Any]]) -> dict[str, dict[str, int]]:
     return {reason: dict(sorted(c.items())) for reason, c in sorted(out.items())}
 
 
+WRITES = ("replace", "remove", "direction_tb")  # actions that change a card
+
+
 def apply(vault: Path, actions: list[dict[str, Any]], write: bool = False,
           fmt: CardFormat = DEFAULT_FORMAT) -> list[dict[str, Any]]:
-    """Carry out (or, with write=False, preview) replace and remove actions; one manifest row per action."""
+    """Carry out (or, with write=False, preview) replace, remove and direction_tb actions; one manifest row each."""
     rows = []
     for a in actions:
         row = {k: a[k] for k in ("ref", "pool_reason", "rule", "action") if k in a}
-        if a["action"] not in ("replace", "remove"):
+        if a["action"] not in WRITES:
             rows.append({**row, "status": "unchanged"})
             continue
         path = Path(vault) / a["ref"]
@@ -229,8 +305,12 @@ def apply(vault: Path, actions: list[dict[str, Any]], write: bool = False,
             rows.append({**row, "status": "conflict"})
             continue
         try:
-            after = (replace_section(before, a["mermaid"], fmt) if a["action"] == "replace"
-                     else delete_section(before, fmt.diagram))
+            if a["action"] == "replace":
+                after = replace_section(before, a["mermaid"], fmt)
+            elif a["action"] == "remove":
+                after = delete_section(before, fmt.diagram)
+            else:
+                after = direction_tb(before, fmt.diagram)
         except ValueError as e:
             rows.append({**row, "status": "error", "error": str(e)})
             continue

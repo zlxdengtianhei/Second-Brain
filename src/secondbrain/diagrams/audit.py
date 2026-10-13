@@ -316,6 +316,14 @@ class TierReport:
                 "cards": self.cards}
 
 
+def graph_of_check(check: dict[str, Any]) -> dict[str, Any]:
+    """A flowchart's node labels and edges (as node positions), for comparing it with a new diagram."""
+    index = {n["id"]: i for i, n in enumerate(check["nodes"])}
+    return {"labels": [n.get("label") or "" for n in check["nodes"]],
+            "edges": [[index[e["from"]], index[e["to"]]] for e in check.get("edges") or []
+                      if e.get("from") in index and e.get("to") in index]}
+
+
 def tier(cards: Iterable[dict[str, Any]], checks: Iterable[dict[str, Any]],
          rules: TierRules = TierRules()) -> TierReport:
     """Tier every card that has a diagram; checks are mermaid_check results keyed '<ref>#<j>'."""
@@ -335,5 +343,7 @@ def tier(cards: Iterable[dict[str, Any]], checks: Iterable[dict[str, Any]],
                  "sha256": card["sha256"], "ok": bool(check.get("ok"))}
         if check.get("ok"):
             entry.update({k: check.get(k) for k in ("type", "direction", "width", "height")})
+            if check.get("type") == "flowchart-v2" and check.get("nodes"):
+                entry["graph"] = graph_of_check(check)
         report.cards[card["ref"]] = entry
     return report

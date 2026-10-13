@@ -184,18 +184,39 @@ def test_corpus_is_deterministic_and_one_line_per_label():
             assert line.startswith("  "), line
 
 
+def run_tool(src: Path, out: Path, *flags: str, timeout: int = 3600) -> dict:
+    """Run tools/mermaid_check on src; results by id.
+
+    The tool exits 0 or 1 with one result per input line. On anything else (a
+    browser that did not start or stopped responding on a loaded machine) it
+    is run once more; if that fails too, the test fails with the exit code
+    and the tool's own message instead of a bare count mismatch.
+    """
+    node, modules = _tool_ready()
+    expected = sum(1 for line in src.read_text(encoding="utf-8").splitlines() if line.strip())
+    tries = []
+    for _ in range(2):
+        out.unlink(missing_ok=True)
+        try:
+            proc = subprocess.run([node, str(TOOL), "--modules", str(modules), *flags, str(src), str(out)],
+                                  capture_output=True, text=True, timeout=timeout)
+            code, err = proc.returncode, proc.stderr
+        except subprocess.TimeoutExpired as e:
+            code, err = "timeout", f"no result within {timeout} s; {e.stderr or ''}"
+        lines = out.read_text(encoding="utf-8").splitlines() if out.exists() else []
+        if code in (0, 1) and len(lines) == expected:
+            return {r["id"]: r for r in map(json.loads, lines)}
+        tries.append(f"exit {code}, {len(lines)} of {expected} results; stderr: {str(err).strip()[-600:]}")
+    pytest.fail("tools/mermaid_check failed twice:\n" + "\n".join(tries))
+
+
 @pytest.mark.skipif(_tool_ready() is None, reason="tools/mermaid_check dependencies not installed")
 def test_every_emitted_diagram_parses_and_keeps_its_labels(tmp_path):
-    node, modules = _tool_ready()
     items = corpus(int(os.environ.get("MERMAID_CHECK_RANDOM", "600")))
     src = tmp_path / "corpus.jsonl"
     src.write_text("".join(json.dumps({"id": i, "text": mm}, ensure_ascii=False) + "\n"
                            for i, mm, _ in items), encoding="utf-8")
-    out = tmp_path / "results.jsonl"
-    proc = subprocess.run([node, str(TOOL), "--modules", str(modules), "--label-text", str(src), str(out)],
-                          capture_output=True, text=True, timeout=3600)
-    assert out.exists(), proc.stderr
-    results = {r["id"]: r for r in map(json.loads, out.read_text(encoding="utf-8").splitlines())}
+    results = run_tool(src, tmp_path / "results.jsonl", "--label-text")
     expected = {i: labels for i, _, labels in items}
     broken = [(i, r.get("error") or r.get("render_error")) for i, r in results.items()
               if not r["ok"] or r.get("render_error")]
@@ -230,16 +251,27 @@ def _realistic_ir(rng: random.Random) -> DiagramIR:
 @pytest.mark.skipif(_tool_ready() is None, reason="tools/mermaid_check dependencies not installed")
 def test_width_estimate_tracks_the_rendered_width(tmp_path):
     from secondbrain.diagrams.width import estimate_width
-    node, modules = _tool_ready()
     rng = random.Random(7)
     irs = [_realistic_ir(rng) for _ in range(300)]
     src = tmp_path / "w.jsonl"
     src.write_text("".join(json.dumps({"id": i, "text": emit(ir)}, ensure_ascii=False) + "\n"
                            for i, ir in enumerate(irs)), encoding="utf-8")
-    out = tmp_path / "w_out.jsonl"
-    subprocess.run([node, str(TOOL), "--modules", str(modules), str(src), str(out)], capture_output=True, timeout=600)
-    real = {r["id"]: r["width"] for r in map(json.loads, out.read_text(encoding="utf-8").splitlines())}
+    real = {i: r["width"] for i, r in run_tool(src, tmp_path / "w_out.jsonl", timeout=600).items()}
     rel = sorted(abs(estimate_width(ir) - real[i]) / real[i] for i, ir in enumerate(irs))
     assert rel[len(rel) // 2] < 0.10 and rel[int(len(rel) * 0.9)] < 0.25, (rel[len(rel) // 2], rel[int(len(rel) * 0.9)])
     over = [i for i, ir in enumerate(irs) if estimate_width(ir) > 700 and real[i] <= 650]
     assert len(over) <= 3, over  # the estimate rarely rejects a diagram that clearly fits
+
+
+@pytest.mark.skipif(_tool_ready() is None or os.name != "posix", reason="tools/mermaid_check dependencies not installed")
+def test_tool_says_when_the_browser_does_not_start(tmp_path):
+    node, modules = _tool_ready()
+    fake = tmp_path / "chrome"
+    fake.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+    fake.chmod(0o755)
+    src, out = tmp_path / "in.jsonl", tmp_path / "out.jsonl"
+    src.write_text(json.dumps({"id": 1, "text": "flowchart TB\n  a --> b"}) + "\n", encoding="utf-8")
+    proc = subprocess.run([node, str(TOOL), "--modules", str(modules), "--browser", str(fake), str(src), str(out)],
+                          capture_output=True, text=True, timeout=600)
+    assert proc.returncode == 2
+    assert "could not start the browser" in proc.stderr and "2 attempts" in proc.stderr, proc.stderr

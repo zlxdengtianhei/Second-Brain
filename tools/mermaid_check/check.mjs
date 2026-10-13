@@ -18,7 +18,8 @@
 //    "label_overlaps"?, "render_error"?, "label_text"?}
 // label_overlaps counts pairs of edge labels that cover each other.
 // A summary line goes to stderr. Exit code 1 if any block failed, 2 on usage
-// or setup errors.
+// or setup errors, or when the browser cannot be started or stops responding
+// (the message says how many results were written before that).
 //
 // Options:
 //   --browser PATH        Chromium/Chrome executable (or MERMAID_CHECK_BROWSER)
@@ -69,6 +70,29 @@ const BROWSER_CANDIDATES = [
   '/usr/bin/chromium-browser',
   'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
 ];
+
+// Slow machines and busy CI runners: give the browser time to start and to
+// render a batch, and start it once more before giving up. Root (a CI
+// container) cannot use Chrome's sandbox; a small /dev/shm crashes pages.
+const LAUNCH_TIMEOUT_MS = 120000;
+const PROTOCOL_TIMEOUT_MS = 600000;
+const PAGE_TIMEOUT_MS = 120000;
+
+async function launchBrowser(puppeteer, executablePath) {
+  const args = ['--no-first-run', '--no-default-browser-check', '--disable-dev-shm-usage'];
+  if (process.getuid && process.getuid() === 0) args.push('--no-sandbox');
+  let last = null;
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      return await puppeteer.launch({
+        executablePath, headless: true, args, timeout: LAUNCH_TIMEOUT_MS, protocolTimeout: PROTOCOL_TIMEOUT_MS,
+      });
+    } catch (e) {
+      last = e;
+    }
+  }
+  throw new Error(`could not start the browser ${executablePath} (2 attempts): ${(last && last.message) || last}`);
+}
 
 function parseArgs(argv) {
   const o = { render: true, labelText: false, patch: true, batch: 50, recycle: 1000, files: [] };
@@ -204,19 +228,18 @@ async function main() {
   const sink = o.files[1] ? fs.createWriteStream(o.files[1]) : process.stdout;
   if (o.svgDir) fs.mkdirSync(o.svgDir, { recursive: true });
 
-  const browser = await puppeteer.launch({
-    executablePath: findBrowser(o.browser),
-    headless: true,
-    args: ['--no-first-run', '--no-default-browser-check'],
-  });
+  const executablePath = findBrowser(o.browser);
+  let browser = await launchBrowser(puppeteer, executablePath);
   const t0 = Date.now();
   const tally = { blocks: blocks.length, ok: 0, parse_failed: 0, render_failed: 0, page_crashes: 0 };
   const opts = { render: o.render, labelText: o.labelText, keepSvg: Boolean(o.svgDir) };
   let page = null;
   let used = 0;
-  const openPage = async () => {
+  const newPage = async () => {
     if (page) await page.close().catch(() => {});
+    page = null;
     page = await browser.newPage();
+    page.setDefaultTimeout(PAGE_TIMEOUT_MS);
     await page.setViewport({ width: 1400, height: 900 });
     await page.setContent(`<!doctype html><html><head><meta charset="utf-8">
 <style>body{font-family:-apple-system,"PingFang SC","Noto Sans CJK SC",sans-serif;font-size:16px;margin:0;background:#fff}</style>
@@ -225,6 +248,21 @@ async function main() {
     await page.evaluate((cfg) => mermaid.initialize(cfg), OBSIDIAN_CONFIG);
     await page.evaluate(`window.__checkBatch = ${checkBatch.toString()}`);
     used = 0;
+  };
+  // A page that cannot be opened means the browser is gone or stuck: start a
+  // new one once, then give up with a message that says so.
+  const openPage = async () => {
+    try {
+      await newPage();
+    } catch (e) {
+      await browser.close().catch(() => {});
+      try {
+        browser = await launchBrowser(puppeteer, executablePath);
+        await newPage();
+      } catch (e2) {
+        throw new Error(`the browser stopped responding (${(e2 && e2.message) || e2}; first: ${(e && e.message) || e})`);
+      }
+    }
   };
   // A long-lived page slowly fills up and can crash; recycle it, and on a
   // crash retry on a fresh page, then block by block so one bad block cannot
@@ -258,6 +296,7 @@ async function main() {
     }
     return out;
   };
+  let written = 0;
   try {
     for (let i = 0; i < blocks.length; i += o.batch) {
       const items = blocks.slice(i, i + o.batch).map((b, k) => ({ n: i + k, text: b.text }));
@@ -272,12 +311,15 @@ async function main() {
         else if (r.render_error) tally.render_failed++;
         else tally.ok++;
         sink.write(JSON.stringify({ id: blocks[n].id ?? n, ...r }) + '\n');
+        written++;
       });
     }
+  } catch (e) {
+    throw new Error(`${e.message} (results written for ${written} of ${blocks.length} blocks)`);
   } finally {
-    await browser.close();
+    await browser.close().catch(() => {});
+    if (sink !== process.stdout) await new Promise((res) => sink.end(res));
   }
-  if (sink !== process.stdout) await new Promise((res) => sink.end(res));
   tally.seconds = Math.round((Date.now() - t0) / 100) / 10;
   process.stderr.write(JSON.stringify(tally) + '\n');
   return tally.parse_failed || tally.render_failed ? 1 : 0;

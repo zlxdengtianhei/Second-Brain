@@ -1,6 +1,7 @@
 """Re-judge pool selection and byte-precise write-back of model outcomes."""
 from __future__ import annotations
 
+import hashlib
 import json
 import shutil
 from pathlib import Path
@@ -327,3 +328,65 @@ def test_old_audit_packets_take_the_writeback_policy_flags(tmp_path, capsys):
     assert audited() == 2                                          # a.md, h.md
     assert audited("--delete-review-on-skip", "keep") == 3          # and c.md
     assert audited("--remove-domain", "vocab") == 1                 # h.md's domain is removed on skip
+
+
+
+# Third pilot (J3): redraws of the old diagram, and wide kept diagrams ---------------------
+
+OLD_EVOL = {"labels": ["简单指令", "复杂指令", "任务变体", "指令数据"], "edges": [[0, 1], [0, 2], [1, 3], [2, 3]]}
+NEW_EVOL = ("%% diagram v1 props=E,P1,P2 sha=0123abcd\nflowchart TB\n  n1[\"原指令\"]\n  n2[\"带更多约束的复杂指令\"]\n"
+            "  n3[\"相关任务变体\"]\n  n4[\"更高质量的指令数据\"]\n  n1 -->|\"深度进化\"| n2\n  n1 -->|\"广度进化\"| n3\n"
+            "  n2 -->|\"合成\"| n4\n  n3 -->|\"合成\"| n4")
+
+
+def test_same_structure_spots_a_redraw_of_the_old_flowchart():
+    assert rejudge.same_structure(NEW_EVOL, OLD_EVOL)                     # pilot 3's Evol-Instruct pair
+    chain = {**OLD_EVOL, "edges": [[0, 1], [1, 2], [2, 3]]}
+    assert not rejudge.same_structure(NEW_EVOL, chain)                    # another shape
+    other = {**OLD_EVOL, "labels": ["请求", "缓存", "数据库", "响应"]}
+    assert not rejudge.same_structure(NEW_EVOL, other)                    # the same small shape, other words
+    assert not rejudge.same_structure(NEW_EVOL, None)                     # no graph recorded for the old one
+    seq = "%% diagram v1 props=E,P1,P2 sha=0123abcd\nsequenceDiagram\n  participant n1 as A"
+    assert not rejudge.same_structure(seq, OLD_EVOL)
+
+
+def test_a_redraw_is_not_written_and_follows_the_skip_rules():
+    tiers = {r: {**t, "graph": OLD_EVOL} for r, t in TIERS.items()}
+    pool = rejudge.select_pool(tiers)
+    draws = [{"ref": r, "status": "draw", "mermaid": NEW_EVOL} for r in ("a.md", "b.md", "c.md", "h.md")]
+    acts = {a["ref"]: (a["rule"], a["action"]) for a in rejudge.plan(pool, draws)}
+    assert acts["a.md"] == ("draw:same_as_old/skip:old_parses", "keep_old")
+    assert acts["b.md"] == ("draw", "replace")                            # the old one does not render
+    assert acts["c.md"] == ("draw:same_as_old/skip:delete_review", "remove")
+    audits = [{"ref": "h.md", "verdict": "remove", "category": "restates"}]
+    assert {a["ref"]: a["rule"] for a in rejudge.plan(pool, draws, audits=audits)}["h.md"] == \
+        "draw:same_as_old/audit:restates"
+    assert [p["ref"] for p in rejudge.audit_candidates(pool, draws)] == ["a.md", "h.md"]
+
+
+def test_kept_wide_lr_diagram_is_turned_upright(tmp_path):
+    shutil.copytree(VAULT, tmp_path / "v")
+    path = tmp_path / "v" / TCP
+    before = path.read_text(encoding="utf-8")
+    row = {"ref": TCP, "pool_reason": "review", "tier_why": "no_gain", "n_props": 3, "has_essence": True,
+           "old_parses": True, "sha256": hashlib.sha256(before.encode("utf-8")).hexdigest(),
+           "old_direction": "LR", "old_width": 850, "old_graph": None}
+    skip = [{"ref": TCP, "status": "skip", "reason": "short sequence"}]
+    [act] = rejudge.plan([row], skip, audits=[{"ref": TCP, "verdict": "keep", "category": "useful"}])
+    assert (act["rule"], act["action"]) == ("audit:useful+tb", "direction_tb")
+    assert rejudge.audit_candidates([row], skip) == [row]                 # still audited: it stays
+    [done] = rejudge.apply(tmp_path / "v", [act], write=True)
+    assert done["status"] == "written"
+    assert path.read_text(encoding="utf-8") == before.replace("flowchart LR", "flowchart TB")
+    narrow = rejudge.plan([{**row, "old_width": 650}], skip)[0]
+    assert (narrow["rule"], narrow["action"]) == ("skip:old_parses", "keep_old")
+    upright = rejudge.plan([{**row, "old_direction": "TB"}], skip)[0]
+    assert (upright["rule"], upright["action"]) == ("skip:old_parses+wide", "keep_old")
+    removed = rejudge.plan([row], skip, audits=[{"ref": TCP, "verdict": "remove", "category": "restates"}])[0]
+    assert removed["action"] == "remove"
+
+
+def test_pool_carries_the_old_diagrams_direction_width_and_graph():
+    tiers = {"a.md": {**TIERS["a.md"], "direction": "LR", "width": 900, "graph": OLD_EVOL}}
+    [row] = rejudge.select_pool(tiers)
+    assert (row["old_direction"], row["old_width"], row["old_graph"]) == ("LR", 900, OLD_EVOL)
