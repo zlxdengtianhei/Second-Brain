@@ -6,6 +6,8 @@
     python -m secondbrain.diagrams audit-extract VAULT OUT_DIR
     python -m secondbrain.diagrams audit-tier OUT_DIR [--delete-domain D ...]
     python -m secondbrain.diagrams prune VAULT OUT_DIR [--write]
+    python -m secondbrain.diagrams pool OUT_DIR
+    python -m secondbrain.diagrams writeback VAULT OUT_DIR OUTCOMES.jsonl ... [--write]
 
 CARDS.jsonl holds one card per line: ref, title, kind, domain, essence,
 propositions (list), related_titles. audit-extract writes this format, so a
@@ -20,9 +22,9 @@ import sys
 from collections import Counter
 from pathlib import Path
 
-from . import audit, prune
+from . import audit, prune, rejudge
 from .ir import IR_JSON_SCHEMA, Card
-from .pipeline import Policy, build_packet, process, read_results
+from .pipeline import Policy, build_packet, pregate, process, read_results
 
 
 def _jsonl(path: Path):
@@ -39,10 +41,11 @@ def cmd_packets(a) -> dict:
     cards = [Card.from_dict(c) for c in _jsonl(a.cards)]
     a.out.mkdir(parents=True, exist_ok=True)
     policy = Policy(skip_domains=tuple(a.skip_domain))
-    skipped, n = [], 0
-    for i in range(0, len(cards), a.batch):
-        packet, sk = build_packet(cards[i:i + a.batch], policy)
-        skipped += [s.to_dict() for s in sk]
+    send = [c for c in cards if not pregate(c, policy)]
+    skipped = [s.to_dict() for s in build_packet([c for c in cards if pregate(c, policy)], policy)[1]]
+    n = 0
+    for i in range(0, len(send), a.batch):  # full batches of cards that need the model
+        packet, _ = build_packet(send[i:i + a.batch], policy)
         if packet:
             n += 1
             (a.out / f"packet-{n:03d}.json").write_text(json.dumps(packet, ensure_ascii=False, indent=1),
@@ -99,6 +102,24 @@ def cmd_prune(a) -> dict:
     return summary
 
 
+def cmd_pool(a) -> dict:
+    tiers = json.loads((a.dir / "tiers.json").read_text(encoding="utf-8"))["cards"]
+    pool = rejudge.select_pool(tiers)
+    _write_jsonl(a.dir / "pool.jsonl", rejudge.pool_cards(pool, audit.read_jsonl(a.dir / "cards.jsonl")))
+    return dict(Counter(p["pool_reason"] for p in pool))
+
+
+def cmd_writeback(a) -> dict:
+    tiers = json.loads((a.dir / "tiers.json").read_text(encoding="utf-8"))["cards"]
+    outcomes = [o for path in a.outcomes for o in audit.read_jsonl(path)]
+    actions = rejudge.plan(rejudge.select_pool(tiers), outcomes)
+    rows = rejudge.apply(a.vault, actions, write=a.write)
+    _write_jsonl(a.dir / ("writeback_manifest.jsonl" if a.write else "writeback_plan.jsonl"), rows)
+    _write_jsonl(a.dir / "writeback_mermaid.jsonl",
+                 [{"id": x["ref"], "text": x["mermaid"]} for x in actions if x["action"] == "replace"])
+    return {"actions": dict(Counter(r["action"] for r in rows)), "status": dict(Counter(r["status"] for r in rows))}
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="python -m secondbrain.diagrams", description=__doc__.split("\n\n")[0])
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -126,12 +147,21 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("dir", type=Path)
     s.add_argument("--width-limit", type=int, default=700)
     s.add_argument("--write", action="store_true", help="write the changes (default: plan only)")
+    s = sub.add_parser("pool", help="tiers.json + cards.jsonl -> pool.jsonl, the cards to judge again")
+    s.add_argument("dir", type=Path)
+    s = sub.add_parser("writeback", help="pool outcomes -> replace or remove diagram sections (default: plan only)")
+    s.add_argument("vault", type=Path)
+    s.add_argument("dir", type=Path)
+    s.add_argument("outcomes", type=Path, nargs="+",
+                   help="outcomes.jsonl and pregated.jsonl files, earlier rounds first")
+    s.add_argument("--write", action="store_true", help="write the changes (default: plan only)")
     a = p.parse_args(argv)
     if a.cmd == "schema":
         print(json.dumps(IR_JSON_SCHEMA, ensure_ascii=False, indent=2))
         return 0
     handler = {"packets": cmd_packets, "apply": cmd_apply, "audit-extract": cmd_audit_extract,
-               "audit-tier": cmd_audit_tier, "prune": cmd_prune}[a.cmd]
+               "audit-tier": cmd_audit_tier, "prune": cmd_prune, "pool": cmd_pool,
+               "writeback": cmd_writeback}[a.cmd]
     print(json.dumps(handler(a), ensure_ascii=False))
     return 0
 

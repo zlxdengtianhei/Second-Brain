@@ -108,7 +108,7 @@ def apply(vault: Path, actions: list[dict[str, Any]], write: bool = False,
         if not path.is_file():
             rows.append({**row, "status": "missing"})
             continue
-        before = path.read_text(encoding="utf-8")
+        before = path.read_bytes().decode("utf-8")
         if hashlib.sha256(before.encode("utf-8")).hexdigest() != a["sha256"]:
             rows.append({**row, "status": "conflict"})
             continue
@@ -119,7 +119,7 @@ def apply(vault: Path, actions: list[dict[str, Any]], write: bool = False,
             continue
         added, removed = _diffstat(before, after)
         if write:
-            path.write_text(after, encoding="utf-8")
+            path.write_bytes(after.encode("utf-8"))
         rows.append({**row, "status": "written" if write else "planned", "lines_added": added,
                      "lines_removed": removed, "sha256_after": hashlib.sha256(after.encode("utf-8")).hexdigest()})
     return rows

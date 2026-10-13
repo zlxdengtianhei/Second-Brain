@@ -101,7 +101,8 @@ def read_card(text: str, ref: str, fmt: CardFormat = DEFAULT_FORMAT) -> dict[str
 def scan(vault: Path, fmt: CardFormat = DEFAULT_FORMAT) -> Iterator[dict[str, Any]]:
     root = Path(vault) / fmt.knowledge_dir
     for p in sorted(root.rglob("*.md")):
-        yield read_card(p.read_text(encoding="utf-8"), p.relative_to(vault).as_posix(), fmt)
+        # bytes, not read_text: no newline translation, so the hash is the file's own
+        yield read_card(p.read_bytes().decode("utf-8"), p.relative_to(vault).as_posix(), fmt)
 
 
 def extract(vault: Path, out_dir: Path, fmt: CardFormat = DEFAULT_FORMAT) -> dict[str, int]:
