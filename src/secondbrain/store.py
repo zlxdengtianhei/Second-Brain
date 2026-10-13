@@ -31,6 +31,7 @@ from pathlib import Path, PurePosixPath
 from typing import Iterator
 
 from . import config
+from . import layout as layouts
 
 
 class Conflict(ValueError):
@@ -67,25 +68,15 @@ def relative(value: str) -> PurePosixPath:
     return path
 
 
-def _allowed(value: str) -> bool:
-    p = relative(value)
-    if len(p.parts) == 3 and p.parts[0] == "10_Knowledge" and p.suffix == ".md":
-        return True
-    if p.parts[0] == "20_MOCs" and 2 <= len(p.parts) <= 3:
-        return p.suffix == ".md" or (p.parts[1] == "_pillars" and p.suffix == ".yaml")
-    if p.parts[0] == "40_Sources" and len(p.parts) >= 3:
-        return True
-    if p.parts[0] == "00_Inbox" and len(p.parts) == 2:
-        return True
-    if p.parts[0] == '50_Reviews' and len(p.parts) == 2 and p.suffix == '.md':
-        return True
-    if p.parts[:2] == ('_data', 'projections') and len(p.parts) == 3 and p.suffix == '.json':
-        return True
-    return value in {
-        "_data/notes_registry.json", "_data/manifest.jsonl", "_data/ingested.jsonl",
-        "_data/secondbrain/catalog.json",
-        "HOME.md", "使用指南.md", "系统总览.md",
-    }
+def _allowed(root: Path, value: str) -> bool:
+    """Whether a transaction may write ``value`` in this vault's layout."""
+    relative(value)
+    lay = layouts.of(root)
+    return (lay.is_card(value) or lay.is_moc_page(value) or lay.is_taxonomy_file(value)
+            or lay.is_source(value) or lay.is_inbox_file(value) or lay.is_review_page(value)
+            or lay.is_projection_json(value)
+            or value in {lay.registry, lay.manifest, lay.ingested, lay.catalog,
+                         lay.inbox_registry, lay.review_events, *lay.standalone_files})
 
 
 def _root(root: Path) -> Path:
@@ -225,10 +216,8 @@ def read_bytes(root: Path, rel: str) -> bytes | None:
     ``jobs/<id>/...`` layout must go through :func:`state_root` /
     :func:`read_state` instead.
     """
-    if rel.startswith("_data/secondbrain/jobs/") or rel.startswith("jobs/"):
-        raise ValueError(f"任务状态已外置到 {state_root(root)!s}，请用 read_state 或 jobs.* 接口：{rel}")
-    if rel == "_data/secondbrain/write.lock":
-        raise ValueError("写锁已外置到该库的外部状态根，请用 vault_lock/read_state 接口")
+    if rel.startswith("jobs/"):
+        raise ValueError(f"任务状态在库外状态根，请用 read_state 或 jobs.* 接口：{rel}")
     try:
         with _parent(root, rel) as (fd, name):
             try:
@@ -373,7 +362,7 @@ def _load_journal(root: Path, job_id: str) -> dict | None:
     seen = set()
     for row in journal["changes"]:
         rel = row["path"]
-        if rel in seen or not _allowed(rel):
+        if rel in seen or not _allowed(root, rel):
             raise ValueError("事务路径重复或越界")
         seen.add(rel)
         for field in ["before", "after"]:
@@ -382,7 +371,7 @@ def _load_journal(root: Path, job_id: str) -> dict | None:
             if actual != row[f"{field}_sha256"]:
                 raise ValueError("事务内容哈希不匹配")
     _validate_checks(journal.get("checks", {}), {r["path"] for r in journal["changes"]})
-    _validate_moves(journal["changes"])
+    _validate_moves(journal["changes"], layouts.of(root))
     return journal
 
 
@@ -431,7 +420,7 @@ def apply_changes(root: Path, job_id: str, changes: list[Change], *, checks: dic
     job_name(job_id)
     seen = set()
     for change in changes:
-        if not _allowed(change.relative_path) or change.relative_path in seen:
+        if not _allowed(root, change.relative_path) or change.relative_path in seen:
             raise ValueError(f"写入路径越界或重复：{change.relative_path}")
         if change.after is not None and not isinstance(change.after, bytes):
             raise ValueError("写入内容必须是bytes，迁移源可为None")
@@ -456,11 +445,11 @@ def apply_changes(root: Path, job_id: str, changes: list[Change], *, checks: dic
             actual = None if before is None else digest(before)
             if actual != change.before_sha256:
                 raise Conflict(f"准备后文件发生变化：{change.relative_path}")
-            if change.relative_path.startswith("40_Sources/") and before is not None and before != change.after:
-                raise Conflict("40_Sources原文不可覆盖")
+            if layouts.of(root).is_source(change.relative_path) and before is not None and before != change.after:
+                raise Conflict("来源原文不可覆盖")
             rows.append({"path": change.relative_path, "before_sha256": actual,
                          "after_sha256": None if change.after is None else digest(change.after), "before": _b64(before), "after": _b64(change.after)})
-        _validate_moves(rows)
+        _validate_moves(rows, layouts.of(root))
         version = 2 if checks or any(r["after"] is None for r in rows) else 1
         journal = {"schema": f"secondbrain-transaction/{version}", "job_id": job_id, "status": "prepared", "changes": rows, "checks": checks}
         if operation is not None:
@@ -502,11 +491,16 @@ def recover(root: Path, job_id: str, action: str = "resume") -> dict:
         return {"status": "rolled_back", "job_id": job_id, "paths": [r["path"] for r in journal["changes"]]}
 
 
-def _validate_moves(rows: list[dict]) -> None:
-    """Removing an old path is allowed only as a body-preserving card move.
+def _validate_moves(rows: list[dict], lay) -> None:
+    """Removing a path is allowed only as part of a move inside this journal.
 
-    This is not a general deletion API. Both original bytes and new bytes live
-    in the same recoverable journal; only domain/pillar/topic and the corresponding flashcards/domain tag may differ.
+    This is not a general deletion API. Two moves exist, and both keep the
+    original bytes in the same recoverable journal:
+
+    * a card move between domains: only domain/pillar/topic and the matching
+      ``flashcards/<domain>`` tag may differ; id, body and review data stay;
+    * an inbox archive: an inbox file is removed only when the same
+      transaction writes byte-identical content into the sources folder.
     """
     removed = [r for r in rows if r['after'] is None]
     if not removed:
@@ -515,27 +509,31 @@ def _validate_moves(rows: list[dict]) -> None:
     destinations = [r for r in rows if r['before'] is None and r['after'] is not None]
     consumed = set()
     for old in removed:
+        if old['before'] is not None and lay.is_inbox_file(old['path']):
+            if not any(lay.is_source(r['path']) and r['after'] == old['before'] for r in rows):
+                raise ValueError('Inbox原件只能在同一事务把相同字节存入来源目录后移走')
+            continue
         path = relative(old['path'])
-        if len(path.parts) != 3 or path.parts[0] != '10_Knowledge' or old['before'] is None:
+        if not lay.is_card(old['path']) or old['before'] is None:
             raise ValueError('只能迁移已有知识卡，不能直接删除文件')
         old_fm, old_body = parse_note(_unb64(old['before']))
         if not isinstance(old_fm.get('id'), str) or not old_fm['id']:
             raise ValueError('迁移卡缺少稳定ID')
-        matches = [r for r in destinations if relative(r['path']).parts[0] == '10_Knowledge'
+        matches = [r for r in destinations if lay.is_card(r['path'])
                    and relative(r['path']).name == path.name and r['path'] != old['path']]
         if len(matches) != 1 or matches[0]['path'] in consumed:
             raise ValueError('迁移必须有唯一未占用的新路径，不能只删除旧卡')
         new = matches[0]
-        new_path = relative(new['path'])
+        old_domain, new_domain = lay.card_domain(old['path']), lay.card_domain(new['path'])
         new_fm, new_body = parse_note(_unb64(new['after']))
         preserved = {k: v for k, v in old_fm.items() if k not in {'domain', 'pillar', 'topic'}}
         if 'tags' in preserved:
-            old_tag, new_tag = f'flashcards/{path.parts[1]}', f'flashcards/{new_path.parts[1]}'
+            old_tag, new_tag = f'flashcards/{old_domain}', f'flashcards/{new_domain}'
             tags = preserved['tags']
             preserved['tags'] = [new_tag if t == old_tag else t for t in tags] if isinstance(tags, list) else new_tag if tags == old_tag else tags
-        if (len(new_path.parts) != 3 or old_body != new_body
-                or old_fm.get('domain') != path.parts[1]
-                or new_fm.get('domain') != new_path.parts[1]
+        if (old_body != new_body
+                or old_fm.get('domain') != old_domain
+                or new_fm.get('domain') != new_domain
                 or preserved != {k: v for k, v in new_fm.items() if k not in {'domain', 'pillar', 'topic'}}):
             raise ValueError('迁移必须保留ID、正文、复习字段和其他元数据')
         consumed.add(new['path'])

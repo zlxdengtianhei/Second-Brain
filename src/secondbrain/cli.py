@@ -12,7 +12,9 @@ import sys
 import uuid
 from pathlib import Path
 
-from . import jobs
+from dataclasses import replace
+
+from . import config, jobs
 from .executors.base import ExecutorFailure
 from .service import Service
 from .store import Conflict
@@ -27,7 +29,9 @@ def _default_vault() -> Path | None:
 
 def parser():
     p = argparse.ArgumentParser(prog='sb', description='SecondBrain: turn inbox material into reviewable atomic cards')
-    p.add_argument('--vault', type=Path, default=_default_vault())
+    p.add_argument('--vault', type=Path, default=_default_vault(),
+                   help='Vault folder (default: $SECONDBRAIN_VAULT, then `vault` in the config file)')
+    p.add_argument('--config', type=Path, help='Config file (default: $SECONDBRAIN_CONFIG or ~/.config/secondbrain/config.toml)')
     sub = p.add_subparsers(dest='command', required=True)
     init = sub.add_parser('init', help='Initialize vault metadata from a reviewed catalog')
     init.add_argument('--catalog', type=Path, required=True)
@@ -132,12 +136,23 @@ def _run_model_command(args, root: Path) -> dict:
     return run_job(root, job_id, producer=producer, reviewer=reviewer, apply=not args.proposal_only)
 
 
+def _activate(args) -> Path:
+    """Load the config file and make it apply to the vault this command uses."""
+    settings = config.load(args.config) if args.config else config.load()
+    vault = args.vault.expanduser().absolute() if args.vault else settings.vault
+    if vault is None:
+        raise ValueError('No vault: pass --vault, set SECONDBRAIN_VAULT, or set `vault` in the config file')
+    config.activate(replace(settings, vault=vault))
+    return vault
+
+
 def main(argv=None):
     args = parser().parse_args(argv)
-    if args.vault is None:
-        print(json.dumps({'error': 'No vault: pass --vault or set SECONDBRAIN_VAULT'}), file=sys.stderr)
+    try:
+        root = _activate(args)
+    except (ValueError, OSError) as exc:
+        print(json.dumps({'error': str(exc)}, ensure_ascii=False), file=sys.stderr)
         return 2
-    root = args.vault.expanduser().absolute()
     try:
         cmd = args.command
         service = Service(root)

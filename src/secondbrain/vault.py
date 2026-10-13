@@ -110,6 +110,7 @@ class Snapshot:
     issues: list  # list[dict]
     fingerprint: str
     read_hashes: dict = field(default_factory=dict)
+    layout: object = None  # secondbrain.layout.VaultLayout used to read this snapshot
 
 
 # --------------------------------------------------------------------------
@@ -341,17 +342,17 @@ def _path_is_safe(rel: str) -> bool:
     return True
 
 
-def _walk_md(root: str, issues: list):
+def _walk_md(root: str, issues: list, knowledge: str = KNOWLEDGE_RELPATH):
     """Yield ``(relpath, bytes)`` for every non-symlink ``.md`` under 10_Knowledge.
 
     Symbolic links and unsafe paths are recorded as issues and skipped. The
     directory walk does not follow directory symlinks, and every yielded file
     is a regular file.
     """
-    base = os.path.join(str(root), KNOWLEDGE_RELPATH)
+    base = os.path.join(str(root), *knowledge.split("/"))
     if not os.path.isdir(base):
-        issues.append({"code": "knowledge_dir_missing", "path": KNOWLEDGE_RELPATH,
-                       "detail": "10_Knowledge does not exist"})
+        issues.append({"code": "knowledge_dir_missing", "path": knowledge,
+                       "detail": "%s does not exist" % knowledge})
         return
     for dirpath, dirnames, filenames in os.walk(base):
         dirnames.sort()
@@ -379,17 +380,17 @@ def _walk_md(root: str, issues: list):
             yield rel, raw
 
 
-def _scan_md(root: str, issues: list):
+def _scan_md(root: str, issues: list, knowledge: str = KNOWLEDGE_RELPATH):
     """Yield ``(relpath, fullpath, stat)`` for every regular ``.md`` card file.
 
     Same traversal, order and issue codes as :func:`_walk_md`, but only stats
     the files; bytes are read later, and only on a parse-cache miss.
     """
     root = os.path.normpath(str(root))
-    base = os.path.join(root, KNOWLEDGE_RELPATH)
+    base = os.path.join(root, *knowledge.split("/"))
     if not os.path.isdir(base):
-        issues.append({"code": "knowledge_dir_missing", "path": KNOWLEDGE_RELPATH,
-                       "detail": "10_Knowledge does not exist"})
+        issues.append({"code": "knowledge_dir_missing", "path": knowledge,
+                       "detail": "%s does not exist" % knowledge})
         return
     cut = len(root) + 1
     for dirpath, dirnames, filenames in os.walk(base):
@@ -424,74 +425,74 @@ def _scan_md(root: str, issues: list):
 # --------------------------------------------------------------------------
 # Snapshot
 # --------------------------------------------------------------------------
-def _load_registry(root, issues):
-    full = os.path.join(str(root), *REGISTRY_RELPATH.split("/"))
+def _load_registry(root, issues, registry_rel=REGISTRY_RELPATH):
+    full = os.path.join(str(root), *registry_rel.split("/"))
     if not os.path.exists(full):
-        issues.append({"code": "registry_missing", "path": REGISTRY_RELPATH,
+        issues.append({"code": "registry_missing", "path": registry_rel,
                        "detail": "notes_registry.json not found"})
         return {}, b""
     if os.path.islink(full):
-        issues.append({"code": "unsafe_symlink", "path": REGISTRY_RELPATH,
+        issues.append({"code": "unsafe_symlink", "path": registry_rel,
                        "detail": "registry file is a symlink"})
         return {}, b""
     try:
         raw = open(full, "rb").read()
     except OSError as exc:
-        issues.append({"code": "read_error", "path": REGISTRY_RELPATH,
+        issues.append({"code": "read_error", "path": registry_rel,
                        "detail": str(exc)})
         return {}, b""
     try:
         data = json.loads(raw.decode("utf-8"))
     except (ValueError, UnicodeDecodeError) as exc:
-        issues.append({"code": "registry_unreadable", "path": REGISTRY_RELPATH,
+        issues.append({"code": "registry_unreadable", "path": registry_rel,
                        "detail": "registry JSON parse failed: %s" % exc})
         return {}, raw
     if not isinstance(data, dict):
-        issues.append({"code": "registry_unreadable", "path": REGISTRY_RELPATH,
+        issues.append({"code": "registry_unreadable", "path": registry_rel,
                        "detail": "registry top level is not a mapping"})
         return data, raw
     notes = data.get("notes")
     if notes is not None and not isinstance(notes, list):
-        issues.append({"code": "registry_unreadable", "path": REGISTRY_RELPATH,
+        issues.append({"code": "registry_unreadable", "path": registry_rel,
                        "detail": "registry 'notes' is not a list"})
     return data, raw
 
 
-def _load_catalog(root, issues, explicit, observed=None):
+def _load_catalog(root, issues, explicit, observed=None, catalog_rel=CATALOG_RELPATH):
     if explicit is not None:
         return explicit
-    full = os.path.join(str(root), *CATALOG_RELPATH.split("/"))
+    full = os.path.join(str(root), *catalog_rel.split("/"))
     if not os.path.exists(full):
-        issues.append({"code": "catalog_missing", "path": CATALOG_RELPATH,
+        issues.append({"code": "catalog_missing", "path": catalog_rel,
                        "detail": "default catalog file not found; snapshot carries an empty catalog"})
         return {}
     if os.path.islink(full):
-        issues.append({"code": "catalog_unreadable", "path": CATALOG_RELPATH,
+        issues.append({"code": "catalog_unreadable", "path": catalog_rel,
                        "detail": "catalog file is a symlink"})
         return {}
     try:
         raw = open(full, "rb").read()
         if observed is not None:
-            observed[CATALOG_RELPATH] = _sha256(raw)
+            observed[catalog_rel] = _sha256(raw)
         data = json.loads(raw.decode("utf-8"))
     except (OSError, ValueError, UnicodeDecodeError) as exc:
-        issues.append({"code": "catalog_unreadable", "path": CATALOG_RELPATH,
+        issues.append({"code": "catalog_unreadable", "path": catalog_rel,
                        "detail": "catalog could not be read: %s" % exc})
         return {}
     if not isinstance(data, dict):
-        issues.append({"code": "catalog_unreadable", "path": CATALOG_RELPATH,
+        issues.append({"code": "catalog_unreadable", "path": catalog_rel,
                        "detail": "catalog top level is not a mapping"})
         return {}
     return data
 
 
-def _load_taxonomies(root, issues):
+def _load_taxonomies(root, issues, taxonomy_rel=PILLARS_RELPATH):
     taxonomies = {}
     raw_hashes = {}
-    base = os.path.join(str(root), *PILLARS_RELPATH.split("/"))
+    base = os.path.join(str(root), *taxonomy_rel.split("/"))
     if not os.path.isdir(base):
-        issues.append({"code": "pillars_dir_missing", "path": PILLARS_RELPATH,
-                       "detail": "20_MOCs/_pillars does not exist"})
+        issues.append({"code": "pillars_dir_missing", "path": taxonomy_rel,
+                       "detail": "%s does not exist" % taxonomy_rel})
         return taxonomies, raw_hashes
     for name in sorted(os.listdir(base)):
         full = os.path.join(base, name)
@@ -499,30 +500,30 @@ def _load_taxonomies(root, issues):
             continue
         # reject directory entries that are themselves directories
         if not os.path.isfile(full) or os.path.islink(full):
-            issues.append({"code": "unsafe_taxonomy_entry", "path": PILLARS_RELPATH + "/" + name,
+            issues.append({"code": "unsafe_taxonomy_entry", "path": taxonomy_rel + "/" + name,
                            "detail": "taxonomy entry is not a regular file"})
             continue
         try:
             raw = open(full, "rb").read()
         except OSError as exc:
-            issues.append({"code": "read_error", "path": PILLARS_RELPATH + "/" + name,
+            issues.append({"code": "read_error", "path": taxonomy_rel + "/" + name,
                            "detail": str(exc)})
             continue
         try:
             parsed = _safe_load_unique(raw)
         except yaml.YAMLError as exc:
-            issues.append({"code": "taxonomy_unreadable", "path": PILLARS_RELPATH + "/" + name,
+            issues.append({"code": "taxonomy_unreadable", "path": taxonomy_rel + "/" + name,
                            "detail": "taxonomy YAML failed: %s" % exc})
             continue
         if not isinstance(parsed, dict):
-            issues.append({"code": "taxonomy_unreadable", "path": PILLARS_RELPATH + "/" + name,
+            issues.append({"code": "taxonomy_unreadable", "path": taxonomy_rel + "/" + name,
                            "detail": "taxonomy top level is not a mapping"})
             continue
         title = parsed.get("title") or name[:-5]
         if not isinstance(title, str):
             title = name[:-5]
         taxonomies[title] = parsed
-        raw_hashes[PILLARS_RELPATH + '/' + name] = _sha256(raw)
+        raw_hashes[taxonomy_rel + '/' + name] = _sha256(raw)
     return taxonomies, raw_hashes
 
 
@@ -539,6 +540,8 @@ def read_snapshot(root, *, catalog=None, use_cache=None) -> Snapshot:
     cache only speeds up reads; every write re-checks real file hashes.
     """
     from . import cache as parse_cache
+    from . import layout as layouts
+    lay = layouts.of(root)
     if use_cache is None:
         use_cache = os.environ.get("SECONDBRAIN_NO_CACHE") != "1"
     root = os.fspath(root)
@@ -546,10 +549,10 @@ def read_snapshot(root, *, catalog=None, use_cache=None) -> Snapshot:
     if not os.path.isdir(root):
         raise VaultError("vault root is not a directory: %r" % (root,))
 
-    registry, registry_raw = _load_registry(root, issues)
-    read_hashes = {REGISTRY_RELPATH: _sha256(registry_raw)} if registry_raw else {}
-    catalog_data = _load_catalog(root, issues, catalog, read_hashes)
-    taxonomies, taxonomy_hashes = _load_taxonomies(root, issues)
+    registry, registry_raw = _load_registry(root, issues, lay.registry)
+    read_hashes = {lay.registry: _sha256(registry_raw)} if registry_raw else {}
+    catalog_data = _load_catalog(root, issues, catalog, read_hashes, lay.catalog)
+    taxonomies, taxonomy_hashes = _load_taxonomies(root, issues, lay.taxonomy)
 
     # Index registry notes by id and by path.
     reg_by_id = {}
@@ -559,7 +562,7 @@ def read_snapshot(root, *, catalog=None, use_cache=None) -> Snapshot:
         notes = []
     for i, note in enumerate(notes):
         if not isinstance(note, dict):
-            issues.append({"code": "registry_bad_note", "path": REGISTRY_RELPATH,
+            issues.append({"code": "registry_bad_note", "path": lay.registry,
                            "detail": "registry note %d is not a mapping" % i})
             continue
         npath = _normalize_relpath(str(note.get("path", "")).replace(os.sep, "/"))
@@ -571,7 +574,7 @@ def read_snapshot(root, *, catalog=None, use_cache=None) -> Snapshot:
             reg_by_path[npath] = note
         if isinstance(nid, str) and nid:
             if nid in reg_by_id:
-                issues.append({"code": "duplicate_registry_id", "path": npath or REGISTRY_RELPATH,
+                issues.append({"code": "duplicate_registry_id", "path": npath or lay.registry,
                                "detail": "registry has duplicate id %r" % (nid,)})
             else:
                 reg_by_id[nid] = note
@@ -583,7 +586,7 @@ def read_snapshot(root, *, catalog=None, use_cache=None) -> Snapshot:
     cached = parse_cache.load(root, LOADER_NAME) if use_cache else {}
     entries = {}
     parsed = 0
-    for rel, full, st in _scan_md(root, issues):
+    for rel, full, st in _scan_md(root, issues, lay.knowledge):
         key = (st.st_size, st.st_mtime_ns, st.st_ctime_ns, st.st_ino)
         hit = cached.get(rel)
         if hit is not None and hit[0] == key:
@@ -647,7 +650,7 @@ def read_snapshot(root, *, catalog=None, use_cache=None) -> Snapshot:
 
     # Registry notes whose declared file was not found or not parsed.
     for npath in reg_by_path:
-        if not npath.startswith(KNOWLEDGE_RELPATH + "/") or npath in card_sha_by_rel:
+        if not npath.startswith(lay.knowledge + "/") or npath in card_sha_by_rel:
             continue
         exists = os.path.exists(root_path.joinpath(*npath.split("/")))
         if not exists:
@@ -664,7 +667,7 @@ def read_snapshot(root, *, catalog=None, use_cache=None) -> Snapshot:
             if isinstance(meta, dict):
                 moc = meta.get("moc")
                 if isinstance(moc, str) and moc not in taxonomies:
-                    issues.append({"code": "missing_taxonomy", "path": PILLARS_RELPATH,
+                    issues.append({"code": "missing_taxonomy", "path": lay.taxonomy,
                                    "detail": "no taxonomy for catalog domain %r (MOC %r)" % (slug, moc)})
 
     if use_cache and (parsed or set(entries) != set(cached)):
@@ -674,10 +677,11 @@ def read_snapshot(root, *, catalog=None, use_cache=None) -> Snapshot:
     read_hashes.update(card_sha_by_rel)
     for meta in domains_map.values():
         if isinstance(meta, dict) and isinstance(meta.get('moc'), str):
-            read_hashes.setdefault(PILLARS_RELPATH + '/' + meta['moc'] + '.yaml', None)
+            read_hashes.setdefault(lay.taxonomy_path(meta['moc']), None)
     return Snapshot(root=root_path, cards=cards, registry=registry,
                     catalog=catalog_data, taxonomies=taxonomies,
-                    issues=issues, fingerprint=fingerprint, read_hashes=read_hashes)
+                    issues=issues, fingerprint=fingerprint, read_hashes=read_hashes,
+                    layout=lay)
 
 
 def _compute_fingerprint(cards, registry_raw, catalog, taxonomies):

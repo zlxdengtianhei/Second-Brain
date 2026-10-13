@@ -25,6 +25,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from . import config, gates
+from . import layout as layouts
 from .store import (Change, Conflict, _state_dir, apply_changes, digest, job_name,
                     read_state, relative, vault_lock, write_json)
 
@@ -36,9 +37,6 @@ RUN_SCHEMA = "secondbrain-run/1"
 #: plan never substitutes for the review gate of semantic jobs.
 PROJECTION_KIND = "projection"
 
-#: Deterministic projections may only write these curated browse/entry files.
-PROJECTION_FILES = {"HOME.md", "使用指南.md", "系统总览.md"}
-
 #: Kind -> "module:function" validating a submission before it is persisted.
 #: Signature: ``fn(packet, payload, *, role, candidate) -> payload``.
 SUBMISSION_VALIDATORS = {
@@ -49,18 +47,12 @@ TERMINAL_STATUSES = {'applying', 'applied', 'partial', 'published', 'rolled_back
 _RUN_ID_RE = re.compile(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,79}')
 
 
-def _projection_allowed(rel: str) -> bool:
+def _projection_allowed(root: Path, rel: str) -> bool:
     """Whitelist a vault-relative path for deterministic projection writes."""
-    p = relative(rel)
-    if p.as_posix() in PROJECTION_FILES:
-        return True
-    if p.parts[:2] == ("_data", "projections") and len(p.parts) == 3 and p.suffix == ".json":
-        return True
-    if p.parts[0] == "20_MOCs" and 2 <= len(p.parts) <= 3:
-        return p.parts[1] != "_pillars" and p.suffix == ".md"
-    if p.parts[0] == "50_Reviews" and len(p.parts) == 2 and p.suffix == ".md":
-        return True
-    return False
+    relative(rel)
+    lay = layouts.of(root)
+    return (rel in lay.standalone_files or lay.is_projection_json(rel)
+            or lay.is_moc_page(rel) or lay.is_review_page(rel))
 
 
 def now() -> str:
@@ -459,7 +451,7 @@ def freeze_projection(root: Path, job_id: str, changes: list[Change], *, checks:
         if state.get('commit_intent'):
             raise Conflict('任务已经有冻结写入计划，请恢复它')
         for change in changes:
-            if not _projection_allowed(change.relative_path):
+            if not _projection_allowed(root, change.relative_path):
                 raise ValueError(f'确定性投影不能写该路径：{change.relative_path}')
         if not changes:
             state.update(**plan, applied_paths=[], updated_at=now())
@@ -489,7 +481,7 @@ def resume_transaction(root: Path, job_id: str) -> dict | None:
         read_input(root, job_id)
         changes = _decode_changes(intent['changes'])
         for change in changes:
-            if not _projection_allowed(change.relative_path):
+            if not _projection_allowed(root, change.relative_path):
                 raise ValueError(f'确定性投影不能写该路径：{change.relative_path}')
     else:
         if intent.get('bindings') != _bindings(state):

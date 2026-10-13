@@ -39,7 +39,6 @@ from .vault import read_snapshot
 # Unknown YAML values are preserved structurally; serialization is reported.
 OWNED_KEYS = {"title", "narrative", "pillars", "bridges"}
 
-PILLARS_REL = "20_MOCs/_pillars"
 
 
 class CurationError(ValueError):
@@ -307,9 +306,9 @@ def review_rows(rows: list[dict], review: dict) -> dict[str, dict]:
 # ---------------------------------------------------------------------------
 # apply
 # ---------------------------------------------------------------------------
-def _taxonomy_path(moc_title):
-    rel = f"{PILLARS_REL}/{moc_title}.yaml"
-    return rel
+def _taxonomy_path(root, moc_title):
+    from . import layout as layouts
+    return layouts.of(root).taxonomy_path(moc_title)
 
 
 def _serialise_taxonomy(merged):
@@ -383,7 +382,7 @@ def _taxonomy_changes(root, snapshot, packet, rows, moc_taxonomies):
         written.append(moc)
         current = snapshot.taxonomies.get(moc)
         merged = _merge_taxonomy(current, rows_by_domain[domain]["taxonomy"])
-        rel = _taxonomy_path(moc)
+        rel = _taxonomy_path(root, moc)
         before_raw = read_bytes(root, rel)
         before = None if before_raw is None else digest(before_raw)
         changes.append(Change(rel, before, _serialise_taxonomy(merged)))

@@ -13,6 +13,7 @@ from dataclasses import replace
 from pathlib import Path
 
 from . import jobs
+from . import layout as layouts
 from .catalog import validate_catalog
 from .classification import writable_snapshot
 from .curation import _normalise_taxonomy, _projection_changes, _serialise_taxonomy
@@ -183,11 +184,12 @@ def apply(root: Path, job_id: str) -> dict:
 
     changes: list[Change] = []
     new_catalog = _catalog_after(catalog_now, packet, proposal)
-    catalog_raw = read_bytes(root, '_data/secondbrain/catalog.json')
-    changes.append(Change('_data/secondbrain/catalog.json', digest(catalog_raw),
+    lay = layouts.of(root)
+    catalog_raw = read_bytes(root, lay.catalog)
+    changes.append(Change(lay.catalog, digest(catalog_raw),
                           (json.dumps(new_catalog, ensure_ascii=False, indent=2) + '\n').encode('utf-8')))
 
-    pillar_rel = f"20_MOCs/_pillars/{packet['moc']}.yaml"
+    pillar_rel = lay.taxonomy_path(packet['moc'])
     if read_bytes(root, pillar_rel) is not None:
         raise Conflict(f'pillar 体系文件已存在：{pillar_rel}')
     changes.append(Change(pillar_rel, None, _serialise_taxonomy(proposal['taxonomy'])))
@@ -200,7 +202,7 @@ def apply(root: Path, job_id: str) -> dict:
         card = snapshot.cards[row['id']]
         if card.sha256 != card_by_id[row['id']].get('sha256', card.sha256):
             raise Conflict(f'卡片在准备后变化：{row["id"]}')
-        new_path = f'10_Knowledge/{domain}/{card.path.rsplit("/", 1)[1]}'
+        new_path = lay.card_path(domain, card.path.rsplit("/", 1)[1])
         if read_bytes(root, new_path) is not None:
             raise Conflict(f'移动新址已存在：{new_path}')
         new_raw, new_fm, new_body = _relocated_bytes(card, domain, row)

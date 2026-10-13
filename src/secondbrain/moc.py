@@ -440,8 +440,9 @@ def _process_moc(snapshot, moc_title, moc_domains, domain_to_moc, issues):
                        "detail": "缺 pillar/topic，留在待分类页且未计入任何支柱"})
 
     seg = _safe_segment(moc_title, "moc")
-    prefix = "%s/%s/" % (MOC_ROOT, seg)
-    root_rel = "%s/%s.md" % (MOC_ROOT, seg)
+    moc_root = snapshot.layout.mocs if getattr(snapshot, "layout", None) else MOC_ROOT
+    prefix = "%s/%s/" % (moc_root, seg)
+    root_rel = "%s/%s.md" % (moc_root, seg)
 
     files = {}
     flat = []  # list of _PageLink in pagination order (non-root)

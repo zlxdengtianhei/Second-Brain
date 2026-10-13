@@ -312,7 +312,7 @@ def apply(root: Path, job_id: str) -> dict:
     changes.extend(projection_changes(root, entry_projection(projected, date.today())))
     return jobs.finish_transaction(root, job_id,
         {'status': 'partial' if pending else 'applied', 'pending': pending,
-         'classified_count': len([c for c in changes if c.relative_path.startswith('10_Knowledge/')]),
+         'classified_count': len([c for c in changes if snapshot.layout.is_card(c.relative_path)]),
          'projection_metrics': projection.metrics}, changes, checks=snapshot_checks(snapshot, changes))
 
 

@@ -117,8 +117,8 @@ def _validate_generated_document(raw: bytes, name: str) -> None:
 
 def _directory_counts(root, final_paths):
     """Count the original directory members plus absent paths planned this round."""
-    directories = ['00_Inbox', '10_Knowledge', '20_MOCs', '30_Exercises',
-                   '40_Sources', '50_Reviews', '90_Meta', '_data']
+    from . import layout as layouts
+    directories = layouts.of(root).counted_dirs
     counts = {}
     existing = set()
     for directory in directories:
@@ -138,6 +138,7 @@ def _directory_counts(root, final_paths):
 def review_projection(snapshot, today: date, *, extra_targets=(), generated_at=None,
                       reads=None) -> Projection:
     reads = {} if reads is None else reads
+    lay = _layout(snapshot)
     whole, inline, new, unparsed = [], [], [], []
     for c in snapshot.cards.values():
         row = {'id': c.id, 'title': c.title, 'path': c.path[:-3], 'domain': c.domain}
@@ -168,7 +169,7 @@ def review_projection(snapshot, today: date, *, extra_targets=(), generated_at=N
     state = {'date': today.isoformat(), 'due_notes': whole, 'due_inline': inline, 'new_notes': new_rows,
              'counts': counts, 'issues': cycles + unparsed, 'generated_by': 'secondbrain'}
     lines = ['---', f'date: {today.isoformat()}', 'generated_by: secondbrain', '---', '', f'# 今日复习 {today.isoformat()}', '',
-             '先合上笔记复述，再打开核对；在卡片页用 Spaced Repetition 插件评级。', '', '[[HOME|返回首页]]', '']
+             '先合上笔记复述，再打开核对；在卡片页用 Spaced Repetition 插件评级。', '', f'[[{lay.home[:-3]}|返回首页]]', '']
     for title, rows, label in [('到期整卡', whole, 'due'), ('到期命题笔记', inline, 'earliest'), ('今日新卡（5张）', new_rows[:5], None)]:
         lines.extend([f'## {title}', ''])
         for r in rows:
@@ -181,7 +182,7 @@ def review_projection(snapshot, today: date, *, extra_targets=(), generated_at=N
                    f'解析不了的复习日期：{len(unparsed)}。', ''])
     trend = []
     for i in range(6, -1, -1):
-        rel = f'_data/projections/review_state_{(today - timedelta(days=i)).isoformat()}.json'
+        rel = f'{lay.projections}/review_state_{(today - timedelta(days=i)).isoformat()}.json'
         old = _read(snapshot.root, rel, reads)
         value = state if i == 0 else json.loads(old) if old else None
         if value:
@@ -203,13 +204,14 @@ def review_projection(snapshot, today: date, *, extra_targets=(), generated_at=N
             'broken_links': len(broken), 'broken_links_measured': True, 'broken_links_scope': 'review_page',
             'due_count': len(whole) + len(inline), 'new_count': len(new_rows),
             'due_top': [{'title': x['title'], 'due': x['due']} for x in whole[:10]], 'trend_7d': trend}
-    return Projection({f'50_Reviews/今日复习-{today}.md': '\n'.join(lines).encode(),
-                       f'_data/projections/review_state_{today}.json': jobs.encoded(state),
-                       '_data/projections/kb_review.json': jobs.encoded(site)}, counts, cycles + unparsed)
+    return Projection({f'{lay.reviews}/今日复习-{today}.md': '\n'.join(lines).encode(),
+                       f'{lay.projections}/review_state_{today}.json': jobs.encoded(state),
+                       f'{lay.projections}/kb_review.json': jobs.encoded(site)}, counts, cycles + unparsed)
 
 
 def entry_projection(snapshot, today: date, *, final_paths=(), reads=None) -> Projection:
     reads = {} if reads is None else reads
+    lay = _layout(snapshot)
     counts = Counter(c.domain for c in snapshot.cards.values())
     missing = sum(not c.fm.get('pillar') or not c.fm.get('topic') for c in snapshot.cards.values())
     catalog = snapshot.catalog
@@ -223,10 +225,10 @@ def entry_projection(snapshot, today: date, *, final_paths=(), reads=None) -> Pr
     rows += ['', '> 现值用 `secondbrain status` 查询；完整卡片/策展YAML是真源。']
     stats = '\n'.join(rows)
     home = ['# HOME — SecondBrain', '', '## 现在做什么', '',
-        f'1. [[50_Reviews/今日复习-{today}|打开今日复习]]；清单缺失时运行 `secondbrain today --apply`。',
+        f'1. [[{lay.reviews}/今日复习-{today}|打开今日复习]]；清单缺失时运行 `secondbrain today --apply`。',
         '2. 合上笔记复述，再打开卡片核对，用 Spaced Repetition 插件评级。',
         '3. 新资料用 `secondbrain ingest <文件>`；未解决任务用 `secondbrain status`。', '',
-        '[[使用指南]] · [[系统总览]]', '', '## 领域入口', '']
+        ' · '.join(f'[[{name[:-3]}]]' for name in lay.entry_docs), '', '## 领域入口', '']
     seen = set()
     for track in catalog['tracks']:
         home.extend([f'## {track["title"]}', ''])
@@ -235,16 +237,16 @@ def entry_projection(snapshot, today: date, *, final_paths=(), reads=None) -> Pr
             if title not in seen:
                 seen.add(title)
                 total = sum(counts[x] for x, m in catalog['domains'].items() if m['moc'] == title)
-                home.append(f'- [[20_MOCs/{title}|{title}]] · {total} 张')
+                home.append(f'- [[{lay.mocs}/{title}|{title}]] · {total} 张')
         home.append('')
     home += ['## 库存', '', stats, '', '## 录入与维护', '',
         '`secondbrain ingest <文件>`：完整来源 → 分卡与去重 → 分类/关系 → 独立复核 → 事务写入 → MOC。', '',
         '`secondbrain classify --domain <域>` 处理分类；`secondbrain resume --job <任务>` 恢复；`secondbrain refresh` 预览MOC变化。', '',
         '缺主题或领域的内容保留具体待办；计数下降不代替语义核验。分类与MOC不会改复习调度字段。', '']
-    files = {'HOME.md': '\n'.join(home).encode()}
+    files = {lay.home: '\n'.join(home).encode()}
     issues = []
     documents = []
-    for name in ['使用指南.md', '系统总览.md']:
+    for name in lay.entry_docs:
         raw = _read(snapshot.root, name, reads)
         if raw is None:
             issues.append({'path': name, 'code': 'missing_document', 'detail': '文档缺失，未宣称docs完成'})
@@ -285,6 +287,11 @@ def entry_projection(snapshot, today: date, *, final_paths=(), reads=None) -> Pr
     return Projection(files, {'cards': len(snapshot.cards), 'domains': len(catalog['domains']), 'directories': directory_counts}, issues)
 
 
+def _layout(snapshot):
+    from . import layout as layouts
+    return getattr(snapshot, 'layout', None) or layouts.of(snapshot.root)
+
+
 def _merge_projections(projections):
     files, issues, metrics = {}, [], {}
     for projection in projections:
@@ -299,14 +306,15 @@ def _merge_projections(projections):
 
 def _projection_files(snapshot, today, *, reviews, entries, refresh_mocs=False, generated_at=None):
     reads = {}
+    lay = _layout(snapshot)
     moc = build_mocs(snapshot) if refresh_mocs else None
-    review_targets = ({f'50_Reviews/今日复习-{today}.md',
-                       f'_data/projections/review_state_{today}.json',
-                       '_data/projections/kb_review.json'} if reviews else set())
+    review_targets = ({f'{lay.reviews}/今日复习-{today}.md',
+                       f'{lay.projections}/review_state_{today}.json',
+                       f'{lay.projections}/kb_review.json'} if reviews else set())
     planned = set(moc.files) if moc else set()
     planned.update(review_targets)
     if entries:
-        planned.add('HOME.md')
+        planned.add(lay.home)
     entry = entry_projection(snapshot, today, final_paths=planned, reads=reads) if entries else None
     entry_targets = set(entry.files) if entry else set()
     review = review_projection(snapshot, today,

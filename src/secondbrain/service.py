@@ -73,12 +73,14 @@ class Service:
 def initialize(root: Path, catalog: dict, job_id: str = 'initialize-catalog'):
     validate_catalog(catalog)
     raw = jobs.encoded(catalog)
-    existing = read_bytes(root, '_data/secondbrain/catalog.json')
+    from . import layout as layouts
+    catalog_rel = layouts.of(root).catalog
+    existing = read_bytes(root, catalog_rel)
     if existing is not None:
         if existing == raw:
             return {'status': 'unchanged'}
         raise ValueError('catalog已存在；修改领域体系须走提案与复核')
-    return apply_changes(root, job_id, [Change('_data/secondbrain/catalog.json', None, raw)])
+    return apply_changes(root, job_id, [Change(catalog_rel, None, raw)])
 
 
 def refresh(root: Path, *, job_id: str, domains: list[str] | None = None, apply: bool = False):

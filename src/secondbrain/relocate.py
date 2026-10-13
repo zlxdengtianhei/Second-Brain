@@ -24,11 +24,12 @@ from pathlib import Path
 from urllib.parse import unquote
 
 from . import classification as cls, jobs
+from . import layout as layouts
 from .catalog import category_pairs, taxonomy_packet
 from .evidence import check_verbatim
 from .classification import projection_changes, taxonomy_fingerprint, writable_snapshot
 from .store import Change, Conflict, digest, read_bytes
-from .vault import (Card, REGISTRY_RELPATH, card_packet, parse_note,
+from .vault import (Card, card_packet, parse_note,
                     patch_frontmatter, read_snapshot)
 
 METHOD_VERSION = 'relocation/1'
@@ -215,7 +216,7 @@ def _stage_moves(root_, snapshot, packet, moves):
         dest = packet['destinations'][row['id']]
         if (row['pillar'], row['topic']) not in category_pairs(snapshot, dest):
             raise ValueError(f'分类不在该域策展体系中：{card.id}')
-        new_path = f'10_Knowledge/{dest}/{card.path.rsplit("/", 1)[1]}'
+        new_path = layouts.of(root_).card_path(dest, card.path.rsplit("/", 1)[1])
         if read_bytes(root_, new_path) is not None:
             raise Conflict(f'移动新址已存在：{new_path}')
         new_raw, new_fm, new_body = _relocated_bytes(card, dest, row)
@@ -248,7 +249,8 @@ def _relocated_bytes(card, dest, row):
 
 def _registry_change(root_, moved):
     """同IDregistry项只改path/domain，保留未知字段；基于apply时最新字节做CAS。"""
-    raw = read_bytes(root_, REGISTRY_RELPATH)
+    registry_rel = layouts.of(root_).registry
+    raw = read_bytes(root_, registry_rel)
     if raw is None:
         raise ValueError('缺少notes_registry，不能迁移')
     data = json.loads(raw)
@@ -261,11 +263,11 @@ def _registry_change(root_, moved):
         if i is None:
             raise ValueError(f'registry缺卡：{card.id}')
         note = dict(notes[i])
-        note['path'] = f'10_Knowledge/{dest}/{card.path.rsplit("/", 1)[1]}'
+        note['path'] = layouts.of(root_).card_path(dest, card.path.rsplit("/", 1)[1])
         note['domain'] = dest
         notes[i] = note
     after = (json.dumps(data, ensure_ascii=False, indent=2) + '\n').encode('utf-8')
-    return Change(REGISTRY_RELPATH, digest(raw), after)
+    return Change(registry_rel, digest(raw), after)
 
 
 def link_obstacles(root_, moving, *, documents=None, replacements=None):
@@ -281,7 +283,7 @@ def link_obstacles(root_, moving, *, documents=None, replacements=None):
     documents = dict(_iter_md(root_)) if documents is None else documents
     # Generated MOC pages (one root page per catalog MOC plus its page folder)
     # are projections rebuilt from the moved snapshot, so their old links are
-    # not real obstacles. Hand-written pages under 20_MOCs are still checked.
+    # not real obstacles. Hand-written pages in the MOC folder are still checked.
     documents = {rel: raw for rel, raw in documents.items() if not _generated_moc_page(root_, rel)}
     for rel, raw_bytes in {**documents, **(replacements or {})}.items():
         text = raw_bytes.decode('utf-8')
@@ -319,14 +321,15 @@ def link_obstacles(root_, moving, *, documents=None, replacements=None):
 
 
 def _generated_moc_page(root_, rel):
-    parts = rel.split('/')
-    if parts[0] != '20_MOCs' or len(parts) < 2:
+    lay = layouts.of(root_)
+    if not lay.is_moc_page(rel):
         return False
-    raw = read_bytes(root_, '_data/secondbrain/catalog.json')
+    rest = rel[len(lay.mocs) + 1:].split('/')
+    raw = read_bytes(root_, lay.catalog)
     mocs = {m.get('moc') for m in (json.loads(raw).get('domains') or {}).values()
             if isinstance(m, dict)} if raw else set()
-    head = parts[1][:-3] if len(parts) == 2 and parts[1].endswith('.md') else parts[1]
-    return head in mocs and (len(parts) == 2 or len(parts) == 3)
+    head = rest[0][:-3] if len(rest) == 1 else rest[0]
+    return head in mocs
 
 
 def _normalize(value):
