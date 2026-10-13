@@ -23,9 +23,10 @@ from secondbrain.service import refresh
 from secondbrain.store import digest, recover
 from secondbrain.vault import parse_note, read_snapshot
 from tests.helpers import CUSTOM_LAYOUT, DOMAIN, EXISTING, MOC, PILLAR, TOPIC
-from tests.ingest_helpers import (ALL_REASONS, CARDS, FIXED_DIMMING, NEW_TOPIC, OTHER_MOC, SOURCE_NAME,
-                                  build_ingest_vault, first_candidate, first_review, repair_candidate,
-                                  repair_review, scripted, tree)
+from tests.ingest_helpers import (ALL_REASONS, CARDS, DIMMING_IR, FIXED_DIMMING, NEW_TOPIC, OTHER_MOC,
+                                  SOURCE_NAME, build_ingest_vault, diagram_answer, first_candidate,
+                                  first_review, packet_in, repair_candidate, repair_review, scripted, tree,
+                                  with_diagrams)
 
 HEADINGS = {'en': ['## Essence', '## Propositions', '## Intuition and contrasts', '## Related', '## Review cards'],
             'zh': ['## 本质', '## 命题', '## 直觉与易混对比', '## 相关', '## 复习卡']}
@@ -38,14 +39,14 @@ def settings(**ingest_fields):
                                    ingest=replace(current.ingest, **ingest_fields)))
 
 
-def executors(producer_outputs, reviewer_outputs):
-    produce, review, seen = scripted(producer_outputs, reviewer_outputs)
+def executors(producer_outputs, reviewer_outputs, diagrams=None):
+    produce, review, seen = scripted(producer_outputs, reviewer_outputs, diagrams)
     return (FakeExecutor('gpt-test', responder=produce), FakeExecutor('claude-test', responder=review), seen)
 
 
 def run_default(root, lay, **kwargs):
     producer, reviewer, seen = executors([first_candidate(), repair_candidate()],
-                                         [first_review(), repair_review()])
+                                         [first_review(), repair_review()], {'marker-dimming': DIMMING_IR})
     prepared = ingest.prepare(root, root / lay.inbox / SOURCE_NAME)
     result = ingest.advance(root, prepared['job_id'], producer=producer, reviewer=reviewer, **kwargs)
     return prepared, result, seen
@@ -112,8 +113,17 @@ def test_ingest_acceptance_list(tmp_path, lay, language):
         related = card.body.split(HEADINGS[language][3] + '\n', 1)[1].split('\n## ', 1)[0]
         lines = [line for line in related.splitlines() if line.startswith('- ')]
         assert len(lines) == len(set(lines))
-        assert '```mermaid' not in card.body
     lantern, cost, dimming = (by_title[t] for t in expected)
+    # diagram step: drawn by code from a validated IR, only where it helps
+    diagram_heading = {'zh': '## 图', 'en': '## Diagram'}[language]
+    assert diagram_heading not in lantern.body and diagram_heading not in cost.body
+    figure = dimming.body.split(diagram_heading + '\n', 1)[1].split('\n## ', 1)[0]
+    assert figure.startswith('```mermaid\n%% diagram v1 props=E,P1,P2 sha=') and figure.rstrip().endswith('```')
+    assert dimming.body.index(diagram_heading) < dimming.body.index(HEADINGS[language][2])
+    assert {d['ref']: d['status'] for d in result['diagrams']} == {
+        'lantern-queue': 'skip', 'lit-marker-cost': 'skip', 'marker-dimming': 'draw'}
+    [diagram_task] = seen['diagram']
+    assert [c['ref'] for c in diagram_task.packet['cards']] == ['lantern-queue', 'marker-dimming']
     assert lantern.fm['aliases'] == ['lantern list']
     assert [r['target'] for r in lantern.fm['relations']].count(EXISTING) == 1
     assert '- similar_to:: [[已有卡]]' in lantern.body
@@ -152,7 +162,7 @@ def test_ingest_acceptance_list(tmp_path, lay, language):
     # 6. run records: distinct runs bound to the frozen input; reviewer saw no producer reasons
     state = jobs.load(root, job_id)
     runs = jobs.list_runs(root, job_id)
-    assert len(runs) == 4 and len({r['run_id'] for r in runs}) == 4
+    assert len(runs) == 5 and len({r['run_id'] for r in runs}) == 5
     assert all(r['packet_sha256'] == state['input_sha256'] for r in runs)
     families = config.review_policy().model_families
     for run in runs:
@@ -410,7 +420,7 @@ def test_chunks_are_produced_in_order_with_earlier_cards_in_context(tmp_path):
         topics = [{**{k: t[k] for k in ('domain', 'pillar', 'name')}, 'decision': 'accept', 'reason': 'ok'}
                   for t in task.packet['candidate']['new_topics']]
         return {'cards': cards, 'new_topics': topics, 'coverage': {'decision': 'accept', 'reason': 'ok'}}
-    producer = FakeExecutor('gpt-test', responder=produce)
+    producer = FakeExecutor('gpt-test', responder=with_diagrams(produce))
     reviewer = FakeExecutor('claude-test', responder=review)
     prepared = ingest.prepare(root, root / '00_Inbox' / SOURCE_NAME)
     packet = jobs.read_input(root, prepared['job_id'])
@@ -419,7 +429,7 @@ def test_chunks_are_produced_in_order_with_earlier_cards_in_context(tmp_path):
     result = ingest.advance(root, prepared['job_id'], producer=producer, reviewer=reviewer)
     assert result['status'] == 'applied'
     assert {p['title'] for p in result['produced']} == {'Lantern queue', 'Lit marker memory cost'}
-    later = [t for t in producer.calls if t.chunk != 'c01']
+    later = [t for t in producer.calls if t.chunk != 'c01' and not t.chunk.startswith('dg')]
     assert any(c['slug'] == 'lantern-queue' for t in later for c in t.packet['other_chunks_cards'])
     cost = next(c for c in read_snapshot(root).cards.values() if c.title == 'Lit marker memory cost')
     assert '- depends_on:: [[Lantern queue]]' in cost.body
@@ -454,7 +464,7 @@ def test_chunk_too_large_is_split_in_halves_and_retried(tmp_path):
                 'new_topics': [{**{k: t[k] for k in ('domain', 'pillar', 'name')}, 'decision': 'accept',
                                 'reason': 'ok'} for t in cand['new_topics']],
                 'coverage': {'decision': 'accept', 'reason': 'ok'}}
-    producer = FakeExecutor('gpt-test', responder=produce)
+    producer = FakeExecutor('gpt-test', responder=with_diagrams(produce))
     reviewer = FakeExecutor('claude-test', responder=review)
     prepared = ingest.prepare(root, root / '00_Inbox' / SOURCE_NAME)
     assert prepared['chunks'] == ['c01']
@@ -506,8 +516,15 @@ def test_host_mode_hands_off_packets_and_accepts_submissions(tmp_path):
     submit(repair, repair_candidate(), 'gpt-test')
     last = ingest.advance(root, job_id, producer=host, reviewer=host)['handoffs'][0]
     submit(last, repair_review(), 'claude-test')
+    [diagram] = ingest.advance(root, job_id, producer=host, reviewer=host)['handoffs']
+    assert diagram['step'] == 'diagram' and diagram['chunk'] == 'dg01' and diagram['role'] == 'producer'
+    request = packet_in(open(diagram['packet_path'], encoding='utf-8').read())
+    assert [c['ref'] for c in request['cards']] == ['lantern-queue', 'marker-dimming']
+    assert ingest.packet_for(root, job_id, role='producer', chunk='dg01', executor=host)['run_id'] == diagram['run_id']
+    submit(diagram, diagram_answer(request, {'marker-dimming': DIMMING_IR}), 'gpt-test')
     done = ingest.advance(root, job_id, producer=host, reviewer=host)
     assert done['status'] == 'applied' and done['same_family'] is True
+    assert [d['ref'] for d in done['diagrams'] if d['status'] == 'draw'] == ['marker-dimming']
     state = jobs.load(root, job_id)
     assert state['same_family'] is True and state['chunks']['c01']['same_family'] is True
     runs = jobs.list_runs(root, job_id)

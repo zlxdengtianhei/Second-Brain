@@ -38,6 +38,7 @@ from ..executors.base import CHUNK_TOO_LARGE, INVALID_OUTPUT, ExecutorFailure
 from ..locks import job_lock
 from ..store import Change, Conflict, digest, read_bytes
 from ..vault import Card, parse_note, patch_frontmatter, read_snapshot
+from . import card_diagrams
 from .chunking import chunk_text
 
 KIND = 'ingest'
@@ -164,6 +165,7 @@ def prepare(root: Path, source: Path, *, settings: config.Settings | None = None
         'settings': {'chunk_chars': settings.ingest.chunk_chars,
                      'new_topics_per_source': settings.ingest.new_topics_per_source,
                      'id_prefix': settings.ingest.id_prefix, 'language': settings.card_language,
+                     'diagrams': settings.card_diagrams,
                      'after_ingest': settings.ingest.after_ingest},
         'snapshot_fingerprint': snapshot.fingerprint,
     }
@@ -610,6 +612,8 @@ def validate_submission(packet: dict, payload: dict, *, role: str, candidate=Non
     """jobs.submit hook: S4 for producers, shape checks for reviewers."""
     if chunk is None:
         raise IngestError('ingest runs are always bound to a chunk slot')
+    if card_diagrams.is_slot(chunk):
+        return card_diagrams.validate_answer(payload)
     existing_ids, existing_titles = _vault_ids_titles(root)
     if role == 'reviewer':
         return validate_review(candidate, payload, existing_ids)
@@ -849,7 +853,84 @@ def advance(root: Path, job_id: str, *, producer, reviewer, apply: bool = True) 
         if not apply:
             state = jobs.update(root, job_id, status='reviewed', proposal=_summary(settled))
             return state
+        _, handoffs = _diagram_stage(root, job_id, packet, settled, producer)
+        if handoffs:
+            state = jobs.update(root, job_id, status='awaiting_submission')
+            return {**state, 'handoffs': handoffs}
         return apply_job(root, job_id, settled)
+
+
+# --------------------------------------------------------------------------
+# Diagram step (after review, on final card fields; see card_diagrams)
+# --------------------------------------------------------------------------
+def _diagram_cards(root: Path, job_id: str, packet: dict, settled: list[dict]) -> list[dict]:
+    """The card list the diagram step works on, frozen in the job state on first use."""
+    state = jobs.load(root, job_id)
+    if state.get('diagram_cards') is not None:
+        return state['diagram_cards']
+    accepted = [(o['chunk'], s, c) for o in settled for s, c in o['accepted'].items()]
+    snapshot = read_snapshot(root)
+    titles = {slug: card['title'] for _, slug, card in accepted}
+
+    def title_of(target):
+        if target in titles:
+            return titles[target]
+        card = snapshot.cards.get(target)
+        return card.title if card else None
+    cards = card_diagrams.cards_for(accepted, title_of)
+    jobs._internal_update(root, job_id, diagram_cards=cards)
+    return cards
+
+
+def _diagram_answer(root: Path, state: dict, slot: str) -> tuple[bool, object]:
+    info = (state.get('chunks') or {}).get(slot) or {}
+    if info.get('candidate'):
+        return True, jobs.artifact(root, state, 'candidate', slot)
+    if info.get('invalid_output'):
+        return True, None
+    return False, None
+
+
+def diagram_outcome(root: Path, job_id: str, packet: dict, settled: list[dict]) -> dict:
+    if not packet['settings'].get('diagrams'):
+        return {'pending': [], 'diagrams': {}, 'report': []}
+    cards = _diagram_cards(root, job_id, packet, settled)
+    state = jobs.load(root, job_id)
+    return card_diagrams.evaluate(cards, lambda slot: _diagram_answer(root, state, slot))
+
+
+def _diagram_stage(root: Path, job_id: str, packet: dict, settled: list[dict], executor,
+                   only: str | None = None) -> tuple[dict, list]:
+    """Run every diagram request that can run now; returns (outcome, host hand-offs)."""
+    from ..runner import AwaitingSubmission, call_executor
+    handoffs, handed = [], set()
+    while True:
+        outcome = diagram_outcome(root, job_id, packet, settled)
+        todo = [p for p in outcome['pending'] if p[0] not in handed and (only is None or p[0] == only)]
+        if not todo:
+            return outcome, handoffs
+        slot, step, prompt_text, request = todo[0]
+        try:
+            call_executor(root, job_id, executor, role='producer', step=step, prompt_text=prompt_text,
+                          packet=request, output_schema=card_diagrams.answer_schema(), chunk=slot)
+        except AwaitingSubmission as waiting:
+            handoffs.append({**waiting.handoff, 'chunk': slot, 'step': 'diagram'})
+            handed.add(slot)
+        except ExecutorFailure as failure:
+            if failure.code != INVALID_OUTPUT:
+                raise
+            _mark_slot(root, job_id, slot, invalid_output=failure.error.get('message', '')[:2000])
+
+
+def _mark_slot(root: Path, job_id: str, slot: str, **fields) -> None:
+    from ..store import vault_lock, write_json
+    with vault_lock(root):
+        state = jobs.load(root, job_id)
+        info = state.setdefault('chunks', {}).setdefault(
+            slot, {'candidate': None, 'review': None, 'status': 'prepared', 'round': 0})
+        info.update(fields)
+        state['updated_at'] = jobs.now()
+        write_json(root, jobs.location(job_id), state)
 
 
 def _summary(settled: list[dict]) -> dict:
@@ -919,6 +1000,9 @@ def apply_job(root: Path, job_id: str, settled: list[dict] | None = None) -> dic
     lay = layouts.of(root)
     settings = packet['settings']
     language = settings['language']
+    drawn = diagram_outcome(root, job_id, packet, settled)
+    if drawn['pending']:
+        raise Conflict('The diagram step is not finished; run `sb job advance`')
     snapshot = read_snapshot(root)
     writable_snapshot(snapshot)
     accepted = [(o['chunk'], s, c) for o in settled for s, c in o['accepted'].items()]
@@ -1006,7 +1090,8 @@ def apply_job(root: Path, job_id: str, settled: list[dict] | None = None) -> dic
                 'sources': [{'path': source_rel, 'sha256': source['sha256'], 'locator': card['source_quotes'][0]}],
                 'relations': rels[slug], 'status': card.get('status', 'confirmed'), 'created': today}
         meta = {k: v for k, v in meta.items() if v is not None}
-        raw = cardfmt.render_card(meta, card, relations, language=language, diagram=None)
+        raw = cardfmt.render_card(meta, card, relations, language=language,
+                                  diagram=drawn['diagrams'].get(slug))
         fm, body = parse_note(raw)
         rel = lay.card_path(card['domain'], f'{title}.md')
         if read_bytes(root, rel) is not None:
@@ -1108,6 +1193,7 @@ def apply_job(root: Path, job_id: str, settled: list[dict] | None = None) -> dic
               'skipped_relations': skipped_relations, 'maintenance': maintenance,
               'source_record': {'sha256': source['sha256'], 'path': source_rel},
               'inbox_moved': move, 'projection_metrics': projection_metrics,
+              'diagrams': [row for row in drawn['report'] if row['ref'] in {p['slug'] for p in produced}],
               'same_family': bool(state.get('same_family'))}
     try:
         done = jobs.finish_transaction(root, job_id, result, changes, checks=snapshot_checks(snapshot, changes))
@@ -1154,4 +1240,9 @@ def packet_for(root: Path, job_id: str, *, role: str, chunk: str | None, executo
             except AwaitingSubmission as waiting:
                 return {**waiting.handoff, 'chunk': out['next'][1], 'step': out['next'][0]}
             raise ValueError('The executor finished the step directly; use `sb job advance` instead')
+        settled = [chunk_outcome(root, state, packet, c['chunk_id']) for c in effective_chunks(packet, state)]
+        if role == 'producer' and all(o['settled'] for o in settled) and (not chunk or card_diagrams.is_slot(chunk)):
+            _, handoffs = _diagram_stage(root, job_id, packet, settled, executor, only=chunk)
+            if handoffs:
+                return handoffs[0]
         raise ValueError(f'No {role} step is due' + (f' for {chunk}' if chunk else ''))

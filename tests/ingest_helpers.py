@@ -159,12 +159,64 @@ def build_ingest_vault(root: Path, lay: layouts.VaultLayout | None = None) -> Pa
     return root
 
 
-def scripted(producer_outputs, reviewer_outputs):
-    """Responders that hand out answers in call order and record the packets they saw."""
-    seen = {'producer': [], 'reviewer': []}
+#: A valid diagram IR for the repaired "Marker dimming" card (flow with a labelled decision).
+DIMMING_IR = {
+    'decision': 'draw', 'form': 'flow', 'question': 'What happens to a marker when the queue is compacted?',
+    'nodes': [{'key': 'c', 'label': 'Compaction', 'p': ['E'], 'role': 'start'},
+              {'key': 'q', 'label': 'Marker before the cut?', 'p': ['P1'], 'role': 'decision'},
+              {'key': 'd', 'label': 'Dimmed, not deleted', 'p': ['P1']},
+              {'key': 'k', 'label': 'Markers stay', 'p': ['P1']},
+              {'key': 'r', 'label': 'Stay readable', 'p': ['P2'], 'role': 'end'}],
+    'edges': [{'from': 'c', 'to': 'q'},
+              {'from': 'q', 'to': 'd', 'label': 'before the cut', 'p': ['P1']},
+              {'from': 'q', 'to': 'k', 'label': 'not before the cut', 'p': ['P1']},
+              {'from': 'd', 'to': 'r', 'label': 'never followed', 'p': ['P2']},
+              {'from': 'k', 'to': 'r'}],
+}
+SKIP_IR = {'decision': 'skip', 'reason': 'the propositions already say it; a picture adds nothing'}
+
+
+def diagram_answer(packet, irs=None):
+    """The model side of a diagram request: an IR per card (skip unless given)."""
+    irs = irs or {}
+    return {'results': [{'ref': c['ref'], 'ir': irs.get(c['ref'], SKIP_IR)} for c in packet['cards']]}
+
+
+def packet_in(text):
+    """The task packet inside a rendered task text (packet file or API user message)."""
+    start = text.index('<task_packet>\n') + len('<task_packet>\n')
+    return json.loads(text[start:text.index('\n</task_packet>', start)])
+
+
+def is_diagram_task(task):
+    from secondbrain.pipelines.card_diagrams import is_slot
+    return is_slot(task.chunk)
+
+
+def with_diagrams(responder, irs=None, seen=None):
+    """Wrap a producer responder so diagram requests get scripted IRs."""
+    def respond(task):
+        if is_diagram_task(task):
+            if seen is not None:
+                seen.append(task)
+            return diagram_answer(task.packet, irs)
+        return responder(task)
+    return respond
+
+
+def scripted(producer_outputs, reviewer_outputs, diagrams=None):
+    """Responders that hand out answers in call order and record the packets they saw.
+
+    Diagram requests are answered from ``diagrams`` (ref -> IR; skip otherwise)
+    and recorded under ``seen['diagram']``.
+    """
+    seen = {'producer': [], 'reviewer': [], 'diagram': []}
 
     def make(role, queue):
         def respond(task):
+            if role == 'producer' and is_diagram_task(task):
+                seen['diagram'].append(task)
+                return diagram_answer(task.packet, diagrams)
             seen[role].append(task)
             if not queue:
                 raise AssertionError(f'unexpected {role} call for {task.chunk}')

@@ -8,7 +8,8 @@ frontmatter relations only: one ``type:: [[Title]]`` inline field per
 (type, target) pair, so Breadcrumbs can read it, never a bare card id, never a
 duplicate line. Relations marked ``tier: extension`` are folded into a
 ``<details>`` block in the plain ``[[Title]] — type`` form that Breadcrumbs
-ignores.
+ignores. The diagram section is filled only from the diagram step's output
+(validated IR turned into Mermaid by code); models never write Mermaid here.
 """
 from __future__ import annotations
 
@@ -75,14 +76,18 @@ def _one_line(text: str) -> str:
 
 def render_body(fields: dict, relations: list[Relation], *, language: str = 'en',
                 diagram: str | None = None) -> str:
-    """Body Markdown from validated fields. ``diagram`` is ready Mermaid or ``None``."""
+    """Body Markdown from validated fields.
+
+    ``diagram`` is the finished text for the diagram section (a fenced Mermaid
+    block from :func:`secondbrain.diagrams.fenced`) or ``None`` for no section.
+    """
     h = HEADINGS[language]
     lines = [f'## {h["essence"]}', _one_line(fields['essence']), '',
              f'## {h["propositions"]}']
     lines += [f'- P{i}. {_one_line(p)}' for i, p in enumerate(fields['propositions'], 1)]
     lines.append('')
     if diagram:
-        lines += [f'## {h["diagram"]}', '```mermaid', diagram.strip('\n'), '```', '']
+        lines += [f'## {h["diagram"]}', diagram.strip('\n'), '']
     lines.append(f'## {h["intuition"]}')
     intuition = fields.get('intuition')
     confusions = fields.get('confusions') or []

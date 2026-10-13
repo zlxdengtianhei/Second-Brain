@@ -49,7 +49,8 @@ def test_body_sections_in_order_and_diagram_slot(language):
     assert positions == sorted(positions) and f'## {h["diagram"]}' not in body
     assert 'One sentence only.' in body and '- P2. Second.' in body
     assert body.rstrip().endswith('Q2?::A2.')
-    with_diagram = cards.render_body(FIELDS, [], language=language, diagram='flowchart LR\n  A --> B\n')
+    with_diagram = cards.render_body(FIELDS, [], language=language,
+                                     diagram='```mermaid\nflowchart LR\n  A --> B\n```\n')
     block = f'## {h["diagram"]}\n```mermaid\nflowchart LR\n  A --> B\n```\n'
     assert block in with_diagram
     assert with_diagram.index(block) > with_diagram.index(f'## {h["propositions"]}')

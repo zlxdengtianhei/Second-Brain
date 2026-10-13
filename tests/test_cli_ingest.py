@@ -4,8 +4,8 @@ from __future__ import annotations
 import json
 
 from secondbrain import cli, jobs
-from tests.ingest_helpers import (ALL_REASONS, SOURCE_NAME, build_ingest_vault, first_candidate, first_review,
-                                  repair_candidate, repair_review)
+from tests.ingest_helpers import (ALL_REASONS, DIMMING_IR, SOURCE_NAME, build_ingest_vault, diagram_answer,
+                                  first_candidate, first_review, packet_in, repair_candidate, repair_review)
 
 
 def run(capsys, root, *argv):
@@ -63,9 +63,14 @@ def test_host_flow_through_the_cli(tmp_path, capsys):
     code, state, _ = run(capsys, root, 'job', 'advance', job_id, '--executor', 'host', '--proposal-only')
     assert code == 0 and state['status'] == 'reviewed' and len(state['proposal']['accepted']) == 3
     code, state, _ = run(capsys, root, 'job', 'advance', job_id, '--executor', 'host')
+    [diagram] = state['handoffs']
+    assert code == 0 and diagram['step'] == 'diagram'
+    request = packet_in(open(diagram['packet_path'], encoding='utf-8').read())
+    answer(diagram, diagram_answer(request, {'marker-dimming': DIMMING_IR}), 'gpt-test')
+    code, state, _ = run(capsys, root, 'job', 'advance', job_id, '--executor', 'host')
     assert code == 0 and state['status'] == 'applied' and state['new_card_count'] == 3
     code, shown, _ = run(capsys, root, 'job', 'show', job_id)
-    assert len(shown['run_records']) == 4 and shown['same_family'] is not True
+    assert len(shown['run_records']) == 5 and shown['same_family'] is not True
     code, items, _ = run(capsys, root, 'inbox', 'list')
     assert items == []
 

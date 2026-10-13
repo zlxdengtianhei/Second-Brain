@@ -20,8 +20,8 @@ from secondbrain.executors.factory import build
 from secondbrain.gates import model_family
 from secondbrain.pipelines import ingest
 from secondbrain.store import state_root
-from tests.ingest_helpers import (SOURCE_NAME, build_ingest_vault, first_candidate, first_review,
-                                  repair_candidate, repair_review)
+from tests.ingest_helpers import (DIMMING_IR, SOURCE_NAME, build_ingest_vault, diagram_answer, first_candidate,
+                                  first_review, packet_in, repair_candidate, repair_review)
 
 HTTP = Path(__file__).parent / 'fixtures' / 'http'
 KEY = 'sk-test-not-a-real-key'
@@ -214,6 +214,9 @@ def test_ingest_through_both_adapters(tmp_path):
     def handler(request):
         seen.append(request)
         if request.url.host == 'llm.example.test':
+            task = packet_in(json.loads(request.content)['messages'][1]['content'])
+            if 'cards' in task:  # the diagram step, after review
+                return httpx.Response(200, json=wrap_openai(diagram_answer(task, {'marker-dimming': DIMMING_IR})))
             return httpx.Response(200, json=wrap_openai(produced.pop(0)))
         return httpx.Response(200, json=wrap_anthropic(reviewed.pop(0)))
     settings = replace(config.current(), producer=openai_endpoint(), reviewer=anthropic_endpoint())
@@ -222,7 +225,8 @@ def test_ingest_through_both_adapters(tmp_path):
     prepared = ingest.prepare(root, root / '00_Inbox' / SOURCE_NAME)
     result = ingest.advance(root, prepared['job_id'], producer=producer, reviewer=reviewer)
     assert result['status'] == 'applied' and result['new_card_count'] == 3
-    assert len(seen) == 4 and not produced and not reviewed
+    assert len(seen) == 5 and not produced and not reviewed
+    assert [d['ref'] for d in result['diagrams'] if d['status'] == 'draw'] == ['marker-dimming']
     runs = jobs.list_runs(root, prepared['job_id'])
     assert {r['attestation'] for r in runs} == {'provider_response'}
     families = config.review_policy().model_families
