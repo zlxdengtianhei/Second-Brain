@@ -73,7 +73,7 @@ From the final state report:
 
 A `partial` job wrote the accepted cards and kept the rest pending. `sb ingest --retry <job_id> --executor host` starts a child job for the pending items only (same hand-off loop as above); `sb inbox list` shows such sources as `partial`.
 
-`sb recover <job_id> --rollback` undoes a written job byte for byte if the user asks. A rolled-back source can be ingested again with `sb ingest`; `sb job reset <job_id> --reason "<why>"` sets aside a stuck job that never wrote.
+`sb recover <job_id> --rollback` undoes a written job byte for byte if the user asks. A rolled-back source can be ingested again with `sb ingest`; `sb job reset <job_id> --reason "<why>"` sets aside a stuck job that never wrote. Roll back a retry child (`<job_id>-retry1` …) before its parent; after a retry child is rolled back, `sb ingest --retry <job_id> --executor host` on the parent starts a new child.
 
 ## Stability
 

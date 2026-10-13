@@ -9,7 +9,7 @@ import pytest
 from secondbrain import cli, config, inbox, jobs
 from secondbrain.executors import FakeExecutor
 from secondbrain.pipelines import ingest
-from secondbrain.store import recover
+from secondbrain.store import recover, state_root
 from secondbrain.vault import read_snapshot
 from tests.ingest_helpers import (DIMMING_IR, FIXED_DIMMING, SOURCE_NAME, build_ingest_vault, first_candidate,
                                   first_review, repair_candidate, repair_review, scripted, tree)
@@ -82,3 +82,85 @@ def test_retry_through_the_cli_in_host_mode(tmp_path, capsys):
     [state] = json.loads(capsys.readouterr().out)
     assert state['job_id'] == f'{parent}-retry1' and state['handoffs'][0]['chunk'] == 'c01'
     assert jobs.load(root, parent)['retried_by'] == state['job_id']
+
+
+def rollback(root, job_id):
+    """`sb recover <job> --rollback`, which also marks the job rolled back."""
+    assert cli.main(['--vault', str(root), 'recover', job_id, '--rollback']) == 0
+    assert jobs.load(root, job_id)['status'] == 'rolled_back'
+
+
+def apply_retry(root, parent):
+    """Retry ``parent`` and write the fixed pending card; returns the child's final state."""
+    child = ingest.retry(root, parent)
+    review = {'cards': [{'slug': 'marker-dimming', 'decision': 'accept', 'reason': 'matches the text now'}],
+              'new_topics': [], 'coverage': {'decision': 'accept', 'reason': 'only the open card was missing'}}
+    produce, respond, _ = scripted([retry_answer()], [review], {'marker-dimming': DIMMING_IR})
+    done = ingest.advance(root, child['job_id'], producer=FakeExecutor('gpt-test', responder=produce),
+                          reviewer=FakeExecutor('claude-test', responder=respond))
+    assert done['status'] == 'applied', done
+    assert 'Marker dimming' in {c.title for c in read_snapshot(root).cards.values()}
+    return done
+
+
+def archived(root, job_id):
+    """Names of the set-aside copies of ``job_id`` (``<id>.reset-<UTC>``)."""
+    return sorted(p.name for p in (state_root(root) / 'jobs').iterdir() if p.name.startswith(f'{job_id}.reset-'))
+
+
+def test_a_rolled_back_retry_child_does_not_block_a_new_retry(tmp_path):
+    root = build_ingest_vault(tmp_path / 'vault')
+    parent = partial_job(root)
+    before = tree(root)
+    first = apply_retry(root, parent)
+    rollback(root, first['job_id'])
+    assert tree(root) == before
+    second = apply_retry(root, parent)  # a new child under the same id; the rolled-back one is set aside
+    assert second['job_id'] == first['job_id'] == f'{parent}-retry1'
+    assert second['created_at'] > first['created_at'] and len(archived(root, second['job_id'])) == 1
+    assert jobs.load(root, parent)['retried_by'] == second['job_id']
+
+
+def test_a_reset_retry_child_does_not_block_a_new_retry(tmp_path, capsys):
+    root = build_ingest_vault(tmp_path / 'vault')
+    parent = partial_job(root)
+    first = apply_retry(root, parent)
+    rollback(root, first['job_id'])
+    assert cli.main(['--vault', str(root), 'job', 'reset', first['job_id'], '--reason', 'try again']) == 0
+    capsys.readouterr()
+    second = apply_retry(root, parent)
+    assert second['job_id'] == first['job_id'] and second['created_at'] > first['created_at']
+
+
+def test_after_parent_and_child_are_rolled_back_the_source_can_be_ingested_and_retried_again(tmp_path):
+    root = build_ingest_vault(tmp_path / 'vault')  # default after_ingest = move
+    before = tree(root)
+    parent = partial_job(root)
+    first = apply_retry(root, parent)
+    rollback(root, first['job_id'])
+    rollback(root, parent)
+    assert tree(root) == before and inbox.scan(root)[0]['status'] == 'new'
+    again = partial_job(root)  # the rolled-back parent is set aside; same id, new job
+    assert again == parent and len(archived(root, parent)) == 1
+    second = apply_retry(root, parent)  # the old child (same id, same input) no longer answers for it
+    assert second['job_id'] == first['job_id'] and second['created_at'] > first['created_at']
+    assert len(archived(root, first['job_id'])) == 1
+
+
+def test_a_retry_child_made_before_an_interruption_is_reused(tmp_path, monkeypatch):
+    root = build_ingest_vault(tmp_path / 'vault')
+    parent = partial_job(root)
+    real = jobs._internal_update
+
+    def interrupted(root_, job_id, **fields):
+        if 'retried_by' in fields:
+            raise KeyboardInterrupt
+        return real(root_, job_id, **fields)
+    monkeypatch.setattr(jobs, '_internal_update', interrupted)
+    with pytest.raises(KeyboardInterrupt):
+        ingest.retry(root, parent)
+    monkeypatch.setattr(jobs, '_internal_update', real)
+    made = jobs.load(root, f'{parent}-retry1')
+    again = ingest.retry(root, parent)
+    assert again['resumed'] and again['created_at'] == made['created_at'] and archived(root, made['job_id']) == []
+    assert jobs.load(root, parent)['retried_by'] == made['job_id']

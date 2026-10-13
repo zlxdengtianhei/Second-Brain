@@ -173,7 +173,10 @@ def retry(root: Path, job_id: str, *, settings: config.Settings | None = None) -
     now; its packets carry the open items with the reviewer's reasons and the
     cards of each chunk that are already written. It has its own transaction,
     so it can be rolled back on its own. Calling it again on the same parent
-    returns the existing child.
+    returns the existing child. A child that was rolled back, reset with
+    `sb job reset`, or made for an earlier run of the parent (the parent was
+    rolled back and the source ingested again) does not block a new child:
+    it is set aside like `sb job reset` does, and the new child takes its id.
     """
     settings = settings or config.current()
     root = Path(root)
@@ -181,7 +184,9 @@ def retry(root: Path, job_id: str, *, settings: config.Settings | None = None) -
     if parent['kind'] != KIND or parent['status'] != 'partial':
         raise IngestError(f'Only a partial ingest job can be retried; {job_id} is {parent["status"]}')
     if parent.get('retried_by'):
-        return {**jobs.load(root, parent['retried_by']), 'resumed': True}
+        live = _live_child(root, job_id, parent, parent['retried_by'])
+        if live is not None:
+            return _resumed_child(live)
     old = jobs.read_input(root, job_id)
     lineage = old.get('retry') or {}
     first, number = lineage.get('root', job_id), lineage.get('round', 0) + 1
@@ -216,9 +221,42 @@ def retry(root: Path, job_id: str, *, settings: config.Settings | None = None) -
                         'pending': {cid: open_items[cid] for cid in open_items},
                         'written': written}}
     child = f'{first}-retry{number}'
+    live = _live_child(root, job_id, parent, child)
+    if live is not None:  # made before an interruption, before the parent recorded it
+        jobs._internal_update(root, job_id, retried_by=child)
+        return _resumed_child(live)
     state = jobs.create(root, child, KIND, packet)
     jobs._internal_update(root, job_id, retried_by=child)
     return {**state, 'retry_of': job_id, 'chunks': [c['chunk_id'] for c in chunks]}
+
+
+def _live_child(root: Path, parent_id: str, parent: dict, child_id: str) -> dict | None:
+    """The retry child at ``child_id`` if it still counts for this run of the parent.
+
+    None when there is no such job (never made, or reset). A child that was
+    rolled back, or that was made for an earlier run of the parent, is
+    archived (renamed to ``<id>.reset-<UTC>``) and None is returned; one
+    that wrote and was not rolled back makes the archive refuse.
+    """
+    try:
+        state = jobs.load(root, child_id)
+    except ValueError:
+        return None
+    if state['status'] == 'rolled_back':
+        jobs.archive(root, child_id, reason=f'rolled back; the pending items of {parent_id} are retried again')
+        return None
+    of = (jobs.read_input(root, child_id).get('retry') or {}).get('of')
+    if of == parent_id and state.get('created_at', '') >= parent.get('created_at', ''):
+        return state
+    jobs.archive(root, child_id, reason=f'made for an earlier run of {parent_id}, which was rolled back')
+    return None
+
+
+def _resumed_child(state: dict) -> dict:
+    out = {**state, 'resumed': True}
+    if state['status'] == 'partial':
+        out['hint'] = f'the retry child is partial too: sb ingest --retry {state["job_id"]}'
+    return out
 
 
 # --------------------------------------------------------------------------
