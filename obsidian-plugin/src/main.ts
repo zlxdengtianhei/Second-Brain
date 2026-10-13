@@ -1,5 +1,7 @@
 import { Notice, Plugin, parseYaml, type TAbstractFile, TFile, type WorkspaceLeaf } from "obsidian";
 import { extractReviewItems, sectionText } from "./registry";
+import { AiProvidersClient } from "./llm/ai";
+import { DEFAULT_EXPLAIN_TEMPLATE, DEFAULT_GRADE_TEMPLATE, parseTemplate, type Template } from "./llm/prompts";
 import { t } from "./i18n";
 import { ReviewService } from "./service";
 import { mergeSettings, reviewDir, type ReviewSettings } from "./settings";
@@ -19,6 +21,7 @@ export default class SecondBrainReviewPlugin extends Plugin {
 	settings!: ReviewSettings;
 	index!: CardIndex;
 	service!: ReviewService;
+	llm!: AiProvidersClient;
 	private reloadTimer: number | null = null;
 
 	async onload(): Promise<void> {
@@ -30,6 +33,8 @@ export default class SecondBrainReviewPlugin extends Plugin {
 			studyDomains: () => this.settings.studyDomains,
 		});
 		this.index.onChange(() => this.service.notify());
+		AiProvidersClient.init(this.app, this);
+		this.llm = new AiProvidersClient(this.app, () => this.settings.providerId);
 
 		this.registerView(VIEW_TODAY, (leaf: WorkspaceLeaf) => new TodayView(leaf, this));
 		this.registerMarkdownCodeBlockProcessor("secondbrain-review", (_src, el, ctx) => {
@@ -134,6 +139,25 @@ export default class SecondBrainReviewPlugin extends Plugin {
 
 	async explainActive(): Promise<void> {
 		new Notice("explain: not implemented yet");
+	}
+
+	/** A template from the vault, or the built-in default when the file is missing. */
+	private async template(path: string, fallback: string): Promise<Template> {
+		const adapter = this.app.vault.adapter;
+		try {
+			if (path && (await adapter.exists(path))) return parseTemplate(await adapter.read(path));
+		} catch (e) {
+			console.warn(`[secondbrain-review] cannot read template ${path}`, e);
+		}
+		return parseTemplate(fallback);
+	}
+
+	gradeTemplate(): Promise<Template> {
+		return this.template(this.settings.gradeTemplate, DEFAULT_GRADE_TEMPLATE);
+	}
+
+	explainTemplate(): Promise<Template> {
+		return this.template(this.settings.explainTemplate, DEFAULT_EXPLAIN_TEMPLATE);
 	}
 
 	async saveSettings(): Promise<void> {

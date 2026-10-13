@@ -5,6 +5,7 @@ export default defineConfig({
 	resolve: {
 		alias: {
 			obsidian: fileURLToPath(new URL("./tests/obsidian-stub.ts", import.meta.url)),
+			"@obsidian-ai-providers/sdk": fileURLToPath(new URL("./tests/ai-sdk-stub.ts", import.meta.url)),
 		},
 	},
 	test: {

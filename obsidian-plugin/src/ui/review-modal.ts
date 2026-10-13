@@ -6,6 +6,7 @@ import { previewRatings, type ReviewItem } from "../registry";
 import { formatInterval, SessionQueue } from "../session";
 import type { IndexedCard } from "../vault/card-index";
 import type { SessionMode } from "../main";
+import { QaCardRunner } from "./qa";
 
 export interface LoadedCard {
 	card: IndexedCard;
@@ -21,6 +22,7 @@ export class ReviewModal extends Modal {
 	private startedAt = 0;
 	private keyHandler: ((rating: number) => void) | null = null;
 	private revealHandler: (() => void) | null = null;
+	private runner: QaCardRunner | null = null;
 
 	constructor(
 		private plugin: SecondBrainReviewPlugin,
@@ -51,6 +53,7 @@ export class ReviewModal extends Modal {
 	}
 
 	onClose(): void {
+		this.runner?.cancel();
 		this.md.unload();
 		this.contentEl.empty();
 	}
@@ -111,7 +114,16 @@ export class ReviewModal extends Modal {
 		}
 		this.header(root, loaded, entry.kind);
 		this.startedAt = Date.now();
-		await this.showFlip(root, loaded);
+		if (this.mode === "flip") {
+			await this.showFlip(root, loaded);
+			return;
+		}
+		this.runner = new QaCardRunner(this.plugin, this, root, loaded, async (state) => {
+			this.runner = null;
+			this.queue.rated(state, this.plugin.service.now());
+			await this.show();
+		});
+		this.runner.start();
 	}
 
 	private async showFlip(root: HTMLElement, loaded: LoadedCard): Promise<void> {
