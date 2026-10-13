@@ -59,7 +59,7 @@ def test_status_queue_and_an_agent_review(vault, capsys):
     code, status, _ = run(capsys, vault, 'review', 'status', '--now', NOW)
     assert status['totals']['learning'] == 1 and status['reviews_today'] == 1
     code, overview, _ = run(capsys, vault, 'status')
-    assert overview['review']['total'] == len(snap.cards) and overview['inbox'] == {}
+    assert overview['review']['total'] == len(snap.cards) and overview['inbox'] == {'done': 1}  # moved, listed
     code, _, err = run(capsys, vault, 'review', 'log', '--card', 'kc_missing', '--rating', '3', '--now', NOW)
     assert code == 2 and 'No card' in err
     code, _, err = run(capsys, vault, 'review', 'log', '--card', card_id, '--item', 'oops', '--now', NOW)

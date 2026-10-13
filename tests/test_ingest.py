@@ -189,7 +189,8 @@ def test_ingest_acceptance_list(tmp_path, lay, language):
     # 7. the same file again is unchanged
     again = ingest.prepare(root, root / source_rel)
     assert again['status'] == 'unchanged'
-    assert inbox.scan(root) == []
+    [item] = inbox.scan(root)  # the moved source stays listed as done
+    assert (item['status'], item['in_inbox'], item['path']) == ('done', False, source_rel)
     # 8. rollback restores every byte (including the inbox original) and removes the folders it created
     assert (root / source_rel).parent.is_dir()
     assert recover(root, job_id, 'rollback')['status'] == 'rolled_back'

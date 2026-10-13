@@ -58,9 +58,11 @@ def done_index(root: Path) -> dict:
             done.setdefault(row['sha256'], {'status': 'done', 'via': 'manifest.jsonl'})
     for row in registry_rows(root):
         if isinstance(row.get('sha256'), str):
+            came = (done.get(row['sha256']) or {}).get('from_inbox', False) or \
+                str(row.get('path') or '').startswith(f'{lay.inbox}/')
             done[row['sha256']] = {'status': row.get('status'), 'via': 'inbox_registry',
                                    'job_id': row.get('job_id'), 'reason': row.get('reason'),
-                                   'pending': row.get('pending'), 'path': row.get('path')}
+                                   'pending': row.get('pending'), 'path': row.get('path'), 'from_inbox': came}
     return done
 
 
@@ -78,9 +80,10 @@ def _partial_note(job_id: str) -> str:
 def scan(root: Path) -> list[dict]:
     """Every top-level inbox file with its status (read only).
 
-    A ``partial`` source whose file already left the inbox (``after_ingest =
-    "move"``) is listed too, after the inbox files, with ``in_inbox: false``
-    and the path of its copy in the sources folder.
+    Sources whose file already left the inbox (``after_ingest = "move"``) are
+    listed too, after the inbox files, with ``in_inbox: false`` and the path
+    of their copy in the sources folder: ``partial`` ones, and ``done`` ones
+    that came from the inbox.
     """
     lay = layouts.of(root)
     folder = Path(root) / lay.inbox
@@ -124,7 +127,13 @@ def scan(root: Path) -> list[dict]:
     listed = {i['sha256'] for i in items}
     moved = []
     for sha, record in done.items():
-        if record['status'] != 'partial' or sha in listed or not record.get('path'):
+        if sha in listed or not record.get('path'):
+            continue
+        if record['status'] == 'partial':
+            extra = {'status': 'partial', 'pending': record.get('pending')}
+        elif record['status'] == 'applied' and record.get('from_inbox'):
+            extra = {'status': 'done', 'result': 'applied'}
+        else:
             continue
         name = Path(record['path']).name
         rel = lay.source_path(sha, name)
@@ -133,9 +142,11 @@ def scan(root: Path) -> list[dict]:
             size = os.stat(Path(root) / rel).st_size
         except OSError:
             size = None
-        moved.append({'path': rel, 'name': name, 'size': size, 'sha256': sha, 'status': 'partial',
-                      'job_id': job, 'via': record['via'], 'pending': record.get('pending'),
-                      'in_inbox': False, 'note': _partial_note(job)})
+        item = {'path': rel, 'name': name, 'size': size, 'sha256': sha, 'job_id': job, 'via': record['via'],
+                **extra, 'in_inbox': False}
+        if item['status'] == 'partial':
+            item['note'] = _partial_note(job)
+        moved.append(item)
     return items + sorted(moved, key=lambda i: (i['name'], i['sha256']))
 
 

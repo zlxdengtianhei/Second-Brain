@@ -19,7 +19,7 @@ Your own `sb` must find the vault. It uses, in this order: `--vault <folder>`, t
 sb inbox list
 ```
 
-Each item has `status` (`new`, `in_progress`, `partial`, `done`, `skipped`, `failed`) and a `job_id`. First continue `in_progress` items with section 4 (`sb job advance <job_id> --executor host`). A `partial` item wrote some cards and kept others pending; retry it as described in section 5. A `failed` item has a `reason`; report it.
+Each item has `status` (`new`, `in_progress`, `partial`, `done`, `skipped`, `failed`) and a `job_id`. A `done` or `partial` source whose file has moved to the sources folder is listed with `in_inbox: false`. First continue `in_progress` items with section 4 (`sb job advance <job_id> --executor host`). A `partial` item wrote some cards and kept others pending; retry it as described in section 5. A `failed` item has a `reason`; report it.
 
 For each `new` item decide with `references/triage.md`:
 
@@ -52,7 +52,7 @@ sb job advance <job_id> --executor host
 
 It runs every deterministic step that can run and prints **one** job object. Its `handoffs` are the next tasks: reviews, one repair round for rejected cards (chunk `c01.r1` …), the diagram request for the accepted cards (chunk `dg01` …), and at most one diagram rewrite (chunk `dg01.r1` …). Every one goes to a new sub-agent as in section 3; diagram tasks use the producer text. When `handoffs` is empty, read `status`. Repeat sections 3 and 4 until `status` is `applied` or `partial`.
 
-Then `sb` writes the cards, a copy of the source, the registries and the maps in one transaction. By default (`[ingest] after_ingest = "move"`) the inbox file then leaves the inbox; its bytes stay in the sources folder (by default `40_Sources/<hash>/<file>`). With `after_ingest = "keep"` the inbox file stays where it is.
+Then `sb` writes the cards, a copy of the source, the registries and the maps in one transaction. By default (`[ingest] after_ingest = "move"`) the inbox file then leaves the inbox; its bytes stay in the sources folder (by default `40_Sources/<hash>/<file>`), and `sb inbox list` shows it as `done` with `in_inbox: false`. With `after_ingest = "keep"` the inbox file stays where it is.
 
 Useful while a job runs:
 

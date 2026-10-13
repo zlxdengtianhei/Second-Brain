@@ -221,7 +221,7 @@ def test_a_moved_partial_source_stays_in_the_inbox_list(tmp_path, capsys):
     assert cli.main(['--vault', str(root), 'status']) == 0
     assert json.loads(capsys.readouterr().out)['inbox'] == {'partial': 1}
     child = apply_retry(root, parent)
-    assert inbox.scan(root) == []  # done now
+    assert [(i['status'], i['in_inbox']) for i in inbox.scan(root)] == [('done', False)]  # done now
     # the child's registry row names where the source is, not the inbox path it left
     rows = [r for r in inbox.registry_rows(root) if r['job_id'] == child['job_id']]
     assert [r['path'] for r in rows] == [item['path']]

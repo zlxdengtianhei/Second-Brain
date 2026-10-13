@@ -80,5 +80,5 @@ def test_host_flow_over_mcp(tmp_path):
             assert len(shown['run_records']) == 5
             found = await call('search', query='lantern queue markers', limit=3)
             assert 'Lantern queue' in {hit['title'] for hit in found}
-            assert await call('inbox_list') == []
+            assert [i['status'] for i in await call('inbox_list')] == ['done']  # moved to the sources folder
     asyncio.run(flow())

@@ -73,7 +73,7 @@ def test_host_flow_through_the_cli(tmp_path, capsys):
     code, shown, _ = run(capsys, root, 'job', 'show', job_id)
     assert len(shown['run_records']) == 5 and shown['same_family'] is not True
     code, items, _ = run(capsys, root, 'inbox', 'list')
-    assert items == []
+    assert [(i['status'], i['in_inbox'], i['job_id']) for i in items] == [('done', False, job_id)]  # moved, still listed
 
 
 def test_job_abandon_lets_a_new_run_start(tmp_path, capsys):

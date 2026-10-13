@@ -50,9 +50,9 @@ def test_status_is_clean_and_two_notes_wait_in_the_inbox(vault, capsys):
     assert status['issues'] == []
     assert status['cards'] == len(cards()) and 30 <= status['cards'] <= 45
     assert status['missing_classification'] == 0
-    assert status['inbox'] == {'new': 2}
+    assert status['inbox'] == {'done': 7, 'new': 2}  # the 7 built sources moved to 40_Sources, listed as done
     inbox = run(capsys, vault, 'inbox', 'list')
-    assert sorted(i['name'] for i in inbox) == ['Correlation and causation.md', 'Sleep and memory.md']
+    assert sorted(i['name'] for i in inbox if i['status'] == 'new') == ['Correlation and causation.md', 'Sleep and memory.md']
     language = run(capsys, vault, 'language')
     assert language['recorded'] == language['detected'] == 'en' and language['writes_allowed']
 
