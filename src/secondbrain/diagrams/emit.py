@@ -36,9 +36,12 @@ _HAZARD_STATE = re.compile(r'[#"<>;`$\\*_:]|&(?=#?\w+;)|%(?=%)|(?<=%)%')
 _STYLE_BUG = re.compile(r"(style|classDef).*:\S*#.*;")
 _KEYWORDS = re.compile(r"style|classDef")
 
+# store is a cylinder (stored data only); input and output are parallelograms;
+# the retired role data is drawn as a plain step.
 _FLOW_SHAPES = {
-    "step": ("[", "]"), "actor": ("[", "]"), "decision": ("{", "}"),
-    "data": ("[(", ")]"), "start": ("([", "])"), "end": ("([", "])"),
+    "step": ("[", "]"), "actor": ("[", "]"), "data": ("[", "]"), "decision": ("{", "}"),
+    "store": ("[(", ")]"), "input": ("[/", "/]"), "output": ("[\\", "\\]"),
+    "start": ("([", "])"), "end": ("([", "])"),
 }
 _ARROWS = {"sync": "->>", "reply": "-->>", "async": "-)"}
 

@@ -1,90 +1,81 @@
-# Card diagram: draw or skip, then describe the diagram as IR
+# Card diagram: draw or skip, then describe it as IR
 
-You receive finished cards: an essence `E` and propositions `P1..Pn`. For each card, decide whether a diagram shows structure that the text does not. If so, describe it as a small JSON object (the IR). Do not write Mermaid: code generates it and checks every rule below.
+Each card has an essence `E` and propositions `P1..Pn`. Decide whether a diagram shows structure the text does not; if so, return it as JSON (the IR). Code draws the Mermaid and checks the rules below. Diagrams are not only for decisions: paths that split or merge, units passing data on, and chains of links are structure too.
 
-## 1. Draw or skip
+## 1. Draw when the card describes
 
-Draw only when the propositions contain one of these structures:
+| Content | Form |
+|---|---|
+| a process with a branch, loop or merge; a loop counts when the card says each, every, traverse, repeat, until (每、遍历、重复、直到) | `flow` |
+| an algorithm that scans items, branches by item type, then returns to the scan | `flow` |
+| parallel, bypass or residual paths: two paths summed, or branches sharing one block | `flow`, `"arrows": "data"` |
+| a block diagram or data path: which signals enter which unit, where they combine, what comes out | `structure`, `"arrows": "data"` |
+| a hierarchy or pointer chain: table → table, entry → entry, also when given as a count ("four levels") | `structure` |
+| two or more causes or terms converging on one result, including a formula that combines parallel terms | `structure` |
+| 2+ parties exchanging 3+ messages | `sequence` |
+| one object with 3+ named states and the events between them | `state` |
 
-| Form | Draw when the propositions have | How |
-|---|---|---|
-| `flow` | a process or algorithm with a branch, a loop or a merge ("if ... else", "until", "each round", "in parallel, then combine") | decision nodes have role `decision`; every edge leaving one states its condition |
-| `sequence` | 2 or more parties and 3 or more messages between them | participants are nodes; interactions are `messages` |
-| `state` | one object with 3 or more named states and the events that move it | edges are transitions labelled with the event |
-| `structure` | a whole with 3 or more parts that act on or depend on each other | `groups` for containment; labelled edges for what one part does to another |
+## 2. Skip
 
-Skip (`"decision": "skip"`, with a `reason` naming the rule) when the card is:
+Skip, with a `reason` naming the rule: a contrast (a table is clearer); a single fact, definition or number; fields or parts with no relation between them; a derivation that is only a chain of equations; vocabulary; a flow chain of 4 or fewer steps (flow only: structure chains and hierarchies follow section 1); links to other cards. Nothing splits, merges, repeats or is handed on: skip.
 
-- a contrast: the comparison belongs in a 2-4 row table in the text;
-- a single fact, definition or number, or parts with no relations between them: a list is clearer;
-- a derivation or formula: an aligned formula is clearer;
-- vocabulary or language material;
-- a linear process of 4 steps or fewer: "A → B → C" in the text says it;
-- about relations to other cards: those belong in the card's relations.
+## 3. Rules
 
-When unsure, skip: a diagram that restates the text wastes the reader's time.
+1. Every node, labelled edge and message cites its sources in `p`: `P1`..`Pn` or `E` (the essence is a full source). With 2+ propositions, cite 2+ sources.
+2. Labels reuse the card's words in its language; half of a label's words must come from the cited text, formula names and symbols included.
+3. Plain text, no TeX: `f(y|x)`, `x_t`, `x²`, `Σ x_i`, `√d`, `σ`, `W·x + b`; never `$`, `\frac`, `_{…}`.
+4. No fact the card lacks. Order steps only where the card does (先、然后、最后, first, then, numbered steps); loop only where it says the work repeats.
+5. A `decision` needs a stated condition and 2+ stated outcomes on its exit labels; otherwise use a step. Its label is a short question.
+6. `arrows`: `control` (flow default), `data`, or `relation` (structure default: acts on, points to, causes). A data diagram marks where data enters (`input`, no incoming edge) and leaves (`output`, no outgoing edge). `store` (cylinder) is only for stored data: a table, cache or file. Groups show containment.
+7. Size: flow and structure 4-9 nodes (3 if two paths merge), state 3-8, sequence 2-5 participants. Structure and state edges need labels, not relation names like `depends_on`; no node per related card; at most one self-loop per node.
+8. Width: node 20, decision 10, edge 14, message 20. CJK characters and full-width punctuation count 1; everything else (Latin, digits, spaces, Greek, ≤ → ·) counts 0.5.
 
-## 2. Rules for the IR
+Roles: flow `step decision store input output start end`; structure `step store input output actor`; state `state start end`; sequence `actor`. Message `style`: `sync`, `reply`, `async`; `"note": true` makes a note over `from`.
 
-1. Every node, every labelled edge and every message lists in `p` the propositions it rests on (`P1`..`Pn`, or `E` for the essence).
-2. Labels reuse the card's words in the card's language (Chinese card, Chinese labels; terms such as `ETag` stay as written). At least half of each label's words come from the cited propositions.
-3. Add no fact the card does not state; if the diagram needs one, skip.
-4. The proposition the card most wants remembered must be visible in the diagram.
-5. One arrow meaning per diagram: control or data flow in `flow`, action or dependency in `structure`. Show containment only with `groups`.
-6. Size: `flow` and `structure` 4-9 nodes, `state` 3-8 states, `sequence` 2-5 participants. If the card has 2 or more propositions, cite at least 2.
-7. Short labels. Width limits in characters, Latin letters counting half: node 20, decision 12, edge 14, message 20. Leave detail in the text.
-8. Edges in `structure` and `state` need labels. Never label an edge with a relation name such as `depends_on`, and do not add a node per related card. At most one self-loop per node.
+## 4. Output
 
-Roles: `flow` uses `step`, `decision`, `data`, `start`, `end`; `structure` uses `step`, `data`, `actor`; `state` uses `state`, and `start` / `end` for the initial and final states; `sequence` uses `actor`. Message `style` is `sync` (default), `reply` or `async`; `"note": true` puts the text in a note over `from` (and `to`).
+JSON only: `{"results":[{"ref":"<card ref>","ir":{...}}]}`, one per card, in order. A draw has `decision`, `form`, `arrows` (flow and structure), `question` (the one question it answers), `nodes`, `edges` (`messages` for sequence) and optional `groups` (`[{"label","members"}]`). A skip is `{"decision":"skip","reason":"..."}`. A card that carries `previous` and `errors` gets one rewrite: fix every error, or skip.
 
-## 3. Output
+## 5. Examples
 
-Return JSON only, one result per input card, in input order:
+Card `nn/residual`: P1 Input x passes through two layers that compute F(x). P2 A skip path carries x to an adder that outputs F(x) + x.
 
 ```json
-{"results": [{"ref": "<the card's ref>", "ir": {"decision": "draw", "form": "flow", "question": "the one question this diagram answers", "groups": [], "nodes": [], "edges": []}}]}
+{"decision":"draw","form":"flow","arrows":"data","question":"What does a residual block add?","nodes":[{"key":"x","label":"input x","role":"input","p":["P1"]},{"key":"f","label":"two layers compute F(x)","p":["P1"]},{"key":"a","label":"adder","p":["P2"]},{"key":"y","label":"F(x) + x","role":"output","p":["P2"]}],"edges":[{"from":"x","to":"f"},{"from":"f","to":"a","label":"F(x)","p":["P1"]},{"from":"x","to":"a","label":"skip path","p":["P2"]},{"from":"a","to":"y"}]}
 ```
 
-A `sequence` IR has `messages` instead of `edges`. A skip is `{"decision": "skip", "reason": "..."}`.
-
-If an input card carries `previous` and `errors`, your earlier IR failed the checks: fix every error, or skip. There is one rewrite; after that the card gets no diagram.
-
-## 4. Examples
-
-Card `net/retry`: E 失败请求按指数退避重试。P1 发送请求；成功则返回结果，失败则等待时间翻倍后重试。P2 达到重试上限后放弃并报错。
+Card `audio/mixer`: P1 两路麦克风信号分别进入混音器。P2 混音器把两路信号相加后输出。
 
 ```json
-{"decision": "draw", "form": "flow", "question": "失败的请求何时重试、何时放弃？",
- "nodes": [{"key": "send", "label": "发送请求", "role": "start", "p": ["P1"]},
-           {"key": "ok", "label": "请求成功？", "role": "decision", "p": ["P1"]},
-           {"key": "done", "label": "返回结果", "role": "end", "p": ["P1"]},
-           {"key": "cap", "label": "达到重试上限？", "role": "decision", "p": ["P2"]},
-           {"key": "wait", "label": "等待时间翻倍", "p": ["P1"]},
-           {"key": "fail", "label": "放弃并报错", "role": "end", "p": ["P2"]}],
- "edges": [{"from": "send", "to": "ok"},
-           {"from": "ok", "to": "done", "label": "是", "p": ["P1"]},
-           {"from": "ok", "to": "cap", "label": "否", "p": ["P1"]},
-           {"from": "cap", "to": "fail", "label": "是", "p": ["P2"]},
-           {"from": "cap", "to": "wait", "label": "否", "p": ["P2"]},
-           {"from": "wait", "to": "send"}]}
+{"decision":"draw","form":"structure","arrows":"data","question":"信号在哪里合并？","nodes":[{"key":"a","label":"第 1 路麦克风信号","role":"input","p":["P1"]},{"key":"b","label":"第 2 路麦克风信号","role":"input","p":["P1"]},{"key":"m","label":"混音器","p":["P2"]},{"key":"o","label":"混音器输出","role":"output","p":["P2"]}],"edges":[{"from":"a","to":"m","label":"进入混音器","p":["P1"]},{"from":"b","to":"m","label":"进入混音器","p":["P1"]},{"from":"m","to":"o","label":"两路信号相加","p":["P2"]}]}
 ```
 
-Card `net/dns`: E A recursive resolver walks the DNS hierarchy for the client. P1 The client asks the recursive resolver for a name. P2 The resolver queries the root server, then the TLD server, then the authoritative server. P3 The resolver caches the answer and returns it to the client.
+Card `fs/double-indirect`: P1 The inode's double indirect pointer points to a first-level index block. P2 Each of its entries points to a second-level index block. P3 Each entry there points to a data block.
 
 ```json
-{"decision": "draw", "form": "sequence", "question": "Who asks whom, in what order, to resolve a name?",
- "nodes": [{"key": "c", "label": "client", "p": ["P1"]}, {"key": "r", "label": "recursive resolver", "p": ["P1"]},
-           {"key": "root", "label": "root server", "p": ["P2"]}, {"key": "tld", "label": "TLD server", "p": ["P2"]},
-           {"key": "auth", "label": "authoritative server", "p": ["P2"]}],
- "messages": [{"from": "c", "to": "r", "text": "asks for a name", "p": ["P1"]},
-              {"from": "r", "to": "root", "text": "queries the root server", "p": ["P2"]},
-              {"from": "r", "to": "tld", "text": "then the TLD server", "p": ["P2"]},
-              {"from": "r", "to": "auth", "text": "then the authoritative server", "p": ["P2"]},
-              {"from": "r", "to": "c", "text": "caches and returns the answer", "style": "reply", "p": ["P3"]}]}
+{"decision":"draw","form":"structure","question":"Which blocks does the lookup pass?","nodes":[{"key":"i","label":"inode","p":["P1"]},{"key":"a","label":"first-level index block","role":"store","p":["P1"]},{"key":"b","label":"second-level index block","role":"store","p":["P2"]},{"key":"d","label":"data block","role":"store","p":["P3"]}],"edges":[{"from":"i","to":"a","label":"double indirect pointer","p":["P1"]},{"from":"a","to":"b","label":"entries point to","p":["P2"]},{"from":"b","to":"d","label":"entries point to","p":["P3"]}]}
+```
+
+Card `algo/rpn`: P1 依次扫描每个记号。P2 遇到数字就压栈；遇到运算符就弹出两个数计算，再把结果压栈。P3 扫描结束时栈顶就是结果。
+
+```json
+{"decision":"draw","form":"flow","question":"每个记号怎样处理？","nodes":[{"key":"e","label":"扫描结束？","role":"decision","p":["P3"]},{"key":"k","label":"数字或运算符？","role":"decision","p":["P2"]},{"key":"u","label":"压栈","p":["P2"]},{"key":"c","label":"弹出两个数计算，结果压栈","p":["P2"]},{"key":"r","label":"栈顶就是结果","role":"end","p":["P3"]}],"edges":[{"from":"e","to":"k","label":"否","p":["P1"]},{"from":"e","to":"r","label":"是","p":["P3"]},{"from":"k","to":"u","label":"数字","p":["P2"]},{"from":"k","to":"c","label":"运算符","p":["P2"]},{"from":"u","to":"e"},{"from":"c","to":"e"}]}
+```
+
+Card `econ/inflation`: E 需求拉动与成本推动都会推高物价。P1 总需求增长快于供给时，需求拉动物价上涨。P2 成本上升时，成本推动物价上涨。
+
+```json
+{"decision":"draw","form":"structure","question":"哪两条途径推高物价？","nodes":[{"key":"d","label":"总需求增长快于供给","p":["P1"]},{"key":"c","label":"成本上升","p":["P2"]},{"key":"p","label":"物价上涨","p":["E","P1"]}],"edges":[{"from":"d","to":"p","label":"需求拉动","p":["P1"]},{"from":"c","to":"p","label":"成本推动","p":["P2"]}]}
 ```
 
 Card `net/tcp-vs-udp` (contrast): P1 TCP 建立连接并重传丢失的报文，UDP 不建立连接也不重传。
 
 ```json
-{"decision": "skip", "reason": "contrast card: the two sides belong in a comparison table"}
+{"decision":"skip","reason":"contrast: the two sides belong in a comparison table"}
+```
+
+Card `http/request-line` (concept): P1 An HTTP request line has three fields: method, path and protocol version.
+
+```json
+{"decision":"skip","reason":"a list of fields with no relation between them"}
 ```

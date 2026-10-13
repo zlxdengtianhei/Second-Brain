@@ -61,7 +61,7 @@ HAZARDS = [
 
 WORDS = ["请求", "响应", "缓存", "命中", "回表", "索引", "load", "store", "retry", "token",
          "状态", "超时", "ACK", "SYN", "页表", "偏移", "x", "mid", "lo", "hi"]
-FLOW_ROLES = ["step", "decision", "data", "start", "end"]
+FLOW_ROLES = ["step", "decision", "store", "input", "output", "start", "end"]
 
 
 def _flow(label: str, slot: str) -> tuple[DiagramIR, list[str]]:
@@ -124,7 +124,7 @@ def _random_ir(rng: random.Random) -> tuple[DiagramIR, list[str]]:
                              note=rng.random() < 0.2))
         labels = [x.label for x in nodes] + [m.label for m in msgs]
         return DiagramIR("draw", form=form, question="q", nodes=nodes, messages=tuple(msgs)), labels
-    roles = {"flow": FLOW_ROLES, "structure": ["step", "data", "actor", "start", "end"],
+    roles = {"flow": FLOW_ROLES, "structure": ["step", "store", "input", "output", "actor"],
              "state": ["state", "start", "end"]}[form]
     nodes = tuple(Node(k, _random_label(rng), rng.choice(roles)) for k in keys)
     edges: list[Link] = []

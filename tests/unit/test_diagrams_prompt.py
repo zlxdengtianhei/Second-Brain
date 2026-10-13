@@ -39,17 +39,41 @@ def _prompt_examples() -> list[tuple[Card, dict]]:
     return out
 
 
-def test_prompt_states_the_language_rule_and_stays_short():
-    assert "in the card's language" in PROMPT and "Do not write Mermaid" in PROMPT
-    cjk = len(re.findall(r"[一-鿿]", PROMPT))
-    words = len(re.findall(r"[A-Za-z]+", PROMPT))
-    assert cjk + 1.3 * words < 2400  # rough token estimate; the method budget is about 1,000-1,500 for rules
+# Token budget. The method write-up asked for about 1,000-1,500 tokens with one or
+# two examples. After the 50-card pilot the prompt carries one example per
+# structure category that the pilot missed (5) plus 2 skip examples: 2,233
+# o200k tokens when written. It is sent once per batch of about 10 cards and
+# can be cached, so the cap allows a small margin, not another example.
+TOKEN_CAP = 2300
+BYTE_CAP = 8000  # dependency-free proxy for the same budget (7,725 bytes when written)
+
+
+def test_prompt_states_the_core_rules():
+    for phrase in ("in its language", "Plain text, no TeX", "Diagrams are not only for decisions",
+                   "the essence is a full source", "2+ stated outcomes", "flow only"):
+        assert phrase in PROMPT, phrase
+
+
+def test_prompt_size_budget():
+    assert len(PROMPT.encode("utf-8")) <= BYTE_CAP
+
+
+def test_prompt_token_budget():
+    tiktoken = pytest.importorskip("tiktoken")
+    try:
+        enc = tiktoken.get_encoding("o200k_base")
+    except Exception as e:  # the encoding file is downloaded on first use
+        pytest.skip(f"o200k_base not available: {e}")
+    assert len(enc.encode(PROMPT)) <= TOKEN_CAP
 
 
 def test_prompt_examples_pass_the_validator():
     examples = _prompt_examples()
-    assert [(c.ref, ir["decision"]) for c, ir in examples] == [
-        ("net/retry", "draw"), ("net/dns", "draw"), ("net/tcp-vs-udp", "skip")]
+    assert [(c.ref, ir["decision"], ir.get("form")) for c, ir in examples] == [
+        ("nn/residual", "draw", "flow"), ("audio/mixer", "draw", "structure"),
+        ("fs/double-indirect", "draw", "structure"), ("algo/rpn", "draw", "flow"),
+        ("econ/inflation", "draw", "structure"), ("net/tcp-vs-udp", "skip", None),
+        ("http/request-line", "skip", None)]
     for card, ir in examples:
         report = validate(ir, card)
         assert report.ok, (card.ref, [str(e) for e in report.errors])

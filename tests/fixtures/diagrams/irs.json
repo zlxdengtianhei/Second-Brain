@@ -31,8 +31,8 @@
         {"key": "seg", "label": "段号", "p": ["P1"]},
         {"key": "page", "label": "段内页号", "p": ["P1"]},
         {"key": "off", "label": "页内偏移", "p": ["P1"]},
-        {"key": "st", "label": "段表", "role": "data", "p": ["P2"]},
-        {"key": "pt", "label": "页表", "role": "data", "p": ["P3"]},
+        {"key": "st", "label": "段表", "role": "store", "p": ["P2"]},
+        {"key": "pt", "label": "页表", "role": "store", "p": ["P3"]},
         {"key": "blk", "label": "物理块号", "p": ["P3"]},
         {"key": "pa", "label": "物理地址：第 3 次访问内存", "role": "end", "p": ["P4"]}
       ],

@@ -14,15 +14,19 @@ from typing import Any
 
 FORMS = ("flow", "sequence", "state", "structure")
 ROLES: dict[str, tuple[str, ...]] = {
-    "flow": ("step", "decision", "data", "start", "end", "actor"),
-    "structure": ("step", "data", "actor", "start", "end"),
+    "flow": ("step", "decision", "store", "input", "output", "start", "end"),
+    "structure": ("step", "store", "input", "output", "actor"),
     "state": ("state", "start", "end"),
     "sequence": ("actor",),
 }
 DEFAULT_ROLE = {"flow": "step", "structure": "step", "state": "state", "sequence": "actor"}
+# What the arrows of a flow or structure diagram mean. A data diagram must show
+# where data enters (role input) and leaves (role output).
+ARROWS = ("control", "data", "relation")
+DEFAULT_ARROWS = {"flow": "control", "structure": "relation"}
 MESSAGE_STYLES = ("sync", "reply", "async")
 _REF = re.compile(r"^(E|P[1-9][0-9]*)$")
-_TOP_KEYS = {"decision", "reason", "form", "question", "groups", "nodes", "edges", "messages"}
+_TOP_KEYS = {"decision", "reason", "form", "question", "arrows", "groups", "nodes", "edges", "messages"}
 _NODE_KEYS = {"key", "label", "role", "p"}
 _EDGE_KEYS = {"from", "to", "label", "p"}
 _MESSAGE_KEYS = {"from", "to", "text", "p", "style", "note"}
@@ -37,7 +41,7 @@ def clean_text(s: str) -> str:
 
 @dataclass(frozen=True)
 class Issue:
-    """One validation finding. code is V1..V8 for errors, W0..W2 for warnings."""
+    """One validation finding. code is V1..V11 for errors, W0..W2 for warnings."""
 
     code: str
     message: str
@@ -128,6 +132,7 @@ class DiagramIR:
     reason: str = ""
     form: str | None = None
     question: str = ""
+    arrows: str | None = None
     nodes: tuple[Node, ...] = ()
     edges: tuple[Link, ...] = ()
     messages: tuple[Link, ...] = ()
@@ -190,6 +195,12 @@ def parse_ir(data: Any) -> tuple[DiagramIR | None, list[Issue]]:
     if form not in FORMS:
         return None, issues + [Issue("V1", f"form must be one of {', '.join(FORMS)}", "form")]
     question = _text(data.get("question"), "question", issues, required=True)
+    arrows = data.get("arrows")
+    if arrows is not None and form not in DEFAULT_ARROWS:
+        issues.append(Issue("V1", f"arrows applies to flow and structure, not {form}", "arrows"))
+    elif arrows is not None and (not isinstance(arrows, str) or arrows not in ARROWS):
+        issues.append(Issue("V1", f"arrows must be one of {', '.join(ARROWS)}", "arrows"))
+    arrows = arrows if isinstance(arrows, str) and arrows in ARROWS else DEFAULT_ARROWS.get(form)
 
     raw_nodes = data.get("nodes")
     if not isinstance(raw_nodes, list) or not raw_nodes:
@@ -211,6 +222,10 @@ def parse_ir(data: Any) -> tuple[DiagramIR | None, list[Issue]]:
             issues.append(Issue("V1", f"duplicate key {key!r}", w + ".key"))
         keys.add(key)
         role = n.get("role") or DEFAULT_ROLE[form]
+        if role == "data" and form in ("flow", "structure"):
+            issues.append(Issue("W0", "role data is retired: use store for stored data, input or output for "
+                                      "data entering or leaving; drawn as a step", w + ".role"))
+            role = "step"
         if not isinstance(role, str) or role not in ROLES[form]:
             issues.append(Issue("V1", f"role {role!r} not allowed in {form}; use one of {', '.join(ROLES[form])}", w + ".role"))
         label = _text(n.get("label"), w + ".label", issues, required=True)
@@ -287,7 +302,7 @@ def parse_ir(data: Any) -> tuple[DiagramIR | None, list[Issue]]:
     if any(i.is_error for i in issues):
         return None, issues
     ir = DiagramIR(
-        decision="draw", form=form, question=question, nodes=tuple(nodes),
+        decision="draw", form=form, question=question, arrows=arrows, nodes=tuple(nodes),
         edges=tuple(links) if form != "sequence" else (),
         messages=tuple(links) if form == "sequence" else (),
         groups=tuple(groups),
@@ -317,6 +332,9 @@ IR_JSON_SCHEMA: dict[str, Any] = {
         "reason": {"type": "string", "description": "Required when decision is skip: which rule applied."},
         "form": {"enum": list(FORMS)},
         "question": {"type": "string", "description": "The one question this diagram answers."},
+        "arrows": {"enum": list(ARROWS),
+                   "description": "flow and structure only: what arrows mean. Default control for flow, "
+                                  "relation for structure. data requires input and output nodes."},
         "groups": {
             "type": "array",
             "description": "Containment boxes (flow and structure only). A node is in at most one group.",

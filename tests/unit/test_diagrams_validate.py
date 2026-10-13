@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from secondbrain.diagrams.ir import IR_JSON_SCHEMA, Card, parse_ir
-from secondbrain.diagrams.text import grounding_tokens, tokens
+from secondbrain.diagrams.text import grounding_tokens, source_tokens, tokens
 from secondbrain.diagrams.validate import Limits, validate
 
 FIX = Path(__file__).resolve().parents[1] / "fixtures" / "diagrams"
@@ -169,14 +169,30 @@ def test_v5_sequence_needs_three_messages_and_notes_do_not_count():
 
 
 def test_v5_structure_needs_relations_between_parts():
-    data = {"decision": "draw", "form": "structure", "question": "q",
-            "nodes": [{"key": k, "label": label, "p": ["P1"]} for k, label in
-                      [("a", "段号"), ("b", "段内页号"), ("c", "页内偏移"), ("d", "逻辑地址")]],
-            "edges": [{"from": "a", "to": "d", "label": "组成逻辑地址", "p": ["P1"]},
-                      {"from": "b", "to": "d", "label": "组成逻辑地址", "p": ["P1"]}]}
-    assert "V5" in codes(data, PAGING)
-    data["edges"].append({"from": "c", "to": "d", "label": "组成逻辑地址", "p": ["P1"]})
-    assert "V5" not in codes(data, PAGING)
+    nodes = [{"key": k, "label": label, "p": ["P1"]} for k, label in
+             [("a", "段号"), ("b", "段内页号"), ("c", "页内偏移"), ("d", "逻辑地址")]]
+    data = {"decision": "draw", "form": "structure", "question": "q", "nodes": nodes,
+            "edges": [{"from": "a", "to": "b", "label": "组成逻辑地址", "p": ["P1"]},
+                      {"from": "c", "to": "d", "label": "组成逻辑地址", "p": ["P4"]}]}
+    assert "V5" in codes(data, PAGING)  # two separate links: a list says the same
+    data["edges"].append({"from": "b", "to": "c", "label": "组成逻辑地址", "p": ["P1"]})
+    assert "V5" not in codes(data, PAGING)  # three links: a chain of parts
+
+
+def test_merge_is_gain_from_three_nodes_in_flow_and_structure():
+    card = Card(title="t", essence="需求拉动与成本推动都会推高物价。",
+                propositions=("总需求增长快于供给时，需求拉动物价上涨。", "成本上升时，成本推动物价上涨。"))
+    nodes = [{"key": "d", "label": "总需求增长快于供给", "p": ["P1"]},
+             {"key": "c", "label": "成本上升", "p": ["P2"]},
+             {"key": "p", "label": "物价上涨", "p": ["E", "P1"]}]
+    edges = [{"from": "d", "to": "p", "label": "需求拉动", "p": ["P1"]},
+             {"from": "c", "to": "p", "label": "成本推动", "p": ["P2"]}]
+    for form in ("structure", "flow"):
+        data = {"decision": "draw", "form": form, "question": "q", "nodes": nodes, "edges": edges}
+        assert codes(data, card) == [], form
+    chain = {"decision": "draw", "form": "structure", "question": "q", "nodes": nodes,
+             "edges": [edges[0], {"from": "p", "to": "c", "label": "成本推动", "p": ["P2"]}]}
+    assert {"V2", "V5"} <= set(codes(chain, card))
 
 
 # V6 ---------------------------------------------------------------------------
@@ -328,3 +344,90 @@ def test_v1_rejects_non_scalar_message_fields():
     data["messages"][1]["style"] = ["reply"]
     report = validate(data, ETAG)
     assert [i.where for i in report.errors] == ["messages[0].from", "messages[1].style"]
+
+
+# Revision after the pilot ---------------------------------------------------------
+
+def test_v8_counts_the_essence_as_a_source():
+    data = _chain(4)
+    for n in data["nodes"]:
+        n["label"], n["p"] = "取区间中点 mid", ["P1"]
+    data["edges"].append({"from": "k3", "to": "k0"})
+    assert codes(data, SEARCH) == ["V8"]
+    data["nodes"][0].update(label="有序区间减半", p=["E"])
+    assert codes(data, SEARCH) == []
+
+
+def test_v7_decision_needs_two_stated_outcomes():
+    data = ir("algorithms/binary-search")
+    data["edges"] = [e for e in data["edges"] if not (e["from"] == "empty" and e["to"] == "miss")]
+    data["edges"].append({"from": "miss", "to": "mid"})
+    report = validate(data, SEARCH)
+    assert [(i.code, i.where) for i in report.errors] == [("V7", "nodes[5]")]
+
+
+@pytest.mark.parametrize("label", ["$f(x)$", r"\sigma(x)", "f_{Y|X}(y|x)", "x^{2}", r"\frac a b"])
+def test_v10_labels_are_plain_text(label):
+    data = ir("algorithms/binary-search")
+    data["nodes"][0]["label"] = label
+    assert "V10" in codes(data, SEARCH)
+
+
+@pytest.mark.parametrize("label, prop", [
+    ("f(y|x)", "条件密度为 $f_{Y|X}(y|x)$"),
+    ("σ(Wx + b)", r"输出为 $\sigma(Wx+b)$"),
+    ("W·x + b", "线性层计算 $y = Wx + b$"),
+    ("Σ x_i", r"把各项相加得 $\sum_i x_i$"),
+    ("除以 √d", r"点积除以 $\sqrt{d_k}$ 后做 softmax"),
+    ("level 3", "The page walk has four levels."),
+    ("第 2 路信号", "两路信号在混音器中相加"),
+    ("adder outputs", "an adder that outputs F(x) + x"),
+])
+def test_v4_formula_terms_counts_and_inflections_ground(label, prop):
+    assert _first_node_v4(label, prop) == []
+
+
+def test_v4_still_rejects_new_words_in_formula_cards():
+    assert _first_node_v4("梯度消失", r"输出为 $\sigma(Wx+b)$") != []
+    assert {"1", "4"} <= source_tokens("The page walk has four levels.")
+    assert "5" not in source_tokens("The page walk has four levels.")
+
+
+def _dataflow(**changes) -> tuple[dict, Card]:
+    card = Card(title="t", essence="残差块把输入加回到子层输出上。",
+                propositions=("输入 x 经过两层网络得到 F(x)。", "跳跃连接把 x 送到加法器，输出 F(x) + x。"))
+    data = {"decision": "draw", "form": "flow", "arrows": "data", "question": "q",
+            "nodes": [{"key": "x", "label": "输入 x", "role": "input", "p": ["P1"]},
+                      {"key": "f", "label": "两层网络", "p": ["P1"]},
+                      {"key": "add", "label": "加法器", "p": ["P2"]},
+                      {"key": "y", "label": "输出 F(x) + x", "role": "output", "p": ["P2"]}],
+            "edges": [{"from": "x", "to": "f"}, {"from": "f", "to": "add", "label": "F(x)", "p": ["P1"]},
+                      {"from": "x", "to": "add", "label": "跳跃连接", "p": ["P2"]}, {"from": "add", "to": "y"}]}
+    data.update(changes)
+    return data, card
+
+
+def test_v11_data_diagrams_show_inputs_and_outputs():
+    data, card = _dataflow()
+    assert codes(data, card) == []
+    data["nodes"][3]["role"] = "step"
+    assert codes(data, card) == ["V11"]
+    data, card = _dataflow()
+    data["edges"].append({"from": "y", "to": "x"})
+    assert codes(data, card) == ["V11", "V11"]  # input has an incoming edge, output an outgoing one
+    data, card = _dataflow(arrows="control")
+    data["nodes"][0]["role"] = "step"
+    assert codes(data, card) == ["V11"]  # an output role alone still needs an input
+
+
+def test_arrows_field_and_retired_data_role():
+    data, card = _dataflow(arrows="flows")
+    assert codes(data, card) == ["V1"]
+    seq = ir("networking/etag-revalidation")
+    seq["arrows"] = "data"
+    assert codes(seq, ETAG) == ["V1"]
+    data, card = _dataflow()
+    data["nodes"][1]["role"] = "data"
+    report = validate(data, card)
+    assert report.ok and report.ir.nodes[1].role == "step"
+    assert [w.code for w in report.warnings] == ["W0"]

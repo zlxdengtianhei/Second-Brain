@@ -48,6 +48,15 @@ def test_groups_become_subgraphs_and_data_nodes_cylinders():
     assert '  n4[("段表")]' in mm and '  n7(["物理地址：第 3 次访问内存"])' in mm
 
 
+def test_role_shapes():
+    ir = DiagramIR("draw", form="flow", question="q",
+                   nodes=(Node("x", "输入 x", "input"), Node("t", "页表", "store"), Node("s", "相加", "step"),
+                          Node("y", "输出 y", "output"), Node("old", "旧角色", "data")),
+                   edges=(Link("x", "s"), Link("t", "s"), Link("s", "y"), Link("old", "s")))
+    assert emit(ir).splitlines()[1:6] == ['  n1[/"输入 x"/]', '  n2[("页表")]', '  n3["相加"]',
+                                          '  n4[\\"输出 y"\\]', '  n5["旧角色"]']
+
+
 def test_sequence_golden_output():
     assert emit(parsed("networking/etag-revalidation")) == "\n".join([
         "sequenceDiagram",
