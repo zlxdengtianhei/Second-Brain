@@ -114,6 +114,7 @@ def card_payload(card: Card) -> dict[str, Any]:
         "E": card.essence,
         "propositions": {f"P{i}": p for i, p in enumerate(card.propositions, 1)},
         "related_titles": list(card.related_titles),
+        **({"old_diagram": card.old_diagram} if card.old_diagram else {}),
     }
 
 
@@ -196,3 +197,37 @@ def process(card: Card | dict, ir_data: Any, attempt: int = 0, policy: Policy = 
         return Outcome(card.ref, "rewrite", attempt=attempt, errors=errors, warnings=warnings,
                        rewrite=build_rewrite_packet(card, ir_data, action))
     return Outcome(card.ref, "skip", reason=action.reason, attempt=attempt, errors=errors, warnings=warnings)
+
+
+def render_feedback(outcome: Outcome, check: dict[str, Any] | None, card: Card | dict, ir_data: Any,
+                    policy: Policy = DEFAULT_POLICY, max_width: float = 700) -> Outcome:
+    """Apply the layout gate to a drawn diagram, given its tools/mermaid_check result.
+
+    A diagram that fails to render (V9), renders wider than max_width (V14) or
+    has edge labels lying on top of each other (V15) goes back for its one
+    rewrite like any other failed check, or is skipped when that is used up.
+    Outcomes that are not draws, or have no check result, pass unchanged.
+    """
+    if outcome.status != "draw" or check is None:
+        return outcome
+    card = card if isinstance(card, Card) else Card.from_dict(card)
+    errors: list[Issue] = []
+    if not check.get("ok") or check.get("render_error"):
+        errors.append(Issue("V9", f"the generated diagram did not render: {check.get('error') or check.get('render_error')}"))
+    else:
+        width = check.get("width") or 0
+        if width > max_width:
+            errors.append(Issue("V14", f"renders {width} px wide, limit {max_width:.0f}: fewer nodes side by side, "
+                                       f"shorter labels, or fewer participants"))
+        if check.get("label_overlaps"):
+            errors.append(Issue("V15", f"{check['label_overlaps']} pair(s) of edge labels overlap after layout: "
+                                       f"shorten or drop edge labels that sit side by side"))
+    if not errors:
+        return outcome
+    action = fallback(errors, outcome.attempt, policy.max_rewrites)
+    msgs = [str(e) for e in errors]
+    if isinstance(action, Rewrite):
+        return Outcome(card.ref, "rewrite", attempt=outcome.attempt, errors=msgs, warnings=outcome.warnings,
+                       rewrite=build_rewrite_packet(card, ir_data, action))
+    return Outcome(card.ref, "skip", reason=action.reason, attempt=outcome.attempt, errors=msgs,
+                   warnings=outcome.warnings)

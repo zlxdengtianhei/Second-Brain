@@ -39,7 +39,7 @@ def test_valid_ir_draws_with_marker():
     out = process(SEARCH, ENTRIES["algorithms/binary-search"]["ir"])
     assert out.status == "draw" and out.attempt == 0
     assert out.mermaid.splitlines()[:2] == [out.mermaid.splitlines()[0], "flowchart TB"]
-    assert out.mermaid.startswith("%% diagram v1 props=P1,P2,P3 sha=")
+    assert out.mermaid.startswith("%% diagram v1 props=E,P1,P2,P3 sha=")
 
 
 def test_model_skip_is_accepted_with_its_reason():
@@ -141,3 +141,31 @@ def test_unexpected_checker_error_becomes_a_v1_issue(monkeypatch):
     monkeypatch.setattr(pipeline, "emit", boom)
     out = process(SEARCH, ENTRIES["algorithms/binary-search"]["ir"])
     assert out.status == "rewrite" and out.errors == ["V1 IR could not be checked: RuntimeError: bug"]
+
+
+def test_render_feedback_turns_back_wide_overlapping_or_broken_diagrams():
+    from secondbrain.diagrams.pipeline import render_feedback
+    ir_data = ENTRIES["algorithms/binary-search"]["ir"]
+    drawn = process(SEARCH, ir_data)
+    assert render_feedback(drawn, {"ok": True, "width": 600, "label_overlaps": 0}, SEARCH, ir_data) is drawn
+    assert render_feedback(drawn, None, SEARCH, ir_data) is drawn
+    wide = render_feedback(drawn, {"ok": True, "width": 812}, SEARCH, ir_data)
+    assert wide.status == "rewrite" and wide.errors[0].startswith("V14 renders 812 px")
+    assert wide.rewrite["input"]["cards"][0]["previous"] == ir_data
+    crowded = render_feedback(drawn, {"ok": True, "width": 500, "label_overlaps": 2}, SEARCH, ir_data)
+    assert crowded.errors == ["V15 2 pair(s) of edge labels overlap after layout: shorten or drop edge labels "
+                              "that sit side by side"]
+    broken = render_feedback(drawn, {"ok": False, "error": "Parse error"}, SEARCH, ir_data)
+    assert broken.errors[0].startswith("V9")
+    later = process(SEARCH, ir_data, attempt=1)
+    assert render_feedback(later, {"ok": True, "width": 900}, SEARCH, ir_data).status == "skip"
+    skipped = process(SEARCH, {"decision": "skip", "reason": "x"})
+    assert render_feedback(skipped, {"ok": True, "width": 900}, SEARCH, ir_data) is skipped
+
+
+def test_payload_tells_the_model_about_the_old_diagram():
+    from secondbrain.diagrams.pipeline import card_payload
+    assert "old_diagram" not in card_payload(SEARCH)
+    with_old = Card.from_dict({**SEARCH.to_dict(), "old_diagram": "broken"})
+    assert card_payload(with_old)["old_diagram"] == "broken"
+    assert Card.from_dict({**SEARCH.to_dict(), "old_diagram": "maybe"}).old_diagram is None

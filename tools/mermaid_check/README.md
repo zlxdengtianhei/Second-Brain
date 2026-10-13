@@ -8,7 +8,8 @@ Used by:
 
 - `tests/unit/test_diagrams_mermaid.py`: the V9 regression corpus (every emitted diagram parses, renders and keeps its label text);
 - `python -m secondbrain.diagrams audit-extract` writes the blocks this tool checks, and `audit-tier` reads its results (parse result, structure, direction, size) to tier existing vault diagrams;
-- after `prune`: confirming that changed diagrams still parse.
+- after `prune`: confirming that changed diagrams still parse;
+- `python -m secondbrain.diagrams apply --checker check.mjs`: the layout gate on new diagrams (width over 700 px, overlapping edge labels).
 
 ## Install
 
@@ -29,7 +30,7 @@ The browser is found from `--browser PATH`, the `MERMAID_CHECK_BROWSER` environm
 node check.mjs [options] IN.jsonl [OUT.jsonl]
 ```
 
-Each input line is `{"id": ..., "text": "<mermaid source>"}`. Each output line has `id`, `ok`, and when relevant `error`, `type`, `direction`, `nodes`, `edges`, `subgraphs`, `actors`, `messages`, `width`, `height`, `render_error`, `label_text`. A one-line summary goes to stderr. Exit code 1 means at least one block failed; 2 means a usage or setup error.
+Each input line is `{"id": ..., "text": "<mermaid source>"}`. Each output line has `id`, `ok`, and when relevant `error`, `type`, `direction`, `nodes`, `edges`, `subgraphs`, `actors`, `messages`, `width`, `height`, `label_overlaps` (pairs of edge labels covering each other by more than 10% of the smaller one), `render_error`, `label_text`. A one-line summary goes to stderr. Exit code 1 means at least one block failed; 2 means a usage or setup error.
 
 | Option | Effect |
 |---|---|

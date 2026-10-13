@@ -1,4 +1,4 @@
-"""Mechanical checks V2-V8, V10-V11 and warnings W1-W2 on a parsed diagram IR.
+"""Mechanical checks V2-V8, V10-V14 and warnings W1-W2 on a parsed diagram IR.
 
 V1 (shape) lives in ir.parse_ir. V9 (the emitted Mermaid parses in the target
 Mermaid build) is a property of the generator, covered by the regression
@@ -9,12 +9,15 @@ corpus run through tools/mermaid_check.
 | V2 | size: flow and structure 4-9 nodes (3 when two paths merge), state 3-8, sequence 2-5 |
 | V3 | every node, labelled edge and message cites existing sources (P1..Pn or E) |
 | V4 | label wording is at least half found in the cited text (formula names and symbols count) |
-| V5 | structural gain: branch, merge or loop in flow; merge, loop or 3+ links in structure |
+| V5 | structural gain: branch, merge or loop in flow; merge, loop or 3+ links in structure (a plain chain of links cites 3+ sources); a flow on a card that says the work repeats has its back edge |
 | V6 | label widths |
 | V7 | structure, state and sequence links are labelled; a decision has 2+ labelled exits |
 | V8 | a card with 2+ propositions gets a diagram citing 2+ sources (E counts) |
 | V10 | labels are plain text, not TeX |
-| V11 | a data diagram shows its inputs (outgoing edges only) and outputs (incoming edges only) |
+| V11 | a data diagram shows its inputs (outgoing edges only, into nodes whose text mentions them) and outputs or a final store (incoming edges only) |
+| V12 | the diagram cites E: it carries the key relation the essence states |
+| V13 | no fan-out into more than 3 leaves, and no decision whose 3+ exits are all leaves (that is a list) |
+| V14 | estimated rendered width at most 700 px (the batch path measures the real width instead) |
 
 Thresholds are recommended defaults set from the distribution of existing
 diagrams and a 50-card pilot; they are not calibrated.
@@ -26,7 +29,17 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from .ir import DEFAULT_ARROWS, Card, DiagramIR, Issue, is_ref, parse_ir
-from .text import display_width, has_tex, overlap, title_match
+import re
+
+from .text import display_width, grounding_tokens, has_tex, overlap, source_tokens, title_match
+from .width import estimate_width
+
+# Words that say the work repeats; compounds that only name a thing are cut out first.
+LOOP_WORDS = re.compile(r"重复|循环|直到|迭代|反复|每一轮|每轮|逐位|逐个|\b(?:repeat\w*|loops?|until|iterat\w*|each round)\b", re.I)
+_NOT_LOOPS = re.compile(r"循环神经网络|循环队列|循环冗余|循环移位|循环卷积|循环小数|不循环")
+
+# Words that name the role, not the data; they do not show where an input is used.
+_GENERIC_IO = frozenset({"输入", "输出", "数据", "input", "output", "data", "signal", "信号"})
 
 RELATION_WORDS = frozenset({
     "part_of", "has_part", "depends_on", "required_by", "similar_to", "contrasts_with",
@@ -51,6 +64,11 @@ class Limits:
     min_links: dict[str, int] = field(default_factory=lambda: {"structure": 3, "state": 3})
     labeled_links: tuple[str, ...] = ("structure", "sequence", "state")
     min_cited_sources: int = 2
+    chain_min_sources: int = 3
+    max_leaf_fanout: int = 3
+    max_width: float | None = 700
+    require_essence: bool = True
+    require_back_edge: bool = True
     exempt_labels: frozenset[str] = frozenset({
         "是", "否", "开始", "结束", "成功", "失败",
         "yes", "no", "start", "end", "success", "failure", "true", "false"})
@@ -131,7 +149,14 @@ def _branches(ir: DiagramIR) -> bool:
                and all(e.label for e in exits[n.key]) for n in ir.nodes)
 
 
-def _gain(ir: DiagramIR, shape: _Shape, limits: Limits) -> str | None:
+def says_repeat(card: Card) -> str | None:
+    """The first word in the card that says the work repeats, if any."""
+    text = _NOT_LOOPS.sub(" ", " ".join([card.essence, *card.propositions]))
+    m = LOOP_WORDS.search(text)
+    return m.group(0) if m else None
+
+
+def _gain(ir: DiagramIR, shape: _Shape, limits: Limits, n_cited: int = 0) -> str | None:
     """V5: why this diagram says more than a sentence would; None if it does not."""
     if ir.form == "flow":
         if _branches(ir) or shape.merge or shape.loop:
@@ -149,11 +174,15 @@ def _gain(ir: DiagramIR, shape: _Shape, limits: Limits) -> str | None:
     if links < need:
         what = "relations between parts and no merge" if ir.form == "structure" else "transitions"
         return f"{ir.form} has {links} {what}, needs at least {need}; a list says the same"
+    chain = all(len(v - {k}) <= 1 for k, v in shape.outs.items()) and not shape.merge and not shape.loop
+    if ir.form == "structure" and chain and n_cited < limits.chain_min_sources:
+        return (f"structure is a plain chain citing {n_cited} source(s); a chain of links needs "
+                f"{limits.chain_min_sources} (one sentence or one formula reads better as text)")
     return None
 
 
 def check(ir: DiagramIR, card: Card, limits: Limits = DEFAULT_LIMITS) -> tuple[list[Issue], list[Issue]]:
-    """Run V2-V8, V10-V11 and W1-W2 on a parsed draw IR. Returns (errors, warnings)."""
+    """Run V2-V8, V10-V14 and W1-W2 on a parsed draw IR. Returns (errors, warnings)."""
     errors: list[Issue] = []
     warnings: list[Issue] = []
     if ir.decision != "draw":
@@ -197,9 +226,13 @@ def check(ir: DiagramIR, card: Card, limits: Limits = DEFAULT_LIMITS) -> tuple[l
         if w > cap:
             errors.append(Issue("V6", f"«{label}» is {w:g} wide, limit {cap:g} for a {kind} label", where))
 
-    gain = _gain(ir, shape, limits)
+    gain = _gain(ir, shape, limits, len(cited))
     if gain:
         errors.append(Issue("V5", gain + "; consider skip"))
+    word = says_repeat(card) if form == "flow" and limits.require_back_edge else None
+    if word and not shape.loop:
+        errors.append(Issue("V5", f"the card says the work repeats («{word}»); draw the back edge to where "
+                                  f"the repeated work starts"))
 
     if form in limits.labeled_links:
         for i, e in enumerate(ir.links):
@@ -217,6 +250,25 @@ def check(ir: DiagramIR, card: Card, limits: Limits = DEFAULT_LIMITS) -> tuple[l
                                           f"outcome(s); a decision needs 2 or more, otherwise make it a step",
                                     f"nodes[{i}]"))
 
+    if limits.require_essence and card.essence.strip() and "E" not in cited:
+        errors.append(Issue("V12", "the diagram does not cite E; find the relation the essence states, draw it, "
+                                   "and cite E on the nodes or edges that carry it"))
+
+    for i, n in enumerate(ir.nodes):
+        children = shape.outs.get(n.key, set()) - {n.key}
+        leaves = [c for c in children if not (shape.outs.get(c, set()) - {c})]
+        if len(leaves) > limits.max_leaf_fanout:
+            errors.append(Issue("V13", f"«{n.label}» fans out to {len(leaves)} leaves: a list laid sideways; "
+                                       f"write it as text or chain the items", f"nodes[{i}]"))
+        elif n.role == "decision" and len(children) >= 3 and len(leaves) == len(children):
+            errors.append(Issue("V13", f"decision «{n.label}» only lists {len(children)} parallel options; "
+                                       f"options are not a decision", f"nodes[{i}]"))
+
+    width = estimate_width(ir) if limits.max_width else None
+    if width and width > limits.max_width:
+        errors.append(Issue("V14", f"estimated {width:.0f} px wide, limit {limits.max_width:.0f}: fewer nodes side "
+                                   f"by side, shorter labels, or fewer participants"))
+
     if len(card.propositions) >= 2 and len(cited) < limits.min_cited_sources:
         errors.append(Issue("V8", f"diagram cites {len(cited)} source(s) of {len(card.propositions)} propositions "
                                   f"and the essence; a one-source diagram restates the text, consider skip"))
@@ -225,8 +277,10 @@ def check(ir: DiagramIR, card: Card, limits: Limits = DEFAULT_LIMITS) -> tuple[l
         arrows = ir.arrows or DEFAULT_ARROWS[form]
         inputs = [n for n in ir.nodes if n.role == "input"]
         outputs = [n for n in ir.nodes if n.role == "output"]
+        sinks = outputs or [n for n in ir.nodes if n.role == "store" and shape.indeg.get(n.key)
+                            and not (shape.outs.get(n.key, set()) - {n.key})]
         if arrows == "data" or inputs or outputs:
-            if not inputs or not outputs:
+            if not inputs or not sinks:
                 errors.append(Issue("V11", "a data diagram shows where data enters (role input) and where it "
                                            "leaves (role output)"))
             for n in inputs:
@@ -235,6 +289,16 @@ def check(ir: DiagramIR, card: Card, limits: Limits = DEFAULT_LIMITS) -> tuple[l
                     errors.append(Issue("V11", f"input «{n.label}» has an incoming edge", where))
                 if not shape.outs.get(n.key):
                     errors.append(Issue("V11", f"input «{n.label}» feeds nothing; add its outgoing edge", where))
+                words = grounding_tokens(n.label) - _GENERIC_IO
+                for e in ir.edges:
+                    if e.src != n.key or not words:
+                        continue
+                    target = next(x for x in ir.nodes if x.key == e.dst)
+                    refs = [r for r in (*target.p, *e.p) if r in card.refs]
+                    if refs and not words & source_tokens(" ".join(card.source(r) for r in refs)):
+                        errors.append(Issue("V11", f"input «{n.label}» goes to «{target.label}», but the text "
+                                                   f"«{target.label}» cites never mentions it; connect each input "
+                                                   f"only to the nodes that use it", where))
             for n in outputs:
                 where = f"nodes[{ir.nodes.index(n)}]"
                 if shape.outs.get(n.key):
@@ -258,7 +322,7 @@ def _ref_order(r: str) -> tuple[int, int]:
 
 
 def validate(data: Any, card: Card | dict, limits: Limits = DEFAULT_LIMITS) -> Report:
-    """Parse (V1) and check (V2-V8, V10-V11) one IR against its card."""
+    """Parse (V1) and check (V2-V8, V10-V14) one IR against its card."""
     if isinstance(card, dict):
         card = Card.from_dict(card)
     ir, issues = parse_ir(data)

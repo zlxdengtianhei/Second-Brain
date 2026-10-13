@@ -204,3 +204,42 @@ def test_every_emitted_diagram_parses_and_keeps_its_labels(tmp_path):
     assert len(results) == len(items) == len(expected)
     assert not broken, broken[:10]
     assert not lost, lost[:10]
+
+
+def _realistic_ir(rng: random.Random) -> DiagramIR:
+    words = ["请求", "响应", "缓存命中", "索引", "状态超时", "页表", "偏移地址", "物理内存", "计算结果", "编码器",
+             "注意力权重", "残差连接", "gradient", "loss", "update", "batch", "feature vector", "kernel"]
+    def label() -> str:
+        return "".join(rng.choice(words) for _ in range(rng.randint(1, 3)))
+    if rng.random() < 0.25:
+        nodes = tuple(Node(f"k{j}", label(), "actor") for j in range(rng.randint(2, 4)))
+        msgs = tuple(Link(rng.choice(nodes).key, rng.choice(nodes).key, label()) for _ in range(rng.randint(3, 6)))
+        return DiagramIR("draw", form="sequence", question="q", nodes=nodes, messages=msgs)
+    form = rng.choice(["flow", "structure"])
+    roles = ["step"] * 5 + (["decision", "store", "input", "output", "start"] if form == "flow" else ["store", "actor"])
+    n = rng.randint(3, 9)
+    nodes = tuple(Node(f"k{j}", label(), rng.choice(roles)) for j in range(n))
+    edges = [Link(f"k{rng.randrange(max(0, j - 2), j)}", f"k{j}", label() if rng.random() < 0.5 else "")
+             for j in range(1, n)]
+    if rng.random() < 0.4:
+        a, b = sorted(rng.sample(range(n), 2))
+        edges.append(Link(f"k{a}", f"k{b}"))
+    return DiagramIR("draw", form=form, question="q", nodes=nodes, edges=tuple(edges))
+
+
+@pytest.mark.skipif(_tool_ready() is None, reason="tools/mermaid_check dependencies not installed")
+def test_width_estimate_tracks_the_rendered_width(tmp_path):
+    from secondbrain.diagrams.width import estimate_width
+    node, modules = _tool_ready()
+    rng = random.Random(7)
+    irs = [_realistic_ir(rng) for _ in range(300)]
+    src = tmp_path / "w.jsonl"
+    src.write_text("".join(json.dumps({"id": i, "text": emit(ir)}, ensure_ascii=False) + "\n"
+                           for i, ir in enumerate(irs)), encoding="utf-8")
+    out = tmp_path / "w_out.jsonl"
+    subprocess.run([node, str(TOOL), "--modules", str(modules), str(src), str(out)], capture_output=True, timeout=600)
+    real = {r["id"]: r["width"] for r in map(json.loads, out.read_text(encoding="utf-8").splitlines())}
+    rel = sorted(abs(estimate_width(ir) - real[i]) / real[i] for i, ir in enumerate(irs))
+    assert rel[len(rel) // 2] < 0.10 and rel[int(len(rel) * 0.9)] < 0.25, (rel[len(rel) // 2], rel[int(len(rel) * 0.9)])
+    over = [i for i, ir in enumerate(irs) if estimate_width(ir) > 700 and real[i] <= 650]
+    assert len(over) <= 3, over  # the estimate rarely rejects a diagram that clearly fits

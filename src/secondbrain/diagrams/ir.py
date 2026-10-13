@@ -67,6 +67,7 @@ class Card:
     domain: str | None = None
     related_titles: tuple[str, ...] = ()
     ref: str | None = None
+    old_diagram: str | None = None  # "renders" or "broken" when the card already has a diagram
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "Card":
@@ -79,6 +80,7 @@ class Card:
             domain=d.get("domain"),
             related_titles=tuple(str(t) for t in d.get("related_titles") or ()),
             ref=d.get("ref") or d.get("id") or d.get("path"),
+            old_diagram=d.get("old_diagram") if d.get("old_diagram") in ("renders", "broken") else None,
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -86,6 +88,7 @@ class Card:
             "ref": self.ref, "title": self.title, "kind": self.kind, "domain": self.domain,
             "essence": self.essence, "propositions": list(self.propositions),
             "related_titles": list(self.related_titles),
+            **({"old_diagram": self.old_diagram} if self.old_diagram else {}),
         }
 
     @property

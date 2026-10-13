@@ -15,7 +15,7 @@
         {"from": "s", "to": "b", "text": "返回资源的 ETag", "style": "reply", "p": ["P1"]},
         {"from": "b", "to": "c", "text": "把资源和 ETag 存入缓存", "p": ["P1"]},
         {"from": "b", "to": "s", "text": "带 If-None-Match 的条件请求", "p": ["P2"]},
-        {"from": "s", "to": "b", "text": "资源未变化：304 Not Modified", "style": "reply", "p": ["P3"]},
+        {"from": "s", "to": "b", "text": "资源未变化：304 Not Modified", "style": "reply", "p": ["P3", "E"]},
         {"from": "b", "to": "b", "text": "继续使用缓存副本", "note": true, "p": ["P3"]}
       ]
     }
@@ -34,7 +34,7 @@
         {"key": "st", "label": "段表", "role": "store", "p": ["P2"]},
         {"key": "pt", "label": "页表", "role": "store", "p": ["P3"]},
         {"key": "blk", "label": "物理块号", "p": ["P3"]},
-        {"key": "pa", "label": "物理地址：第 3 次访问内存", "role": "end", "p": ["P4"]}
+        {"key": "pa", "label": "物理地址：第 3 次访问内存", "role": "end", "p": ["P4", "E"]}
       ],
       "edges": [
         {"from": "seg", "to": "st", "label": "①查段表", "p": ["P2"]},
@@ -58,7 +58,7 @@
         {"key": "lo", "label": "lo = mid + 1", "p": ["P2"]},
         {"key": "hi", "label": "hi = mid - 1", "p": ["P2"]},
         {"key": "found", "label": "返回 mid", "role": "end", "p": ["P2"]},
-        {"key": "empty", "label": "lo > hi？", "role": "decision", "p": ["P3"]},
+        {"key": "empty", "label": "lo > hi？", "role": "decision", "p": ["P3", "E"]},
         {"key": "miss", "label": "返回 -1 表示未找到", "role": "end", "p": ["P3"]}
       ],
       "edges": [

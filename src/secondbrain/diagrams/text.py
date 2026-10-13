@@ -112,11 +112,15 @@ def grounding_tokens(s: str) -> set[str]:
 def source_tokens(s: str) -> set[str]:
     """grounding_tokens() of a cited text, plus what a label may fairly derive from it.
 
-    Inside $...$ formulas every letter is also a token ('Wx' is W times x).
-    A stated count such as 'four levels' or '两路' adds the numbers 1..n, so
-    'level 3' or '第 1 路' can name one of the counted items.
+    Every single CJK character is also a token, so a one-character label such
+    as 或 or 积 can match the text it comes from (a longer label is still
+    compared by character pairs). Inside $...$ formulas every letter is also
+    a token ('Wx' is W times x). A stated count such as 'four levels' or
+    '两路' adds the numbers 1..n, so 'level 3' or '第 1 路' can name one of
+    the counted items.
     """
     out = grounding_tokens(s)
+    out.update(ch for run in _CJK_RUN.findall(s) for ch in run)
     for m in _MATH_SPAN.finditer(s):
         # letters of the formula itself, not of command names such as \log
         body = _TEX_CMD.sub(lambda c: f" {_TEX_SYMBOLS.get(c.group(1), '')} ", m.group(1) or m.group(2))
@@ -130,10 +134,18 @@ def source_tokens(s: str) -> set[str]:
 
 
 def overlap(label: str, source: str) -> float | None:
-    """Share of the label's grounding tokens found in source; None if the label has none."""
+    """Share of the label's grounding tokens found in source.
+
+    A label with no word tokens (symbols only, such as # or ⊕) counts its
+    characters instead: 1.0 if every one occurs in the source, else 0.0.
+    None if the label has no visible characters at all.
+    """
     t = grounding_tokens(label)
     if not t:
-        return None
+        chars = {ch for ch in label if not ch.isspace()}
+        if not chars:
+            return None
+        return 1.0 if chars <= set(plain_math(source)) else 0.0
     return len(t & source_tokens(source)) / len(t)
 
 

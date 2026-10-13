@@ -29,8 +29,9 @@ PROMPT = load_prompt()
 def _prompt_examples() -> list[tuple[Card, dict]]:
     """Each 'Card `ref`: E ... P1 ... P2 ...' line paired with the JSON block after it."""
     out = []
-    for m in re.finditer(r"^Card `([^`]+)`( \((\w+)\))?: (.+?)\n\n```json\n(.+?)\n```", PROMPT, re.M | re.S):
-        ref, kind, text, block = m.group(1), m.group(3) or "mechanism", m.group(4), m.group(5)
+    for m in re.finditer(r"^Card `([^`]+)`( \((\w+)\))?(?:, `old_diagram: (\w+)`)?: (.+?)\n\n```json\n(.+?)\n```",
+                         PROMPT, re.M | re.S):
+        ref, kind, text, block = m.group(1), m.group(3) or "mechanism", m.group(5), m.group(6)
         parts = re.split(r"(?:^|(?<=\W))(E|P\d+) ", text)
         fields = dict(zip(parts[1::2], (p.strip() for p in parts[2::2])))
         props = [fields[k] for k in sorted((k for k in fields if k != "E"), key=lambda k: int(k[1:]))]
@@ -40,17 +41,22 @@ def _prompt_examples() -> list[tuple[Card, dict]]:
 
 
 # Token budget. The method write-up asked for about 1,000-1,500 tokens with one or
-# two examples. After the 50-card pilot the prompt carries one example per
-# structure category that the pilot missed (5) plus 2 skip examples: 2,233
-# o200k tokens when written. It is sent once per batch of about 10 cards and
-# can be cached, so the cap allows a small margin, not another example.
-TOKEN_CAP = 2300
-BYTE_CAP = 8000  # dependency-free proxy for the same budget (7,725 bytes when written)
+# two examples. The first pilot added one example per structure category it
+# missed, which grew the prompt to 2,233 o200k tokens; the second pilot's rules
+# (cite E, back edges, fan-out, width, data inputs, old diagrams) were added
+# without growing it: 2,196 when written, with 4 draw and 2 skip examples. The
+# cap is the size before that revision, so new rules have to replace old text.
+TOKEN_CAP = 2233
+BYTE_CAP = 8000  # dependency-free proxy for the same budget (7,825 bytes when written)
 
 
 def test_prompt_states_the_core_rules():
     for phrase in ("in its language", "Plain text, no TeX", "Diagrams are not only for decisions",
-                   "the essence is a full source", "2+ stated outcomes", "flow only"):
+                   "Start from E", "cite E", "2+ stated outcomes", "draw the back edge", "Parallel options are not a decision",
+                   "fans out to at most 3", "connected only to the nodes that use it", "a final `store`",
+                   "must fit 700 px", "a one-character label counts that character", "`old_diagram`",
+                   "unordered checks are a list", "an \"otherwise\" exit counts only if the card states",
+                   '{"from","to","text","p"}'):
         assert phrase in PROMPT, phrase
 
 
@@ -70,10 +76,9 @@ def test_prompt_token_budget():
 def test_prompt_examples_pass_the_validator():
     examples = _prompt_examples()
     assert [(c.ref, ir["decision"], ir.get("form")) for c, ir in examples] == [
-        ("nn/residual", "draw", "flow"), ("audio/mixer", "draw", "structure"),
-        ("fs/double-indirect", "draw", "structure"), ("algo/rpn", "draw", "flow"),
-        ("econ/inflation", "draw", "structure"), ("net/tcp-vs-udp", "skip", None),
-        ("http/request-line", "skip", None)]
+        ("nn/residual", "draw", "flow"), ("fs/double-indirect", "draw", "structure"),
+        ("algo/rpn", "draw", "flow"), ("econ/inflation", "draw", "structure"),
+        ("net/tcp-vs-udp", "skip", None), ("http/request-line", "skip", None)]
     for card, ir in examples:
         report = validate(ir, card)
         assert report.ok, (card.ref, [str(e) for e in report.errors])
@@ -152,3 +157,4 @@ def test_rewrite_round_through_the_cli(tmp_path, capsys):
     assert json.loads(capsys.readouterr().out) == {"skip": 1}
     final = json.loads((out / "r1" / "outcomes.jsonl").read_text(encoding="utf-8"))
     assert final["attempt"] == 1 and final["reason"].startswith("no valid IR after 2 attempt(s)")
+

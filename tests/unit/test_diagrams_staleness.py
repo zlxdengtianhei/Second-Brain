@@ -23,9 +23,9 @@ def drawn(card: Card = CARD) -> str:
 
 def test_marker_is_the_first_line_and_lists_cited_propositions():
     first = drawn().splitlines()[0]
-    assert first == f"%% diagram v1 props=P1,P2,P3,P4 sha={content_hash(CARD)}"
+    assert first == f"%% diagram v1 props=E,P1,P2,P3,P4 sha={content_hash(CARD)}"
     m = read_marker(drawn())
-    assert m.version == 1 and m.props == ("P1", "P2", "P3", "P4") and m.sha == content_hash(CARD)
+    assert m.version == 1 and m.props == ("E", "P1", "P2", "P3", "P4") and m.sha == content_hash(CARD)
 
 
 def test_hash_ignores_whitespace_but_not_wording_order_or_additions():

@@ -15,7 +15,8 @@
 // Output: one JSON object per line, in input order:
 //   {"id", "ok", "error"?, "type"?, "direction"?, "nodes"?, "edges"?,
 //    "subgraphs"?, "actors"?, "messages"?, "width"?, "height"?,
-//    "render_error"?, "label_text"?}
+//    "label_overlaps"?, "render_error"?, "label_text"?}
+// label_overlaps counts pairs of edge labels that cover each other.
 // A summary line goes to stderr. Exit code 1 if any block failed, 2 on usage
 // or setup errors.
 //
@@ -153,6 +154,21 @@ async function checkBatch(items, opts) {
         const bb = el.getBoundingClientRect();
         r.width = Math.round(bb.width);
         r.height = Math.round(bb.height);
+        // Edge labels that cover each other (more than 10% of the smaller box).
+        const labels = [...el.querySelectorAll('g.edgeLabel')]
+          .filter((g) => g.textContent.trim())
+          .map((g) => g.getBoundingClientRect())
+          .filter((b) => b.width > 1 && b.height > 1);
+        let overlaps = 0;
+        for (let a = 0; a < labels.length; a++) {
+          for (let c = a + 1; c < labels.length; c++) {
+            const p = labels[a], q = labels[c];
+            const w = Math.min(p.right, q.right) - Math.max(p.left, q.left);
+            const h = Math.min(p.bottom, q.bottom) - Math.max(p.top, q.top);
+            if (w > 0 && h > 0 && w * h > 0.1 * Math.min(p.width * p.height, q.width * q.height)) overlaps++;
+          }
+        }
+        r.label_overlaps = overlaps;
         if (opts.labelText) {
           const clone = el.cloneNode(true);
           clone.querySelectorAll('style').forEach((s) => s.remove());

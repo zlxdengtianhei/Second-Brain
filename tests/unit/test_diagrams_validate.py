@@ -24,7 +24,12 @@ def ir(ref: str) -> dict:
     return copy.deepcopy(IRS[ref]["ir"])
 
 
-def codes(data, card, limits=Limits()) -> list[str]:
+# The checks added after the second pilot (V12 cite E, V5 back edge, V14 width)
+# have their own tests below; the older tests switch them off to stay focused.
+LEGACY = Limits(require_essence=False, require_back_edge=False, max_width=None)
+
+
+def codes(data, card, limits=LEGACY) -> list[str]:
     return [i.code for i in validate(data, card, limits).errors]
 
 
@@ -176,7 +181,9 @@ def test_v5_structure_needs_relations_between_parts():
                       {"from": "c", "to": "d", "label": "组成逻辑地址", "p": ["P4"]}]}
     assert "V5" in codes(data, PAGING)  # two separate links: a list says the same
     data["edges"].append({"from": "b", "to": "c", "label": "组成逻辑地址", "p": ["P1"]})
-    assert "V5" not in codes(data, PAGING)  # three links: a chain of parts
+    assert "V5" in codes(data, PAGING)  # a plain chain citing 2 sources: one sentence says it
+    data["nodes"][3]["p"] = ["P1", "P2"]
+    assert "V5" not in codes(data, PAGING)  # three links over three sources: a chain of parts
 
 
 def test_merge_is_gain_from_three_nodes_in_flow_and_structure():
@@ -308,7 +315,8 @@ def test_v4_pins_cjk_bigrams():
 
 def test_v4_label_without_any_token_is_reported():
     errors = _first_node_v4("→", "段页式变换")
-    assert len(errors) == 1 and "shares no wording" in errors[0]
+    assert len(errors) == 1 and "shares 0% wording" in errors[0]  # symbols only: every symbol must occur
+    assert _first_node_v4("   ", "段页式变换") == []  # blank labels are V1's business
 
 
 def test_v5_single_exit_decision_is_not_a_branch():
@@ -428,7 +436,7 @@ def test_arrows_field_and_retired_data_role():
     assert codes(seq, ETAG) == ["V1"]
     data, card = _dataflow()
     data["nodes"][1]["role"] = "data"
-    report = validate(data, card)
+    report = validate(data, card, LEGACY)
     assert report.ok and report.ir.nodes[1].role == "step"
     assert [w.code for w in report.warnings] == ["W0"]
 
@@ -450,3 +458,101 @@ def test_v11_inputs_feed_and_outputs_receive():
     data["edges"].append({"from": "f", "to": "add", "label": "F(x)", "p": ["P1"]})
     report = validate(data, card)
     assert [(i.code, i.where) for i in report.errors if i.code == "V11"] == [("V11", "nodes[0]"), ("V11", "nodes[3]")]
+
+
+# Second pilot ----------------------------------------------------------------------
+
+FULL = Limits()
+
+
+def _gain_flow(card: Card, labels: list[str], refs: list[list[str]]) -> dict:
+    """a -> b, a -> c, b -> d, c -> d (a merge), labels and citations given."""
+    keys = "abcd"
+    return {"decision": "draw", "form": "flow", "question": "q",
+            "nodes": [{"key": k, "label": lab, "p": r} for k, lab, r in zip(keys, labels, refs)],
+            "edges": [{"from": "a", "to": "b"}, {"from": "a", "to": "c"}, {"from": "b", "to": "d"},
+                      {"from": "c", "to": "d"}]}
+
+
+def test_v12_the_diagram_cites_e():
+    data = ir("algorithms/binary-search")
+    assert codes(data, SEARCH, FULL) == []
+    data["nodes"][5]["p"] = ["P3"]
+    assert codes(data, SEARCH, FULL) == ["V12"]
+    no_essence = Card.from_dict({**SEARCH.to_dict(), "essence": ""})
+    assert "V12" not in codes(data, no_essence, Limits(require_back_edge=False))
+
+
+def test_v5_card_that_repeats_needs_a_back_edge():
+    card = Card(title="t", essence="重复取样直到误差足够小。",
+                propositions=("每次取一批样本计算误差。", "误差足够小就停止，否则继续取样。"))
+    data = _gain_flow(card, ["取一批样本", "计算误差", "误差足够小", "停止"], [["P1", "E"], ["P1"], ["P2"], ["P2"]])
+    assert "V5" in codes(data, card, FULL)
+    data["edges"].append({"from": "d", "to": "a"})
+    assert "V5" not in codes(data, card, FULL)
+    rnn = Card(title="t", essence="循环神经网络把上一步的隐状态传给下一步。",
+               propositions=("隐状态来自上一步。", "输出来自隐状态。"))
+    flat = _gain_flow(rnn, ["上一步的隐状态", "隐状态", "输出", "下一步"], [["P1", "E"], ["P1"], ["P2"], ["E"]])
+    assert "V5" not in codes(flat, rnn, FULL)  # the name of the model is not a loop
+
+
+def _fan(n: int, decision: bool = False) -> tuple[dict, Card]:
+    card = Card(title="t", essence="根据类型选择处理方式。",
+                propositions=tuple(f"类型{i}用方式{i}处理。" for i in range(1, n + 1)))
+    nodes = [{"key": "r", "label": "根据类型选择", "role": "decision" if decision else "step", "p": ["E"]}]
+    nodes += [{"key": f"c{i}", "label": f"方式{i}处理", "p": [f"P{i}"]} for i in range(1, n + 1)]
+    edges = [{"from": "r", "to": f"c{i}", "label": f"类型{i}", "p": [f"P{i}"]} for i in range(1, n + 1)]
+    return {"decision": "draw", "form": "structure", "question": "q", "nodes": nodes, "edges": edges}, card
+
+
+def test_v13_fan_out_to_leaves_is_a_list():
+    data, card = _fan(4)
+    assert "V13" in codes(data, card)
+    data, card = _fan(3)
+    assert "V13" not in codes(data, card)
+
+
+def test_v13_parallel_options_are_not_a_decision():
+    data, card = _fan(3, decision=True)
+    data["form"] = "flow"
+    assert "V13" in codes(data, card)
+    data["nodes"] = data["nodes"][:3]
+    data["edges"] = data["edges"][:2]
+    assert "V13" not in codes(data, card)  # two outcomes of a real decision are fine
+
+
+def test_v14_estimated_width():
+    card = Card(title="t", essence="三条路径汇合到结果。",
+                propositions=("第一条路径很长很长很长很长很长很长。", "第二条路径很长很长很长很长很长很长。",
+                              "第三条路径很长很长很长很长很长很长。"))
+    nodes = [{"key": "s", "label": "三条路径", "p": ["E"]}, {"key": "t", "label": "结果", "p": ["E"]}]
+    nodes += [{"key": f"m{i}", "label": card.propositions[i][:14], "p": [f"P{i + 1}"]} for i in range(3)]
+    edges = [{"from": "s", "to": f"m{i}"} for i in range(3)] + [{"from": f"m{i}", "to": "t"} for i in range(3)]
+    data = {"decision": "draw", "form": "structure", "question": "q", "nodes": nodes,
+            "edges": [dict(e, label="汇合到结果", p=["E"]) for e in edges]}
+    assert "V14" in codes(data, card, FULL)
+    assert "V14" not in codes(data, card, Limits(max_width=None))
+    for n in data["nodes"][2:]:
+        n["label"] = n["label"][:4]
+    assert "V14" not in codes(data, card, FULL)
+
+
+def test_v11_data_diagram_may_end_in_a_store_and_inputs_go_where_used():
+    data, card = _dataflow()
+    data["nodes"][3]["role"] = "store"
+    assert codes(data, card) == []
+    data, card = _dataflow()
+    data["nodes"].insert(1, {"key": "w", "label": "权重 W", "role": "input", "p": ["P1"]})
+    data["edges"].append({"from": "w", "to": "add", "label": "F(x)", "p": ["P1"]})
+    report = validate(data, card, LEGACY)
+    assert [i.code for i in report.errors] == ["V4", "V11"]  # 权重 W is on no card line, and the adder never uses it
+
+
+@pytest.mark.parametrize("label, prop", [
+    ("或", "先查缓存或查数据库"),
+    ("积", "输出是两数之积"),
+    ("#", "以 # 开头的行是注释"),
+    ("⊕", r"输出 $x \oplus y$"),
+])
+def test_v4_single_characters_and_symbols_count(label, prop):
+    assert _first_node_v4(label, prop) == []
