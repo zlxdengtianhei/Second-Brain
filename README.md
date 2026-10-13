@@ -23,7 +23,7 @@ Second Brain splits the work. A model proposes cards. A second, independent run 
 
 ## Quick start with the example vault
 
-You need Python 3.11 or later, on macOS or Linux. In a clone of this repository:
+You need Python 3.11 or later, on macOS or Linux. In a clone of this repository (the `review` extra adds the FSRS scheduler that `sb review`, `sb today` and the review totals of `sb status` use):
 
 ```sh
 python3 -m venv .venv
@@ -56,7 +56,7 @@ sb ingest ~/sb-example/00_Inbox/"Sleep and memory.md" --executor host
 The result lists `handoffs`: a task file for a producer model, where to write its answer, and the `sb job submit` command that hands the answer in. From here a model has to do the work. Choose one way:
 
 - **In a coding-agent harness** (Claude Code, Codex, Pi and others): copy [`skills/secondbrain`](skills/secondbrain/) into the harness's skills folder (for Claude Code: `~/.claude/skills/secondbrain/`). Start the harness from this shell, so that it can run `sb` on the same `SECONDBRAIN_VAULT`. Ask it to process the inbox. It starts a fresh sub-agent for each hand-off and runs `sb job advance <job_id> --executor host` until the job is written.
-- **With API keys**: describe a producer and a reviewer endpoint in a config file (see [Configuration](#configuration)), then run `sb ingest <file> --executor api`.
+- **With API keys**: install the API extra too (`pip install -e ".[review,api]"`), describe a producer and a reviewer endpoint in a config file (see [Configuration](#configuration)), then run `sb ingest <file> --executor api`.
 - **By hand**: the hand-off is plain files and commands ([docs/agents.md](docs/agents.md#doing-it-by-hand)).
 
 To try the review plugin on the example vault, build it (needs Node.js 18 or later) and copy it into the vault. The vault already holds the plugin's settings for English cards.
@@ -174,7 +174,7 @@ language = "en"               # en | zh: card headings and the text of maps, HOM
 diagrams = true
 ```
 
-Optional extras: `pip install -e ".[api]"` for the API executor, `".[mcp]"` for the MCP server, `".[review]"` for `sb review`. Every key, the folder layout and the review policy: [docs/configuration.md](docs/configuration.md). To start a vault of your own: [docs/new-vault.md](docs/new-vault.md).
+Optional extras: `pip install -e ".[api]"` for the API executor, `".[mcp]"` for the MCP server, `".[review]"` for `sb review`, `sb today` and the review page of `sb daily`. Every key, the folder layout and the review policy: [docs/configuration.md](docs/configuration.md). To start a vault of your own: [docs/new-vault.md](docs/new-vault.md).
 
 ## Safety and recovery
 
@@ -211,7 +211,7 @@ tests/                    pytest suite
 This is version 0.1.0, built in October 2026 from the tool the author uses on a vault of about 8,600 Chinese cards. Expect changes.
 
 - It runs on macOS and Linux. Windows is not supported: the transaction lock uses `fcntl`.
-- No command creates a new vault or a config file yet. You write the catalog and the taxonomy files once by hand ([docs/new-vault.md](docs/new-vault.md)).
+- No command writes a config file, a catalog or taxonomy files yet. You write the catalog and the taxonomy files once by hand; `sb init --catalog <file>` then adds the empty card registry and folders ([docs/new-vault.md](docs/new-vault.md)).
 - Ingest can add a new topic under an existing pillar. It cannot add a pillar or a domain; such material is reported as `needs_taxonomy`.
 - The Agent Skill has run end to end in Claude Code only (it built the example vault). Codex, Pi, headless sessions and MCP hosts follow the same protocol but have not been tested in a real host.
 - In host mode the model name is whatever the sub-agent reports. In Claude Code every sub-agent is a Claude model, so every review there is same-family.

@@ -23,7 +23,7 @@ Second Brain 把工作拆开。模型提出卡片。另一次独立运行对照�
 
 ## 用示例库快速上手
 
-需要 Python 3.11 或更高版本，系统为 macOS 或 Linux。在本仓库的克隆目录里：
+需要 Python 3.11 或更高版本，系统为 macOS 或 Linux。在本仓库的克隆目录里（`review` 依赖提供 FSRS 调度，`sb review`、`sb today` 和 `sb status` 的复习统计要用它）：
 
 ```sh
 python3 -m venv .venv
@@ -56,7 +56,7 @@ sb ingest ~/sb-example/00_Inbox/"Sleep and memory.md" --executor host
 结果里的 `handoffs` 给出：给生产者模型的任务文件、答案写到哪里、提交答案的 `sb job submit` 命令。接下来要由模型来做，三种方式任选：
 
 - **在编程 agent 宿主里**（Claude Code、Codex、Pi 等）：把 [`skills/secondbrain`](skills/secondbrain/) 复制到宿主的 skills 目录（Claude Code 是 `~/.claude/skills/secondbrain/`）。从这个 shell 启动宿主，让它能对同一个 `SECONDBRAIN_VAULT` 运行 `sb`。让它处理收件箱。它为每个交接开一个新的子代理，并反复运行 `sb job advance <job_id> --executor host`，直到写入完成。
-- **用 API key**：在配置文件里写一个生产者端点和一个复核者端点（见[配置](#配置)），然后运行 `sb ingest <file> --executor api`。
+- **用 API key**：另装 API 依赖（`pip install -e ".[review,api]"`），在配置文件里写一个生产者端点和一个复核者端点（见[配置](#配置)），然后运行 `sb ingest <file> --executor api`。
 - **手动**：交接只是普通文件和命令（[docs/agents.md](docs/agents.md#doing-it-by-hand)）。
 
 想在示例库上试复习插件，先构建插件（需要 Node.js 18 或更高版本），再复制进库。示例库里已经放好了插件针对英文卡片的设置。
@@ -174,7 +174,7 @@ language = "zh"               # en | zh：卡片小节名，以及地图页、HO
 diagrams = true
 ```
 
-可选依赖：API 执行器用 `pip install -e ".[api]"`，MCP 服务用 `".[mcp]"`，`sb review` 用 `".[review]"`。全部配置项、目录布局和复核策略：[docs/configuration.md](docs/configuration.md)（英文）。从零建自己的库：[docs/new-vault.md](docs/new-vault.md)（英文）。
+可选依赖：API 执行器用 `pip install -e ".[api]"`，MCP 服务用 `".[mcp]"`，`sb review`、`sb today` 和 `sb daily` 的复习页用 `".[review]"`。全部配置项、目录布局和复核策略：[docs/configuration.md](docs/configuration.md)（英文）。从零建自己的库：[docs/new-vault.md](docs/new-vault.md)（英文）。
 
 ## 安全与恢复
 
@@ -211,7 +211,7 @@ tests/                    pytest 测试
 这是 0.1.0 版，2026 年 10 月由作者在约 8,600 张中文卡片的知识库上使用的工具整理而成。之后还会有变动。
 
 - 支持 macOS 和 Linux。不支持 Windows：事务锁用的是 `fcntl`。
-- 还没有新建知识库或配置文件的命令。领域目录和分类体系文件要手写一次（[docs/new-vault.md](docs/new-vault.md)）。
+- 还没有生成配置文件、领域目录或分类体系文件的命令。领域目录和分类体系文件要手写一次；之后 `sb init --catalog <file>` 补上空的卡片登记表和各个目录（[docs/new-vault.md](docs/new-vault.md)）。
 - 入库可以在已有支柱下新增主题，不能新增支柱或领域；这类材料记为 `needs_taxonomy`。
 - Agent Skill 只在 Claude Code 里完整跑过（示例库就是这样建成的）。Codex、Pi、无头会话和 MCP 宿主走同一套协议，但还没在真实宿主里测过。
 - 宿主模式下，模型名由子代理自报。Claude Code 里的子代理都是 Claude 模型，所以那里的复核都记为同一家族。

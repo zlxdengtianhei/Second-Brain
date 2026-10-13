@@ -16,7 +16,7 @@ A small, complete Second Brain vault for the [quick start](../README.md#quick-st
 
 How it was made:
 
-1. The catalog (`sb init --catalog`), the three taxonomy files, the empty registry and the folders were written by hand, as [docs/new-vault.md](../docs/new-vault.md) describes. The source notes are original text written for this example.
+1. The catalog and the three taxonomy files were written by hand and the catalog put in with `sb init --catalog`. The `sb init` of that day did not yet add the empty registry and the folders, so they were made by hand too; [docs/new-vault.md](../docs/new-vault.md) describes the current steps. The source notes are original text written for this example.
 2. Seven notes were ingested with the Agent Skill in Claude Code: one fresh sub-agent per hand-off, producers on one Claude model and reviewers on another (so every review is recorded as same-family). 34 sub-agent runs in total; every job was written in full, with no pending cards.
 3. One card links across domains on purpose: "Bloom filter as a cheap first check and the rare-item false positive problem" (computing) is `similar_to` "Screening test with a rare disease" and `example_of` "Positive predictive value" (statistics).
 4. Five reviews were logged with `sb review log --device example`, so the review status shows a few learned cards next to new ones.

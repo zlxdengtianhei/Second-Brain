@@ -1,6 +1,6 @@
 # Starting a vault of your own
 
-A vault needs three things before the first ingest: a catalog of domains, a taxonomy file for each map of content (MOC), and an empty card registry. There is no command that writes them for you yet. The [example vault](../examples/vault/) has a complete set to copy from.
+A vault needs three things before the first ingest: a catalog of domains, a taxonomy file for each map of content (MOC), and an empty card registry. You write the catalog and the taxonomy files; `sb init` puts the catalog into the vault and adds the registry and the folders. The [example vault](../examples/vault/) has a complete set to copy from.
 
 The steps below use the default folder names. To use other names, set `[layout]` in the config file first ([configuration.md](configuration.md)).
 
@@ -50,11 +50,13 @@ Then write it into the vault:
 sb init --catalog catalog.json
 ```
 
+`sb init` writes the catalog to `_data/secondbrain/catalog.json`, an empty card registry `_data/notes_registry.json`, and the folders `10_Knowledge/`, `20_MOCs/_pillars/` and `00_Inbox/` when they are missing. Its result lists `created_folders` and `taxonomy_files_missing`: the taxonomy files you still have to write (step 3). Running it again with the same catalog changes nothing; it only adds a registry or folders that are missing.
+
 The catalog is written once. `sb init` also records the vault's language in it: `[cards] language` from the config file if set, else the language of maps already in the folder, else English. `sb language` shows it; `sb language --set zh` switches it, and then `sb refresh --apply` and `sb docs --apply` rewrite the generated pages. To change other parts of the catalog later, edit `_data/secondbrain/catalog.json` with care, or use the curation commands.
 
 ## 3. Write one taxonomy file per MOC
 
-Each MOC has a file `20_MOCs/_pillars/<MOC title>.yaml`. Pillars are the main parts of a domain, and topics are the shelves inside a pillar. Every card is filed under one domain, pillar and topic.
+Each MOC has a file `20_MOCs/_pillars/<MOC title>.yaml`; `taxonomy_files_missing` in the result of `sb init` names the ones still to write. Pillars are the main parts of a domain, and topics are the shelves inside a pillar. Every card is filed under one domain, pillar and topic.
 
 ```yaml
 title: Cooking
@@ -76,23 +78,18 @@ pillars:
       - Fats
 ```
 
+Write one file for every MOC in the catalog; in this example also `Gardening.yaml`. Until a domain has its file, `sb status` reports `missing_taxonomy` for it and an ingest makes no cards in that domain.
+
 Start small. A producer can propose new topics under an existing pillar (two per source by default), and a reviewer must accept them. Material that needs a new pillar or a new domain gets no card and is reported as `needs_taxonomy` in the job result. Add the pillar to the file before you ingest more material of that kind.
 
-## 4. Add the empty registry and folders
-
-```sh
-mkdir -p ~/MyVault/_data ~/MyVault/10_Knowledge ~/MyVault/00_Inbox
-printf '{"notes": []}\n' > ~/MyVault/_data/notes_registry.json
-```
-
-## 5. Check and generate the maps
+## 4. Check and generate the maps
 
 ```sh
 sb status          # "issues": [] means the vault is ready
 sb refresh --apply # writes the MOC pages under 20_MOCs/
 ```
 
-## 6. Ingest
+## 5. Ingest
 
 Put notes, articles or transcripts into `00_Inbox/`, then follow the quick start in the [README](../README.md): `sb inbox list`, then `sb ingest <file>` with the host or the API executor.
 

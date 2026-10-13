@@ -10,7 +10,7 @@ sb inbox show "<name>" --head 60                # the first lines of one file
 sb inbox skip "<name>" --reason "a receipt"     # mark a file as not knowledge
 ```
 
-A file's status is `new`, `in_progress`, `done`, `partial` (some cards still pending; see `sb ingest --retry`), `skipped` or `failed`. The status is found by content hash, so a renamed copy of an ingested file is still `done`. The [Agent Skill](../skills/secondbrain/references/triage.md) lists what should and should not become cards.
+A file's status is `new`, `in_progress`, `done`, `partial` (some cards still pending; see `sb ingest --retry`), `skipped` or `failed`. The status is found by content hash, so a renamed copy of an ingested file is still `done`. A `partial` source stays in the list after its file has left the inbox, with `in_inbox: false` and `path` set to the copy in `40_Sources/`. The [Agent Skill](../skills/secondbrain/references/triage.md) lists what should and should not become cards.
 
 ## Starting a source
 
@@ -75,11 +75,14 @@ sb job show <job_id>
 sb job advance <job_id> --executor host
 sb recover <job_id> --rollback      # restore every file the job wrote, byte for byte
 sb recover <job_id> --resume        # finish a write that was interrupted
+sb job reset <job_id> --reason "<why>"   # set aside a stuck job that never wrote
 ```
 
 Before writing, the transaction compares each file with the bytes it planned against. If another program changed a file in between, the job stops as `needs_attention`, and the next `sb job advance` plans the write again from the same reviewed cards. Several sources can be in progress at the same time; writes to one vault happen one at a time under a lock.
 
 A rolled-back source can be ingested again.
+
+`sb ingest --retry <job>` runs the pending cards of a partial job as a child job, `<job>-retry1` and so on, with its own transaction. Roll back a retry child before its parent: while the child's writes are in the vault, `sb recover <parent> --rollback` refuses and names the child. A child that was rolled back or reset does not block a new `sb ingest --retry <parent>`; the new child takes its id.
 
 ## Other commands for an existing vault
 
@@ -95,5 +98,5 @@ These commands use the same produce, review and gate pattern on cards that are a
 | `sb domcreate --domain <slug> ...` | proposes a new domain from cards that already exist |
 | `sb resume --job <job>` | continues one of these jobs |
 | `sb docs --apply` | regenerates the entry page `HOME.md` (and the generated blocks of `[layout] entry_docs`) |
-| `sb today --apply` | writes today's review page under `50_Reviews/` |
-| `sb daily --apply` | does both |
+| `sb today --apply` | writes today's review page under `50_Reviews/`: the due and new cards of the review registry, the same queue as `sb review queue`. Needs the `review` extra |
+| `sb daily --apply` | does both; without the `review` extra it writes `HOME.md` only and reports `review_extra_missing` |

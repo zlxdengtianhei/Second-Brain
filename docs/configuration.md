@@ -173,5 +173,5 @@ Maps a substring of a model name to a family, for the independent-review check. 
 |---|---|---|
 | `api` | `httpx` | the API executor |
 | `mcp` | `mcp` | `sb serve` |
-| `review` | `fsrs` (pinned) | `sb review` |
+| `review` | `fsrs` (pinned) | `sb review`, `sb today` and the review page of `sb daily` (without it, `sb daily` writes `HOME.md` only); the review totals in `sb status` |
 | `test` | all of the above and `pytest` | running the tests |
