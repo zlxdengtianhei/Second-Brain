@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { type Checkpoint, type LogText, loadFull, loadLogs, makeEvent, parseStamp, stateToDict, type ReplayResult } from "../src/registry";
+import { cacheMeta, type Checkpoint, type LogText, loadFull, loadLogs, makeEvent, parseStamp, RULES_VERSION, stateToDict, type ReplayResult } from "../src/registry";
 import { type CacheStore, ReviewService } from "../src/service";
 import { EventStore } from "../src/vault/event-store";
 import { fileText, fixture } from "./fixtures";
@@ -92,6 +92,33 @@ describe("checkpoint", () => {
 		const out = loadLogs(texts(torn), cp);
 		expect(out.from).toBe("events");
 		expect(out.checkpoint).toBeNull(); // nothing is saved while a line is incomplete
+	});
+});
+
+describe("checkpoint keys", () => {
+	it("RULES_VERSION matches the shared fixture", () => {
+		expect(RULES_VERSION).toBe(VECTORS.rules_version);
+	});
+	it("a checkpoint written under other parsing or replay rules is not used", () => {
+		const files = new Map<string, string>();
+		appendRandom(files, Date.UTC(2026, 2, 3, 7), 80, 7);
+		const cp = loadFull(texts(files)).checkpoint!;
+		expect(loadLogs(texts(files), cp).from).toBe("cache");
+		const older = { ...cp, meta: cacheMeta(4, RULES_VERSION - 1) };
+		const out = loadLogs(texts(files), older);
+		expect(out.from).toBe("events");
+		expect(snapshot(out.result)).toEqual(snapshot(loadFull(texts(files)).result));
+	});
+	it("resumes a card that was in the middle of its learning steps", () => {
+		const ev = (min: number) => JSON.stringify(makeEvent({ card: "ex_step", device: "obs-a", now: { ms: Date.UTC(2026, 2, 2, 8, min), offsetMin: 60 }, mode: "flip", rating: 3 })) + "\n";
+		const files = new Map([["events-obs-a.jsonl", ev(0)]]);
+		const cp = JSON.parse(JSON.stringify(loadFull(texts(files)).checkpoint));
+		expect(cp.states[0].fsrsCard.learning_steps).toBe(1);
+		files.set("events-obs-a.jsonl", ev(0) + ev(12));
+		const out = loadLogs(texts(files), cp);
+		expect(out.from).toBe("cache");
+		expect(out.result.states.get("ex_step")!.state).toBe("review");
+		expect(snapshot(out.result)).toEqual(snapshot(loadFull(texts(files)).result));
 	});
 });
 

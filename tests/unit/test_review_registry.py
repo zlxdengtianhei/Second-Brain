@@ -236,6 +236,35 @@ def test_cache_falls_back_to_a_full_replay(tmp_path: Path) -> None:
     _assert_same_as_full(logs, cache, "cache")
 
 
+def test_rules_version_matches_the_shared_fixture() -> None:
+    assert rr.RULES_VERSION == VECTORS["rules_version"]
+
+
+def test_cache_written_under_other_rules_is_not_used(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    logs, cache = tmp_path / "review", tmp_path / "cache"
+    _append_random(logs, datetime(2026, 3, 3, 8, tzinfo=timezone.utc), 80, seed=7)
+    _assert_same_as_full(logs, cache, "events")
+    _assert_same_as_full(logs, cache, "cache")
+    monkeypatch.setattr(rr, "RULES_VERSION", rr.RULES_VERSION + 1)  # an upgrade changed parsing or replay
+    _assert_same_as_full(logs, cache, "events")
+    _assert_same_as_full(logs, cache, "cache")  # rewritten under the new rules
+    monkeypatch.setattr(rr, "FSRS_PARAMETERS", (*rr.FSRS_PARAMETERS[:-1], 0.2))
+    assert rr.load(logs, cache_dir=cache).loaded_from == "events"
+
+
+def test_cache_resumes_a_card_in_the_middle_of_its_learning_steps(tmp_path: Path) -> None:
+    logs, cache = tmp_path / "review", tmp_path / "cache"
+    tz = timezone(timedelta(hours=1))
+    t0 = datetime(2026, 3, 2, 9, tzinfo=tz)
+    rr.append_event(logs, rr.make_event("ex_step", device="obs-a", now=t0, rating=3, mode="flip"))
+    first = rr.load(logs, cache_dir=cache)
+    assert (first.states["ex_step"].state, first.states["ex_step"].step) == ("learning", 1)
+    rr.append_event(logs, rr.make_event("ex_step", device="obs-a", now=t0 + timedelta(minutes=12), rating=3,
+                                        mode="flip"))
+    resumed = _assert_same_as_full(logs, cache, "cache")
+    assert resumed.states["ex_step"].state == "review"  # Good on the last learning step graduates
+
+
 def test_cache_is_not_written_while_a_line_is_incomplete(tmp_path: Path) -> None:
     logs, cache = tmp_path / "review", tmp_path / "cache"
     _append_random(logs, datetime(2026, 3, 3, 8, tzinfo=timezone.utc), 50, seed=5)

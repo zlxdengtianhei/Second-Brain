@@ -1,6 +1,6 @@
 {
   "format": 1,
-  "note": "Shared replay vectors for the Python and TypeScript review registries (docs/review-registry.md). 'expect' is hand-written from the spec. 'snapshot' holds full numeric results, written by the Python suite with SB_UPDATE_VECTORS=1 and checked by both suites. A file given as a list is written one item per line (objects are JSON-encoded, strings are written as is); a file given as a string is written verbatim.",
+  "note": "Shared replay vectors for the Python and TypeScript review registries (docs/review-registry.md). 'expect' is hand-written from the spec. 'snapshot' holds full numeric results, written by the Python suite with SB_UPDATE_VECTORS=1 and checked by both suites. A file given as a list is written one item per line (objects are JSON-encoded, strings are written as is); a file given as a string is written verbatim. 'rules_version' must equal RULES_VERSION in both implementations; bump all three together when parsing or replay changes.",
   "vectors": [
     {
       "name": "first-review-good",
@@ -791,7 +791,7 @@
     },
     {
       "name": "bad-lines-skipped",
-      "description": "Invalid lines are reported and skipped; valid lines around them still apply. Covers bad JSON, missing or out-of-range rating, unknown version, missing or out-of-range UTC offset (+24:00, -25:00, +23:60, +00:60), a value ending in a newline, a bad device id, an empty card, a cut-off line. Empty lines are ignored.",
+      "description": "Invalid lines are reported and skipped; valid lines around them still apply. Covers bad JSON, missing or out-of-range rating, unknown version, missing or out-of-range UTC offset (+24:00, -25:00, +23:60, +00:60), a value ending in a newline, non-ASCII digits in a timestamp, a bad device id, an empty card, a cut-off line. Empty lines are ignored.",
       "files": {
         "events-obs-a.jsonl": [
           {
@@ -910,6 +910,22 @@
           },
           {
             "v": 1,
+            "device": "obs-a",
+            "mode": "flip",
+            "rating": 3,
+            "card": "ex_mu",
+            "ts": "２０２６-03-02T09:06:07.000+01:00"
+          },
+          {
+            "v": 1,
+            "device": "obs-a",
+            "mode": "flip",
+            "rating": 3,
+            "card": "ex_mu",
+            "ts": "2026-03-02T09:0٨:00.000+01:00"
+          },
+          {
+            "v": 1,
             "ts": "2026-03-02T09:10:00.000+01:00",
             "device": "obs-a",
             "card": "ex_mu",
@@ -919,7 +935,7 @@
         ]
       },
       "expect": {
-        "issues": 15,
+        "issues": 17,
         "cards": {
           "ex_mu": {
             "state": "review",
@@ -1250,6 +1266,13 @@
         "title": "x"
       },
       "seed": null
+    },
+    {
+      "name": "non-ascii-digits",
+      "text": "Q::A <!--SR:!２０２６-03-20,5,250-->\nQ2::A2 <!--SR:!fsrs,2026-03-25T07:00:00.000Z,１０,9.5,6.2,2,4,0,0,2026-03-15T07:00:00.000Z-->",
+      "frontmatter": {},
+      "seed": null
     }
-  ]
+  ],
+  "rules_version": 2
 }

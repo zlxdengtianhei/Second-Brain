@@ -2,6 +2,12 @@
 // Specification: docs/review-registry.md. Python twin: src/secondbrain/review_registry.py.
 
 export const SCHEMA_VERSION = 1;
+/**
+ * Revision of the parsing and replay rules. Increment it here and in review_registry.py whenever a
+ * change makes any log parse or replay differently; state caches written under another revision are
+ * ignored. 2: timestamps and SR dates accept ASCII digits only.
+ */
+export const RULES_VERSION = 2;
 export const DAY_START_HOUR = 4;
 export const DAY_MS = 86_400_000;
 export const MODE_IMPORT = "import";

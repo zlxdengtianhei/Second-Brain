@@ -26,6 +26,11 @@ from typing import Any, Callable, Iterable, Mapping, Sequence
 from fsrs import Card, Rating, Scheduler, State
 
 SCHEMA_VERSION = 1
+# Revision of the parsing and replay rules. Increment it here and in the plugin
+# (obsidian-plugin/src/registry/events.ts) whenever a change makes any log parse or
+# replay differently; state caches written under another revision are ignored.
+# 2: timestamps and SR dates accept ASCII digits only.
+RULES_VERSION = 2
 
 FSRS_PARAMETERS: tuple[float, ...] = (
     0.212, 1.2931, 2.3065, 8.2956, 6.4133, 0.8334, 3.0194, 0.001, 1.8722,
@@ -166,9 +171,10 @@ def _to_ms(dt: datetime) -> int:
 
 
 # Patterns are used with fullmatch (a "$" anchor would also accept a trailing newline).
+# re.ASCII: "\d" must not match full-width or other non-ASCII digits (JavaScript's does not).
 _TS_RE = re.compile(
-    r"(\d{4})-(\d{2})-(\d{2})[Tt ](\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,9}))?([Zz]|[+-]\d{2}:\d{2})")
-_DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
+    r"(\d{4})-(\d{2})-(\d{2})[Tt ](\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,9}))?([Zz]|[+-]\d{2}:\d{2})", re.ASCII)
+_DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}", re.ASCII)
 
 
 def parse_ts(value: Any) -> datetime:
@@ -666,7 +672,8 @@ def _cache_meta(day_start_hour: int) -> dict[str, Any]:
         lib = version("fsrs")
     except Exception:  # pragma: no cover - metadata missing in odd installs
         lib = "unknown"
-    return {"cache": CACHE_FORMAT, "schema": SCHEMA_VERSION, "day_start": day_start_hour, "fsrs": lib,
+    return {"cache": CACHE_FORMAT, "schema": SCHEMA_VERSION, "rules": RULES_VERSION,
+            "day_start": day_start_hour, "fsrs": lib,
             "params": list(FSRS_PARAMETERS), "retention": DESIRED_RETENTION,
             "steps": list(LEARNING_STEPS_MIN), "relearning": list(RELEARNING_STEPS_MIN),
             "max_interval": MAXIMUM_INTERVAL}
@@ -1073,7 +1080,7 @@ def append_events(review_dir: Path, events: Sequence[Mapping[str, Any]], *, fmt:
 # Spaced Repetition plugin import (docs section 2.2)
 # --------------------------------------------------------------------------
 _SR_BLOCK_RE = re.compile(r"<!--SR:(.*?)-->", re.S)
-_SM2_RE = re.compile(r"!(\d{4}-\d{2}-\d{2}),(\d+),(\d+)")
+_SM2_RE = re.compile(r"!(\d{4}-\d{2}-\d{2}),(\d+),(\d+)", re.ASCII)
 
 
 def sr_schedule(text: str, frontmatter: Mapping[str, Any] | None = None) -> dict[str, Any] | None:
@@ -1084,6 +1091,8 @@ def sr_schedule(text: str, frontmatter: Mapping[str, Any] | None = None) -> dict
         for seg in block.split("!")[1:]:
             parts = seg.split(",")
             if parts[0] == "fsrs" and len(parts) >= 10:
+                if not all(p.isascii() for p in parts[1:10]):
+                    continue  # float() would read non-ASCII digits; the plugin does not
                 try:
                     fsrs_rows.append({"due": parts[1], "interval": int(float(parts[2])),
                                       "stability": float(parts[3]), "difficulty": float(parts[4]),
@@ -1151,7 +1160,7 @@ def make_import_event(card: str, seed: Mapping[str, Any], *, device: str, now: d
 
 
 # --------------------------------------------------------------------------
-# CLI helpers: sb review status | queue | log
+# Helpers for a future `sb review status | queue | log` command (not wired yet)
 # --------------------------------------------------------------------------
 def status_report(review_dir: Path, cards: Iterable[CardMeta], now: datetime, *,
                   cache_dir: Path | None = None) -> dict[str, Any]:

@@ -11,7 +11,13 @@ export class Component {
 }
 export class Plugin extends Component {}
 export class PluginSettingTab {}
-export class ItemView extends Component {}
+export class ItemView extends Component {
+	contentEl: HTMLElement;
+	constructor(public leaf: unknown) {
+		super();
+		this.contentEl = document.createElement("div");
+	}
+}
 export class MarkdownRenderChild extends Component {}
 export class TFile {}
 export const notices: string[] = [];

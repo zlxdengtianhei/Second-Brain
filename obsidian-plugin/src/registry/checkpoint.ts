@@ -1,7 +1,7 @@
 // State cache (docs/review-registry.md section 4.1): the replay result plus how far each log was read.
 // A load starts from the checkpoint and parses only appended lines; anything unexpected means a full replay.
 import { type Card, FSRSVersion, State } from "ts-fsrs";
-import { cmpCodePoint, DAY_START_HOUR, type Issue, orderEvents, parseLogText, type ReviewEvent, SCHEMA_VERSION } from "./events";
+import { cmpCodePoint, DAY_START_HOUR, type Issue, orderEvents, parseLogText, type ReviewEvent, RULES_VERSION, SCHEMA_VERSION } from "./events";
 import { applyEvent, type CardState, countEvent, emptyResult, FSRS_PARAMETERS, type ReplayResult } from "./scheduler";
 
 export const CACHE_FORMAT = 1;
@@ -43,8 +43,8 @@ export interface LoadOutcome {
 	watermark: Watermark | null;
 }
 
-export function cacheMeta(dayStartHour = DAY_START_HOUR): string {
-	return JSON.stringify({ cache: CACHE_FORMAT, schema: SCHEMA_VERSION, dayStart: dayStartHour, fsrs: FSRSVersion, params: FSRS_PARAMETERS });
+export function cacheMeta(dayStartHour = DAY_START_HOUR, rules = RULES_VERSION): string {
+	return JSON.stringify({ cache: CACHE_FORMAT, schema: SCHEMA_VERSION, rules, dayStart: dayStartHour, fsrs: FSRSVersion, params: FSRS_PARAMETERS });
 }
 
 const FNV_OFFSET = 0x811c9dc5;

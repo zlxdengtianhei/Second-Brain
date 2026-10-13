@@ -95,7 +95,8 @@ an invalid event is never written.
 
 Readers ignore unknown fields. Writers must not reuse a field name with a
 different meaning. Patterns (`ts`, dates, `device`) must match the whole value:
-a value with a trailing newline is invalid.
+a value with a trailing newline is invalid. Digits in timestamps and dates are
+ASCII `0`–`9` only (full-width or other script digits make the line invalid).
 
 ### 2.1 Questions and card rating
 
@@ -264,8 +265,11 @@ Loading with a checkpoint:
 3. The new events are applied in replay order if all of them are later than
    the newest applied event. An older event (a device that synced late) means a
    full replay.
-4. Anything else unexpected (another format version, other FSRS parameters or
-   library version, a damaged checkpoint) also means a full replay.
+4. Anything else unexpected (another format version, another rules version,
+   other FSRS parameters or library version, a damaged checkpoint) also means
+   a full replay. The rules version (`RULES_VERSION` in both implementations)
+   names the revision of the parsing and replay rules, so an upgrade that
+   changes them never continues from a checkpoint written under the old rules.
 
 The result must equal a full replay; both test suites check this.
 
@@ -349,6 +353,10 @@ The daily queue lists due cards first, then new cards.
 - A change that makes old logs replay differently (parameters, policy, day
   start, hashing) is a new format version. Readers keep supporting version 1.
 - Adding an optional field is not a version change.
+- Any change to how lines are parsed or replayed, even a fix for invalid input,
+  increments `RULES_VERSION` in both implementations and `rules_version` in the
+  vectors file together (the tests check that the three agree). This keeps
+  state caches honest; it does not change the log format.
 - The vectors file is the contract between the Python and TypeScript
   implementations. A change to either implementation must keep both test
   suites green against the same file.
