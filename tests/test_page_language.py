@@ -152,3 +152,15 @@ def test_sb_docs_apply_rewrites_only_home(tmp_path, capsys):
     result = json.loads(capsys.readouterr().out)
     assert result['status'] == 'applied' and result['applied_paths'] == ['HOME.md']
     assert '```secondbrain-review' in (root / 'HOME.md').read_text(encoding='utf-8')
+
+
+@pytest.mark.parametrize('language, gloss', [('en', 'inverse of controls'), ('zh', 'controls 的反向')])
+def test_a_new_inverse_relation_word_is_glossed_in_the_vault_language(language, gloss):
+    from secondbrain import domcreate
+    from tests.helpers import CATALOG
+    use('zh' if language == 'en' else 'en')  # the catalog's recorded language decides, not the active one
+    packet = {'domain': 'robotics', 'moc': 'Robotics Map', 'question': 'How do robots move?', 'track': 'ml'}
+    proposal = {'relation_words': [{'type': 'controls', 'inverse': 'controlled_by', 'gloss': 'steers'}]}
+    out = domcreate._catalog_after({**CATALOG, 'language': language}, packet, proposal)
+    assert out['relation_gloss'] == {'controls': 'steers', 'controlled_by': gloss}
+    assert {'controls', 'controlled_by'} <= set(out['relation_types'])  # both words are usable relations

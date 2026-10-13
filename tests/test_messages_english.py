@@ -16,7 +16,6 @@ SKIP = {'labels.py', 'cards.py', 'review_registry.py'}   # language tables; sepa
 ALLOWED = {
     ('pipelines/chunking.py', '(?<=[。！？!?；;])|(?<=[.!?])(?=\\s)'),   # sentence ends
     ('rendering.py', '　-〿㐀-䶿一-鿿豈-﫿＀-￯‘’“”—–'),
-    ('domcreate.py', ' 的反向'),   # default gloss of an inverse relation word (catalog content)
 }
 
 

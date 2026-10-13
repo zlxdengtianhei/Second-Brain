@@ -94,6 +94,7 @@ MOC = {
 PAGES = {
     'zh': {
         'review_page': '今日复习-{date}',
+        'inverse_gloss': '{type} 的反向',  # catalog gloss of a new inverse relation word (domcreate)
         'review_title': '# 今日复习 {date}',
         'review_intro': '先合上笔记复述，再打开核对；评级用 HOME 里的 SecondBrain Review 面板。',
         'back_home': '返回首页',
@@ -144,6 +145,7 @@ PAGES = {
         'review_intro': 'Recall first with the note closed, then open it to check; rate cards in the '
                         'SecondBrain Review dashboard on HOME.',
         'back_home': 'Back to HOME',
+        'inverse_gloss': 'inverse of {type}',
         'due_cards': 'Due cards',
         'new_today': "Today's new cards",
         'none': 'Nothing here.',

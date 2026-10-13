@@ -12,7 +12,7 @@ import json
 from dataclasses import replace
 from pathlib import Path
 
-from . import jobs
+from . import jobs, labels
 from . import layout as layouts
 from .catalog import validate_catalog
 from .classification import writable_snapshot
@@ -142,11 +142,12 @@ def _catalog_after(catalog: dict, packet: dict, proposal: dict) -> dict:
     new_words = []
     for w in proposal.get('relation_words') or []:
         new_words.append(w['type'])
-        data.setdefault('relation_types', []).append(w['type'])
+        data.setdefault('relation_types', []).extend([w['type'], w['inverse']])
         data.setdefault('inverse_relations', {})[w['type']] = w['inverse']
         data['inverse_relations'][w['inverse']] = w['type']
         data.setdefault('relation_gloss', {})[w['type']] = w['gloss']
-        data['relation_gloss'][w['inverse']] = w.get('inverse_gloss') or f'{w["type"]} 的反向'
+        data['relation_gloss'][w['inverse']] = w.get('inverse_gloss') or labels.pages(
+            labels.recorded_language(data))['inverse_gloss'].format(type=w['type'])
     if new_words:
         data.setdefault('domain_relations', {})[domain] = new_words
     return validate_catalog(data)
