@@ -30,7 +30,7 @@ from typing import Any, Iterable, Iterator
 
 import yaml
 
-from .. import config
+from .. import config, labels
 from ..cards import HEADINGS
 from .text import tokens
 
@@ -118,20 +118,25 @@ def card_format(vault: Path, language: str | None = None, refs: Iterable[str] | 
                 knowledge_dir: str = DEFAULT_FORMAT.knowledge_dir) -> tuple[CardFormat, str, str]:
     """The card format for a vault, its language, and where the language came from.
 
-    The language is ``language`` when given (the --language flag); else
-    ``[cards] language`` of a loaded config file; else the headings the cards
-    use. ``refs`` are the vault-relative cards a command will touch (default:
-    every card under the knowledge folder). Raises ValueError when those cards
-    use another language's headings and none of the chosen one's, so a wrong
-    setting cannot read every card as empty.
+    The language is ``language`` when given (the --language flag); else the
+    vault's own language (labels.vault_language: the catalog record, else the
+    generated map pages); else ``[cards] language`` when the config file sets
+    it; else the headings the cards use. ``refs`` are the vault-relative cards
+    a command will touch (default: every card under the knowledge folder).
+    Raises ValueError when those cards use another language's headings and
+    none of the chosen one's, so a wrong setting cannot read every card as
+    empty.
     """
     root = Path(vault)
     paths = [root / r for r in refs] if refs is not None else sorted((root / knowledge_dir).rglob("*.md"))
     counts = heading_counts(paths)
     settings = config.current()
+    vault_language = None if language else labels.vault_language(root.absolute())
     if language:
         source = "--language"
-    elif settings.source is not None:
+    elif vault_language:
+        language, source = vault_language, "the vault's language record or map pages"
+    elif settings.card_language_set:
         language, source = settings.card_language, f"[cards] language in {settings.source}"
     elif counts:
         language, source = max(LANGUAGES, key=lambda x: counts[x]), "card headings"

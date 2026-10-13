@@ -19,7 +19,8 @@ audit blocks are written as {"id", "text"} lines for tools/mermaid_check.
 
 The commands that read or write cards in a vault (audit-extract, prune,
 writeback) find the section headings by card language: --language, else
-[cards] language of the config file, else the headings the cards use. pool
+the vault's recorded language (`sb language`), else [cards] language of the
+config file, else the headings the cards use. pool
 reads cards.jsonl, so it follows the language audit-extract used.
 audit-extract reads the cards under --knowledge-dir, else [layout] knowledge
 of the config file, else 10_Knowledge.
@@ -240,7 +241,8 @@ def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="python -m secondbrain.diagrams", description=__doc__.split("\n\n")[0])
     sub = p.add_subparsers(dest="cmd", required=True)
     lang = {"choices": audit.LANGUAGES,
-            "help": "card heading language (default: [cards] language of the config file, else the cards' headings)"}
+            "help": "card heading language (default: the vault's language, else [cards] language of the config "
+                    "file, else the cards' headings)"}
     sub.add_parser("schema", help="print the IR JSON Schema")
     s = sub.add_parser("packets", help="cards -> model request packets (pregated cards skipped)")
     s.add_argument("cards", type=Path)

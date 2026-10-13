@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from secondbrain import cards, cli, config
+from secondbrain import cards, cli, config, labels
 from secondbrain.diagrams import audit, rejudge
 from secondbrain.diagrams.__main__ import main
 
@@ -50,6 +50,30 @@ def test_language_from_flag_then_config_then_headings(tmp_path, monkeypatch):
     # only the cards a command touches are looked at
     assert audit.card_format(ZH, refs=[])[1:] == ("en", f"[cards] language in {cfg}")
 
+
+
+def test_vault_language_comes_before_the_config_file(tmp_path, monkeypatch):
+    v = tmp_path / "v"
+    shutil.copytree(ZH, v)
+    _config(tmp_path, monkeypatch, "en")  # on its own it would be refused on these Chinese cards
+    (v / "20_MOCs").mkdir()
+    (v / "20_MOCs" / "Map.md").write_text(labels.MOC["zh"]["page_index"] + "\n", encoding="utf-8")
+    assert audit.card_format(v)[1:] == ("zh", "the vault's language record or map pages")
+    catalog = v / "_data" / "secondbrain" / "catalog.json"
+    catalog.parent.mkdir(parents=True)
+    catalog.write_text(json.dumps({"language": "en"}), encoding="utf-8")  # the record wins over the maps
+    with pytest.raises(ValueError, match="from the vault's language record or map pages"):
+        audit.card_format(v)
+    assert audit.card_format(v, "zh")[1:] == ("zh", "--language")
+
+
+def test_a_config_file_without_a_card_language_does_not_choose_one(tmp_path, monkeypatch):
+    cfg = tmp_path / "sb.toml"
+    cfg.write_text('[layout]\nknowledge = "10_Knowledge"\n', encoding="utf-8")
+    monkeypatch.setenv("SECONDBRAIN_CONFIG", str(cfg))
+    config.activate(None)
+    assert audit.card_format(ZH)[1:] == ("zh", "card headings")
+    assert audit.card_format(EN)[1:] == ("en", "card headings")
 
 def test_extract_reads_english_cards(tmp_path, capsys):
     out = tmp_path / "audit"
