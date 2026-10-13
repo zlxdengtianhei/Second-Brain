@@ -261,7 +261,8 @@ def tier(cards: Iterable[dict[str, Any]], checks: Iterable[dict[str, Any]],
         report.counts[t] += 1
         report.why[t][why] += 1
         entry = {"tier": t, "why": why, "kind": card["kind"], "domain": card["domain"],
-                 "n_props": len(card["propositions"]), "sha256": card["sha256"], "ok": bool(check.get("ok"))}
+                 "n_props": len(card["propositions"]), "has_essence": bool(card["essence"].strip()),
+                 "sha256": card["sha256"], "ok": bool(check.get("ok"))}
         if check.get("ok"):
             entry.update({k: check.get(k) for k in ("type", "direction", "width", "height")})
         report.cards[card["ref"]] = entry

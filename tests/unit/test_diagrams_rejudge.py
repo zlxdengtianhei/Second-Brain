@@ -14,7 +14,7 @@ VAULT = Path(__file__).resolve().parents[1] / "fixtures" / "diagrams" / "vault"
 TCP = "10_Knowledge/networking/TCP 三次握手.md"
 BUBBLE = "10_Knowledge/algorithms/冒泡排序.md"
 DRINKS = "10_Knowledge/beverages/茶与咖啡的提神方式.md"
-NEW = "%% diagram v1 props=P1,P2 sha=0123abcd\nflowchart TB\n  n1[\"客户端\"] -->|\"SYN\"| n2[\"服务器\"]"
+NEW = "%% diagram v1 props=E,P1,P2 sha=0123abcd\nflowchart TB\n  n1[\"客户端\"] -->|\"SYN\"| n2[\"服务器\"]"
 
 TIERS = {
     "a.md": {"tier": "review", "why": "no_gain", "kind": "mechanism", "n_props": 1, "sha256": "1", "ok": True},
@@ -174,3 +174,95 @@ def test_cli_pool_and_writeback(tmp_path, capsys):
     assert NEW in (tmp_path / "v" / TCP).read_text(encoding="utf-8")
     replaced = [json.loads(x) for x in (out / "writeback_mermaid.jsonl").read_text(encoding="utf-8").splitlines()]
     assert replaced == [{"id": TCP, "text": NEW}]
+
+
+def _marked(props: str) -> str:
+    return f"%% diagram v1 props={props} sha=0123abcd\nflowchart TB\n  n1[\"a\"] --> n2[\"b\"]"
+
+
+def test_new_diagram_must_carry_e_to_replace_a_renderable_old_one():
+    assert rejudge.strong_enough(_marked("E,P1,P2"), 3)
+    assert not rejudge.strong_enough(_marked("P1,P2,P3"), 3)       # no E
+    assert not rejudge.strong_enough(_marked("E,P2"), 3)           # one side proposition
+    assert rejudge.strong_enough(_marked("E,P1"), 1)
+    assert rejudge.strong_enough(_marked("P1,P2"), 2, has_essence=False)
+    assert not rejudge.strong_enough("flowchart TB\n  a --> b", 1)  # no marker
+    pool = rejudge.select_pool(TIERS)
+    acts = {a["ref"]: (a["rule"], a["action"]) for a in rejudge.plan(pool, [
+        {"ref": "a.md", "status": "draw", "mermaid": _marked("P1")},   # old renders: weak draw keeps it
+        {"ref": "b.md", "status": "draw", "mermaid": _marked("P1")},   # old broken: any valid draw replaces
+    ])}
+    assert acts["a.md"] == ("draw:weak", "keep_old") and acts["b.md"] == ("draw", "replace")
+
+
+def test_old_audit_removes_only_old_diagrams_that_would_stay():
+    pool = rejudge.select_pool(TIERS)
+    outcomes = [{"ref": "a.md", "status": "skip"}, {"ref": "b.md", "status": "skip"},
+                {"ref": "h.md", "status": "draw", "mermaid": _marked("E,P1,P2")}]
+    audits = [{"ref": "a.md", "verdict": "remove", "category": "restates", "reason": "chain"},
+              {"ref": "b.md", "verdict": "keep", "category": "useful"},
+              {"ref": "h.md", "verdict": "remove", "category": "misleading"}]
+    acts = {a["ref"]: (a["rule"], a["action"]) for a in rejudge.plan(pool, outcomes, audits=audits)}
+    assert acts["a.md"] == ("audit:restates", "remove")
+    assert acts["b.md"] == ("skip:old_broken", "remove")   # broken: removed anyway, audit not consulted
+    assert acts["h.md"] == ("draw", "replace")              # replaced: audit not consulted
+    kept = rejudge.plan(pool, outcomes, audits=[{"ref": "a.md", "verdict": "keep", "category": "useful"}])
+    assert next(a for a in kept if a["ref"] == "a.md")["rule"] == "audit:useful"
+
+
+def test_audit_candidates_before_and_after_the_draw_step():
+    pool = rejudge.select_pool(TIERS)
+    assert [p["ref"] for p in rejudge.audit_candidates(pool)] == ["a.md", "h.md"]
+    flipped = rejudge.WritebackPolicy(delete_review_on_skip="keep")
+    assert [p["ref"] for p in rejudge.audit_candidates(pool, policy=flipped)] == ["a.md", "c.md", "h.md"]
+    after = rejudge.audit_candidates(pool, [{"ref": "a.md", "status": "draw", "mermaid": _marked("E,P1")},
+                                            {"ref": "h.md", "status": "skip"}])
+    assert [p["ref"] for p in after] == ["h.md"]
+
+
+def test_cli_holdout_list_with_old_audit(tmp_path, capsys):
+    shutil.copytree(VAULT, tmp_path / "v")
+    out = tmp_path / "audit"
+    main(["audit-extract", str(tmp_path / "v"), str(out)])
+    checks = [{"id": f"{TCP}#0", "ok": True, "type": "flowchart-v2", "direction": "LR", "width": 500,
+               "nodes": [{"id": "c", "label": "客户端", "shape": "square"}, {"id": "s", "label": "服务器", "shape": "square"}],
+               "edges": [{"from": "c", "to": "s", "label": "SYN"}, {"from": "s", "to": "c", "label": "SYN+ACK"},
+                         {"from": "c", "to": "s", "label": "ACK"}]},
+              {"id": f"{BUBBLE}#0", "ok": False, "error": "Parse error"}]
+    (out / "checks.jsonl").write_text("".join(json.dumps(c, ensure_ascii=False) + "\n" for c in checks),
+                                      encoding="utf-8")
+    main(["audit-tier", str(out)])
+    refs = tmp_path / "refs.txt"
+    refs.write_text(f"# holdout\n{TCP}\n10_Knowledge/not/in-pool.md\n", encoding="utf-8")
+    run = tmp_path / "run"
+    run.mkdir()
+    capsys.readouterr()
+    main(["pool", str(out), "--refs", str(refs), "--out", str(run / "pool.jsonl")])
+    assert json.loads(capsys.readouterr().out) == {"review": 1, "not_in_pool": 1}
+    pool = [json.loads(x) for x in (run / "pool.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert [(p["ref"], p["old_diagram"]) for p in pool] == [(TCP, "renders")]
+    assert pool[0]["old_mermaid"].startswith("flowchart LR")
+
+    main(["packets", str(run / "pool.jsonl"), str(run / "draw")])
+    draw_packet = json.loads((run / "draw" / "packet-001.json").read_text(encoding="utf-8"))
+    assert draw_packet["input"]["cards"][0]["old_diagram"] == "renders"
+    assert "old_mermaid" not in draw_packet["input"]["cards"][0]
+    main(["old-audit-packets", str(run / "pool.jsonl"), str(run / "old")])
+    assert json.loads(capsys.readouterr().out.strip().splitlines()[-1])["audited"] == 1
+    old_packet = json.loads((run / "old" / "old-audit-001.json").read_text(encoding="utf-8"))
+    assert old_packet["input"]["cards"][0]["old_mermaid"].startswith("flowchart LR")
+
+    (run / "draw" / "packet-001.answer.json").write_text(json.dumps(
+        {"results": [{"ref": TCP, "ir": {"decision": "skip", "reason": "short sequence"}}]}), encoding="utf-8")
+    main(["apply", str(run / "pool.jsonl"), str(run / "draw" / "packet-001.answer.json"), "--out", str(run / "r0")])
+    (run / "old" / "old-audit-001.answer.json").write_text(json.dumps(
+        {"results": [{"ref": TCP, "verdict": "remove", "category": "restates", "reason": "three arrows in order"}]}),
+        encoding="utf-8")
+    main(["old-audit-apply", str(run / "old" / "old-audit-001.answer.json"), "--out", str(run / "old")])
+    capsys.readouterr()
+    main(["writeback", str(tmp_path / "v"), str(out), str(run / "r0" / "outcomes.jsonl"),
+          "--old-audit", str(run / "old" / "old_audit_outcomes.jsonl"), "--refs", str(refs), "--write"])
+    done = json.loads(capsys.readouterr().out)
+    assert done["by_pool_reason"] == {"review": {"audit:restates→remove": 1}}
+    assert "## 图" not in (tmp_path / "v" / TCP).read_text(encoding="utf-8")
+    assert "## 图" in (tmp_path / "v" / BUBBLE).read_text(encoding="utf-8")  # outside the holdout list

@@ -18,6 +18,14 @@ names the rule that applied):
   does not parse is removed;
 - rewrite still pending, or no outcome: nothing changes.
 
+Two refinements after the second pilot:
+- a new diagram replaces an old one that renders only if it carries the
+  card's key relation: it cites E and, on a card with 2+ propositions, at
+  least 2 of them (read from its marker); otherwise the old one stays
+  (rule draw:weak);
+- an old diagram that stays can be audited (see oldcheck): a verdict of
+  restates or misleading removes it (rules audit:restates, audit:misleading).
+
 Only the diagram section changes, byte for byte. Every write is guarded by the
 file hash recorded at audit time, and nothing is written without write=True.
 """
@@ -31,10 +39,11 @@ from typing import Any, Iterable
 
 from .audit import DEFAULT_FORMAT, CardFormat
 from .prune import PrunePolicy, _diffstat, delete_section
+from .staleness import read_marker
 
 
 def select_pool(tiers: dict[str, dict[str, Any]], policy: PrunePolicy = PrunePolicy()) -> list[dict[str, Any]]:
-    """Pool rows in ref order: ref, pool_reason, domain, tier_why, old_parses, sha256."""
+    """Pool rows in ref order: ref, pool_reason, domain, tier_why, n_props, old_parses, sha256."""
     rows = []
     for ref in sorted(tiers):
         t = tiers[ref]
@@ -47,15 +56,22 @@ def select_pool(tiers: dict[str, dict[str, Any]], policy: PrunePolicy = PrunePol
         else:
             continue
         rows.append({"ref": ref, "pool_reason": reason, "domain": t.get("domain"), "tier_why": t.get("why"),
+                     "n_props": t.get("n_props", 0), "has_essence": t.get("has_essence", True),
                      "old_parses": bool(t["ok"]), "sha256": t["sha256"]})
     return rows
 
 
 def pool_cards(pool: list[dict[str, Any]], cards: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Card records (the packets input format) for the pool, in pool order."""
+    """Card records (the packets input format) for the pool, in pool order.
+
+    old_diagram ("renders" or "broken") goes to the draw packet; old_mermaid
+    is only for the old-diagram audit packet.
+    """
     by_ref = {c["ref"]: c for c in cards}
     fields = ("ref", "title", "kind", "domain", "essence", "propositions", "related_titles")
-    return [{**{k: by_ref[p["ref"]][k] for k in fields}, "pool_reason": p["pool_reason"]} for p in pool]
+    return [{**p, **{k: by_ref[p["ref"]][k] for k in fields},
+             "old_diagram": "renders" if p["old_parses"] else "broken",
+             "old_mermaid": (by_ref[p["ref"]].get("blocks") or [""])[0]} for p in pool]
 
 
 def _section_bounds(lines: list[str], heading: str) -> tuple[int, int] | None:
@@ -117,16 +133,45 @@ def _skip_rule(p: dict[str, Any], policy: WritebackPolicy) -> tuple[str, str]:
     return ("keep_old", "skip:old_parses") if p["old_parses"] else ("remove", "skip:old_broken")
 
 
+def strong_enough(mermaid: str, n_props: int, has_essence: bool = True) -> bool:
+    """Whether a new diagram may replace an old one that renders.
+
+    It must cite E (when the card has an essence) and at least 2 propositions
+    (or all of them, if the card has fewer), read from its marker line.
+    """
+    m = read_marker(mermaid)
+    if m is None:
+        return False
+    props = [r for r in m.props if r != "E"]
+    return ("E" in m.props or not has_essence) and len(props) >= min(2, n_props)
+
+
+def audit_candidates(pool: list[dict[str, Any]], outcomes: Iterable[dict[str, Any]] | None = None,
+                     policy: WritebackPolicy = WritebackPolicy()) -> list[dict[str, Any]]:
+    """Pool rows whose old diagram would stay: the cards the old-diagram audit is for.
+
+    With outcomes: the rows planned as keep_old. Without: every row that a
+    skip would leave as keep_old, so the audit can run beside the draw step.
+    """
+    if outcomes is not None:
+        keep = {a["ref"] for a in plan(pool, outcomes, policy) if a["action"] == "keep_old"}
+        return [p for p in pool if p["ref"] in keep]
+    return [p for p in pool if _skip_rule(p, policy)[0] == "keep_old"]
+
+
 def plan(pool: list[dict[str, Any]], outcomes: Iterable[dict[str, Any]],
-         policy: WritebackPolicy = WritebackPolicy()) -> list[dict[str, Any]]:
+         policy: WritebackPolicy = WritebackPolicy(),
+         audits: Iterable[dict[str, Any]] = ()) -> list[dict[str, Any]]:
     """One action per pool card plus a refusal per outcome outside the pool.
 
     Later outcomes for the same ref replace earlier ones, so pass round 0
-    before the rewrite round.
+    before the rewrite round. audits are old-diagram audit outcomes; they only
+    act on cards whose old diagram would otherwise stay.
     """
     final: dict[str, dict[str, Any]] = {}
     for o in outcomes:
         final[o["ref"]] = o
+    verdicts = {v["ref"]: v for v in audits}
     in_pool = {p["ref"] for p in pool}
     actions = []
     for p in pool:
@@ -135,11 +180,20 @@ def plan(pool: list[dict[str, Any]], outcomes: Iterable[dict[str, Any]],
         if o is None or o.get("status") not in ("draw", "skip"):
             actions.append({**row, "action": "pending", "rule": "pending",
                             "status_in": o.get("status") if o else None})
-        elif o["status"] == "draw" and o.get("mermaid"):
+        elif o["status"] == "draw" and o.get("mermaid") and (
+                not p["old_parses"] or strong_enough(o["mermaid"], p.get("n_props", 0), p.get("has_essence", True))):
             actions.append({**row, "action": "replace", "rule": "draw", "mermaid": o["mermaid"]})
         else:
-            action, rule = _skip_rule(p, policy)
-            actions.append({**row, "action": action, "rule": rule, "reason": o.get("reason", "")})
+            if o["status"] == "draw":
+                action, rule = "keep_old", "draw:weak"
+            else:
+                action, rule = _skip_rule(p, policy)
+            v = verdicts.get(p["ref"])
+            if action == "keep_old" and v:
+                rule = f"audit:{v['category']}"
+                if v["verdict"] == "remove":
+                    action = "remove"
+            actions.append({**row, "action": action, "rule": rule, "reason": (v or o).get("reason", "")})
     for ref in sorted(set(final) - in_pool):
         actions.append({"ref": ref, "action": "not_in_pool", "rule": "not_in_pool",
                         "status_in": final[ref].get("status")})
