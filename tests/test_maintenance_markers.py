@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import date
 import re
 
+import pytest
+
+from secondbrain import config
 from secondbrain.projections import generate
-from tests.helpers import build_vault
+from tests.helpers import ENTRY_DOCS_LAYOUT, build_vault
 
 DAY = date(2026, 9, 7)
 NAMES = ('kb-stats', 'secondbrain-entry', 'kb-dirs')
@@ -29,7 +33,7 @@ def _mask_controlled(raw):
 
 
 def test_cross_name_nesting_and_bad_end_issue_without_writes(tmp_path):
-    root = build_vault(tmp_path)
+    root = build_vault(tmp_path, lay=ENTRY_DOCS_LAYOUT)
     good = f'head\n{_block("kb-stats", _block("secondbrain-entry"))}\n{_block("kb-dirs")}\n'.encode()
     bad_end = f'head\n{_block("kb-stats")}\n<!-- GENERATED:END secondbrain-entry -->\n{_block("kb-dirs")}\n'.encode()
     _docs(root, good, bad_end)
@@ -42,7 +46,7 @@ def test_cross_name_nesting_and_bad_end_issue_without_writes(tmp_path):
 
 
 def test_duplicate_name_and_isolated_end_are_rejected(tmp_path):
-    root = build_vault(tmp_path)
+    root = build_vault(tmp_path, lay=ENTRY_DOCS_LAYOUT)
     guide = (f'head\n{_block("kb-stats")}\n{_block("kb-stats")}\n'
              f'{_block("kb-dirs")}\n<!-- GENERATED:END secondbrain-entry -->\n').encode()
     _docs(root, guide)
@@ -55,7 +59,7 @@ def test_duplicate_name_and_isolated_end_are_rejected(tmp_path):
 
 
 def test_existing_entry_preserves_all_bytes_after_each_controlled_end(tmp_path):
-    root = build_vault(tmp_path)
+    root = build_vault(tmp_path, lay=ENTRY_DOCS_LAYOUT)
     body = ('prefix\r\n' + _block('kb-stats', 'stats') + '\r\n'
             + _block('secondbrain-entry', 'entry') + '\r\n'
             + _block('kb-dirs', 'dirs') + '\r\n\r\nTAIL\r\n').encode()
@@ -71,7 +75,7 @@ def test_existing_entry_preserves_all_bytes_after_each_controlled_end(tmp_path):
 
 
 def test_zero_entry_migration_does_not_accumulate_newlines(tmp_path):
-    root = build_vault(tmp_path)
+    root = build_vault(tmp_path, lay=ENTRY_DOCS_LAYOUT)
     text = f'head\n{_block("kb-stats")}\n{_block("kb-dirs")}\nTAIL\n'.encode()
     _docs(root, text)
 
@@ -85,13 +89,16 @@ def test_zero_entry_migration_does_not_accumulate_newlines(tmp_path):
         assert (root / name).read_bytes() == raw
 
 
-def test_three_independent_blocks_update_normally(tmp_path):
-    root = build_vault(tmp_path)
+@pytest.mark.parametrize('language, stats, entry', [('zh', '当前库存', '## 当前操作入口'),
+                                                    ('en', 'Counted on', '## Commands')])
+def test_three_independent_blocks_update_normally(tmp_path, language, stats, entry):
+    config.activate(replace(config.Settings(), card_language=language))
+    root = build_vault(tmp_path, lay=ENTRY_DOCS_LAYOUT)
     text = f'head\n{_block("kb-stats")}\n{_block("secondbrain-entry")}\n{_block("kb-dirs")}\nTAIL\n'.encode()
     _docs(root, text)
 
     result = generate(root, job_id='marker-normal', apply=True, today=DAY)
 
     assert result['status'] == 'applied'
-    assert '当前库存'.encode() in (root / '使用指南.md').read_bytes()
-    assert '当前操作入口'.encode() in (root / '使用指南.md').read_bytes()
+    assert stats.encode() in (root / '使用指南.md').read_bytes()
+    assert entry.encode() in (root / '使用指南.md').read_bytes()

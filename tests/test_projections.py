@@ -1,9 +1,11 @@
+from dataclasses import replace
 from datetime import date
 import json
 
+from secondbrain import config
 from secondbrain.vault import read_snapshot
 from secondbrain.projections import review_projection, entry_projection
-from tests.helpers import build_vault, DOMAIN, EXISTING
+from tests.helpers import ENTRY_DOCS_LAYOUT, build_vault, DOMAIN, EXISTING
 
 
 def test_due_inline_new_and_record_use_distinct_plugin_signals(tmp_path):
@@ -25,14 +27,16 @@ def test_due_inline_new_and_record_use_distinct_plugin_signals(tmp_path):
 
 
 def test_doc_marker_update_preserves_other_user_prose(tmp_path):
-    root = build_vault(tmp_path)
+    config.activate(replace(config.Settings(), card_language='zh'))
+    root = build_vault(tmp_path, lay=ENTRY_DOCS_LAYOUT)
     (root / '使用指南.md').write_text('Before\n<!-- GENERATED:BEGIN kb-stats -->old<!-- GENERATED:END kb-stats -->\nAfter\n')
     projection = entry_projection(read_snapshot(root), date(2026, 9, 7))
     text = projection.files['使用指南.md'].decode()
     assert text.startswith('Before\n') and text.endswith('\nAfter\n')
     assert '**1 张概念卡**' in text and 'old' not in text
     home = projection.files['HOME.md'].decode()
-    assert 'secondbrain ingest' in home and 'kb add' not in home
+    assert 'sb ingest' in home and 'secondbrain ingest' not in home and 'kb add' not in home
+    assert '[[使用指南]] · [[系统总览]]' in home
 
 
 def test_review_links_count_actual_and_same_transaction_home(tmp_path):

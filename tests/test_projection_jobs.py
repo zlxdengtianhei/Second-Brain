@@ -88,7 +88,8 @@ def test_daily_apply_through_real_cli(tmp_path):
     job_id = applied["job_id"]
     applied_paths = applied["applied_paths"]
     assert applied_paths and "HOME.md" in applied_paths
-    assert any(p.startswith("50_Reviews/今日复习-") for p in applied_paths)
+    assert any(p.startswith("50_Reviews/Daily review ") for p in applied_paths)
+    assert "使用指南.md" not in applied_paths  # no entry docs unless [layout] entry_docs lists them
     assert_projection_paths(applied_paths)
     assert (root / "HOME.md").is_file()
 
@@ -129,7 +130,7 @@ def test_interrupted_projection_resumes_frozen_date_and_stays_in_bounds(tmp_path
     intent = json.loads((store.state_root(root) / jobs.location(job_id, "commit-intent.json")).read_text())
     assert intent["projection"] is True
     assert "candidate_sha256" not in intent and "review_sha256" not in intent
-    review_rel = "50_Reviews/今日复习-2026-09-07.md"
+    review_rel = "50_Reviews/Daily review 2026-09-07.md"
     assert (root / review_rel).is_file()
     review_before = (root / review_rel).read_bytes()
     home_before = (root / "HOME.md").read_bytes()
@@ -142,7 +143,7 @@ def test_interrupted_projection_resumes_frozen_date_and_stays_in_bounds(tmp_path
     assert resumed["applied_paths"]
     assert (root / review_rel).read_bytes() == review_before
     assert (root / "HOME.md").read_bytes() == home_before
-    assert not (root / "50_Reviews" / "今日复习-2026-09-08.md").exists()
+    assert not (root / "50_Reviews" / "Daily review 2026-09-08.md").exists()
     # A second resume is idempotent: terminal state is returned, nothing rewritten.
     again = jobs.resume_transaction(root, job_id)
     assert again["status"] == "applied"

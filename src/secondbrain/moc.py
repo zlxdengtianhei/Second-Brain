@@ -30,6 +30,8 @@ import heapq
 import re
 from dataclasses import dataclass
 
+from . import labels
+
 _PREREQ_TYPES = frozenset(("depends_on", "follows", "required_by", "precedes"))
 
 MOC_ROOT = "20_MOCs"
@@ -39,7 +41,6 @@ MAX_LINES = 300    # estimated visual lines target (with margin)
 MAX_CARDS = 120    # hard card cap
 MAX_TOPIC = 25     # a single topic's cards listed on one page
 
-RESIDUAL_LABEL = "待分类"
 #: Frontmatter on domain and pillar pages: Breadcrumbs reads their list
 #: items as "down" links, so MOC pages form the hierarchy above the cards.
 BC_FRONTMATTER = "---\nBC-list-note-field: down\n---\n"
@@ -94,7 +95,7 @@ def _pillar_filename(order, stem, page):
 # Wiki links (vault-root relative path + alias to avoid name collisions)
 # --------------------------------------------------------------------------
 def _alias(title):
-    t = str(title).replace("|", "／").replace("[", "").replace("]", "")
+    t = str(title).replace("|", labels.moc()["alias_pipe"]).replace("[", "").replace("]", "")
     return t
 
 
@@ -214,18 +215,19 @@ def _classify(card, pillar_topics):
     missing pillar/topic is *unclassified*; a pillar or topic not in this MOC's
     taxonomy is *illegal* (kept here so the residual lists it, never dropped).
     """
+    L = labels.moc()
     p = card.fm.get("pillar")
     t = card.fm.get("topic")
     if not p and not t:
-        return "missing", "缺pillar/topic"
+        return "missing", L["missing_both"]
     if not p:
-        return "missing", "缺pillar"
+        return "missing", L["missing_pillar"]
     if not t:
-        return "missing", "缺topic"
+        return "missing", L["missing_topic"]
     if p not in pillar_topics:
-        return "invalid", "pillar=%r 不在本 MOC taxonomy" % (p,)
+        return "invalid", L["bad_pillar"] % (p,)
     if t not in pillar_topics[p]:
-        return "invalid", "topic=%r 不属于 pillar=%r" % (t, p)
+        return "invalid", L["bad_topic"] % (t, p)
     return "classified", None
 
 
@@ -327,9 +329,11 @@ def _card_line(card, ctx, cur_moc, domain_to_moc):
     """One card line: link + compact inline relation annotation.
 
     Every relation type present is shown (none silently dropped); target links
-    use the vault-relative path + alias; a target in a *different* MOC is marked
-    ``［跨域→…］`` so a prerequisite / bridge keeps its contextual meaning.
+    use the vault-relative path + alias; a target in a *different* MOC carries the
+    ``cross_map`` label (``［跨域→…］`` in zh) so a prerequisite / bridge keeps its
+    contextual meaning.
     """
+    L = labels.moc()
     parts = [_link(card.path, card.title)]
     per_type = {}
     for rel in _relations(card):
@@ -341,21 +345,22 @@ def _card_line(card, ctx, cur_moc, domain_to_moc):
         for tgt in sorted(per_type[typ]):
             rpath, rtitle, tdom = ctx[tgt]
             tmoc = domain_to_moc.get(tdom)
-            suffix = "" if tmoc == cur_moc else "［跨域→%s］" % (tmoc or tdom)
+            suffix = "" if tmoc == cur_moc else L["cross_map"] % (tmoc or tdom)
             toks.append(_link(rpath, rtitle) + suffix)
-        parts.append("%s→ %s" % (typ, "；".join(toks)))
-    return "- " + "　".join(parts)
+        parts.append("%s→ %s" % (typ, L["target_sep"].join(toks)))
+    return "- " + L["card_sep"].join(parts)
 
 
 def _render_residual(moc_title, header, chunk, root_rel, ctx, domain_to_moc):
-    text = ["# %s · 待分类与非法分类" % moc_title, "", header, ""]
+    L = labels.moc()
+    text = [L["residual_title"] % moc_title, "", header, ""]
     for card, note in chunk:
-        text.append(_card_line(card, ctx, moc_title, domain_to_moc) + "　_%s_" % note)
+        text.append(_card_line(card, ctx, moc_title, domain_to_moc) + L["card_sep"] + "_%s_" % note)
     text.append("")
     text.append("---")
-    text.append("## 本页导航")
+    text.append(L["navigation"])
     text.append("")
-    text.append(_link(root_rel, "回域入口"))
+    text.append(_link(root_rel, L["back_to_root"]))
     text.append("")
     return "\n".join(text) + "\n"
 
@@ -363,31 +368,30 @@ def _render_residual(moc_title, header, chunk, root_rel, ctx, domain_to_moc):
 def _render_root(moc_title, moc_domains, narrative, pillars, pillar_counts,
                  pillar_links, residual_link_label, residual_total, bridges,
                  root_rel, flat_page_links):
+    L = labels.moc()
     text = [BC_FRONTMATTER + "# %s" % moc_title, ""]
-    text.append("_本 MOC 覆盖：%s ｜ 生成页 %d（含本页）_"
-                % ("、".join(moc_domains), len(flat_page_links) + 1))
+    text.append(L["covers"] % (L["domain_sep"].join(moc_domains), len(flat_page_links) + 1))
     text.append("")
     if narrative:
-        text.append("## 叙事")
+        text.append(L["narrative"])
         text.append("")
         text.append(narrative)
         text.append("")
-    text.append("## 支柱")
+    text.append(L["pillars"])
     text.append("")
     for (name, order), count in pillar_counts.items():
         links = pillar_links[(name, order)]
         l0 = _link(links[0], "%02d·%s" % (order, name))
-        line = "- %s（%d 卡）" % (l0, count)
+        line = L["pillar_line"] % (l0, count)
         if len(links) > 1:
             extra = " · ".join(_link(p, "p%d" % i) for i, p in enumerate(links, 1))
-            line += "　分页：" + extra
+            line += L["pages"] + extra
         text.append(line)
     if residual_total:
-        text.append("- %s（%d 卡，待分类＋非法分类）"
-                    % (_link(residual_link_label[1], RESIDUAL_LABEL), residual_total))
+        text.append(L["residual_line"] % (_link(residual_link_label[1], L["residual"]), residual_total))
     text.append("")
     if bridges:
-        text.append("## 相关 MOC 桥")
+        text.append(L["bridges"])
         text.append("")
         for br in bridges:
             if not isinstance(br, dict):
@@ -396,15 +400,15 @@ def _render_root(moc_title, moc_domains, narrative, pillars, pillar_counts,
             bw = br.get("why") or ""
             blinks = br.get("links")
             blinks = [b for b in (blinks if isinstance(blinks, list) else []) if isinstance(b, str)]
-            text.append("- **%s**" % (bmoc if bmoc else "（未知）"))
+            text.append("- **%s**" % (bmoc if bmoc else L["unknown"]))
             if bw:
                 text.append("  %s" % bw)
             for b in blinks:
                 text.append("  - %s" % b)
             text.append("")
-    text.append("## 分页索引（全部可达）")
+    text.append(L["page_index"])
     text.append("")
-    text.append("- [[%s|本页 · 域入口]]" % root_rel)
+    text.append(L["this_page"] % root_rel)
     for label, rel in flat_page_links:
         text.append("- [[%s|%s]]" % (rel, label))
     text.append("")
@@ -473,7 +477,7 @@ def _process_moc(snapshot, moc_title, moc_domains, domain_to_moc, issues):
             cards_n = sum(len(c) for _, c in pg)
             max_topic = max((len(c) for _, c in pg), default=0)
             lines = text.count("\n") + 1
-            flat.append(_PageLink("页 p%d" % pi, rel, order, name, cards_n,
+            flat.append(_PageLink(labels.moc()["page_label"] % pi, rel, order, name, cards_n,
                                   max_topic, lines))
         count = sum(len(v) for k, v in buckets.items() if k[0] == name)
         pillar_counts[(name, order)] = count
@@ -482,25 +486,25 @@ def _process_moc(snapshot, moc_title, moc_domains, domain_to_moc, issues):
     # Residual pages.
     residual_total = len(missing) + len(invalid)
     residual_page_no = 0
-    for header, group in (("待分类（缺 pillar 或 topic）", missing),
-                          ("非法分类（不属于本 MOC taxonomy）", invalid)):
+    L = labels.moc()
+    for header, group in ((L["missing_header"], missing), (L["invalid_header"], invalid)):
         if not group:
             continue
         for chunk in _chunk_cards(group):
             residual_page_no += 1
-            rel = prefix + _pillar_filename(0, RESIDUAL_LABEL, residual_page_no)
+            rel = prefix + _pillar_filename(0, L["residual"], residual_page_no)
             text = _render_residual(moc_title, header, chunk, root_rel,
                                     ctx, domain_to_moc)
             files[rel] = text.encode("utf-8")
             lines = text.count("\n") + 1
-            flat.append(_PageLink("%s #%d" % (RESIDUAL_LABEL, residual_page_no), rel,
+            flat.append(_PageLink("%s #%d" % (L["residual"], residual_page_no), rel,
                                   None, None, len(chunk), 0, lines))
 
     # Root page.
     flat_links = [(pl.label, pl.relpath) for pl in flat]
     residual_link = None
     for pl in flat:
-        if pl.label.startswith(RESIDUAL_LABEL):
+        if pl.label.startswith(L["residual"]):
             residual_link = (pl.label, pl.relpath)
             break
     root_text = _render_root(moc_title, moc_domains, narrative, pillars,
@@ -532,16 +536,17 @@ def _process_moc(snapshot, moc_title, moc_domains, domain_to_moc, issues):
 
 def _render_pillar_pages_here(rel, moc_title, pname, why, pg, page_idx, total,
                               root_rel, ctx, domain_to_moc, order, stem):
+    L = labels.moc()
     text = [BC_FRONTMATTER + "# %s · %s" % (moc_title, pname), ""]
     if total > 1:
-        text.append("_支柱分页 %d/%d（页码是浏览切片，不是新语义层）_" % (page_idx, total))
+        text.append(L["pillar_page"] % (page_idx, total))
         text.append("")
     if why and page_idx == 1:
         text.append(why)
         text.append("")
     for i, (topic, cards) in enumerate(pg):
         continued = any(t == topic for t, _ in pg[:i])
-        text.append("## %s%s" % (topic, "（承接上一页）" if continued else ""))
+        text.append("## %s%s" % (topic, L["continued"] if continued else ""))
         text.append("")
         for card in cards:
             text.append(_card_line(card, ctx, moc_title, domain_to_moc))
@@ -553,11 +558,11 @@ def _render_pillar_pages_here(rel, moc_title, pname, why, pg, page_idx, total,
     if page_idx < total:
         next_page = "%s/%s" % (dirpart, _pillar_filename(order, _pillar_stem(pname), page_idx + 1))
     text.append("---")
-    text.append("## 本页导航")
+    text.append(L["navigation"])
     text.append("")
-    cols = ["⟵ 上一页（无）" if prev is None else _link(prev, "上一页"),
-            "⟶ 下一页（末页）" if next_page is None else _link(next_page, "下一页"),
-            _link(root_rel, "回域入口")]
+    cols = [L["no_previous"] if prev is None else _link(prev, L["previous"]),
+            L["no_next"] if next_page is None else _link(next_page, L["next"]),
+            _link(root_rel, L["back_to_root"])]
     text.append(" · ".join(cols))
     text.append("")
     return "\n".join(text) + "\n"

@@ -159,7 +159,8 @@ def test_ingest_acceptance_list(tmp_path, lay, language):
                   if p == f'{lay.mocs}/{MOC}.md' or p.startswith(f'{lay.mocs}/{MOC}/')}
     assert moc_files(root, lay, MOC) != moc_before
     home = after[lay.home].decode('utf-8')
-    assert f'{len(snap.cards)} 张概念卡' in home
+    assert {'zh': f'**{len(snap.cards)} 张概念卡**', 'en': f'**cards: {len(snap.cards)}**'}[language] in home
+    assert {'zh': '## 支柱', 'en': '## Pillars'}[language] in after[f'{lay.mocs}/{MOC}.md'].decode('utf-8')
     changed = {p for p in set(before) | set(after) if before.get(p) != after.get(p)}
     assert {p for p in changed if p.startswith(lay.mocs + '/') and not lay.is_taxonomy_file(p)}
     assert not any(p.startswith(f'{lay.mocs}/{OTHER_MOC}') for p in changed)

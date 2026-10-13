@@ -32,6 +32,10 @@ TAXONOMY = {"title": MOC, "narrative": "n",
             "pillars": [{"name": PILLAR, "order": 1, "why": "w", "topics": [TOPIC]}]}
 
 
+#: Default folders plus the two hand-written entry docs of the original (Chinese) vault,
+#: whose generated marker blocks `sb docs` refreshes.
+ENTRY_DOCS_LAYOUT = layouts.VaultLayout(entry_docs=('使用指南.md', '系统总览.md'))
+
 #: A complete non-default layout used to prove folder names are configuration.
 CUSTOM_LAYOUT = layouts.VaultLayout(knowledge="Cards", mocs="Maps", taxonomy="Maps/taxonomy",
                                     sources="Library/sources", inbox="Inbox", reviews="Daily",

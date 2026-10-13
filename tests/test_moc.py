@@ -19,7 +19,7 @@ from __future__ import annotations
 import re
 
 from secondbrain.vault import Card, Snapshot
-from secondbrain import moc
+from secondbrain import labels, moc
 
 
 # --------------------------------------------------------------------------
@@ -219,8 +219,9 @@ def test_real_taxonomy_fragment_read_only_classification():
     assert m["unclassified"] == 1
     text = page_texts(proj)
     # The illegal card is listed in a residual page (its pillar is unknown).
+    residual = labels.moc()["residual"]
     residual_text = "".join(t for k, t in text.items()
-                            if k.endswith("/00待分类--01.md") or k.endswith("/00待分类--02.md"))
+                            if k.endswith("/00%s--01.md" % residual) or k.endswith("/00%s--02.md" % residual))
     assert "不存在的支柱" in residual_text
     # Illegal classifications are surfaced as issues (and never dropped).
     codes = [i["code"] for i in proj.issues]
@@ -286,7 +287,7 @@ def test_1781_card_pileup_no_card_lost_and_pagination():
             assert pg["path"] in root_text, "page %s missing from %s root index" % (pg["path"], mname)
 
     # Unclassified cards spread over several residual pages (page cap honoured).
-    residual_pages = [pg for pg in big["pages"] if pg["label"].startswith("待分类")]
+    residual_pages = [pg for pg in big["pages"] if pg["label"].startswith(labels.moc()["residual"])]
     assert len(residual_pages) >= (N - classified + 119) // 120
 
 

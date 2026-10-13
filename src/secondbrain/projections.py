@@ -7,7 +7,7 @@ from collections import Counter
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
-from . import jobs
+from . import jobs, labels
 from .classification import projection_changes, writable_snapshot, snapshot_checks
 from .moc import Projection, build_mocs, learning_order
 from .store import Conflict, digest, read_bytes
@@ -41,11 +41,16 @@ def _record_checks(checks, reads, *, exclude=()):
 
 _CONTROLLED_MARKERS = ('kb-stats', 'secondbrain-entry', 'kb-dirs')
 
-ENTRY_BLOCK = ['<!-- GENERATED:BEGIN secondbrain-entry -->', '## 当前操作入口', '',
-               '使用 `sb`：`sb status` 查库存，`sb inbox` 看待办，`sb ingest <文件>` 录入，`sb classify --domain <域>` 分类，',
-               '`sb refresh --apply` 刷新 MOC，`sb today --apply` 生成今日复习，`sb job list` 查看未完成任务。',
-               '这些命令不自动打开 Obsidian；生成后从 HOME 或左侧目录打开。',
-               '<!-- GENERATED:END secondbrain-entry -->']
+
+def entry_block(lang: str | None = None) -> list[str]:
+    """The controlled command block kept up to date inside the configured entry documents."""
+    return ['<!-- GENERATED:BEGIN secondbrain-entry -->', *labels.pages(lang)['entry_block'],
+            '<!-- GENERATED:END secondbrain-entry -->']
+
+
+def review_page(lay, today) -> str:
+    """Vault path of the daily review page for ``today`` (name follows the language)."""
+    return f'{lay.reviews}/{labels.pages()["review_page"].format(date=today)}.md'
 
 
 def _scan_markers(text):
@@ -168,18 +173,20 @@ def review_projection(snapshot, today: date, *, extra_targets=(), generated_at=N
               'inline_due_total': sum(r['due_count'] for r in inline), 'new_notes': len(new), 'sr_unparsed': len(unparsed)}
     state = {'date': today.isoformat(), 'due_notes': whole, 'due_inline': inline, 'new_notes': new_rows,
              'counts': counts, 'issues': cycles + unparsed, 'generated_by': 'secondbrain'}
-    lines = ['---', f'date: {today.isoformat()}', 'generated_by: secondbrain', '---', '', f'# 今日复习 {today.isoformat()}', '',
-             '先合上笔记复述，再打开核对；在卡片页用 Spaced Repetition 插件评级。', '', f'[[{lay.home[:-3]}|返回首页]]', '']
-    for title, rows, label in [('到期整卡', whole, 'due'), ('到期命题笔记', inline, 'earliest'), ('今日新卡（5张）', new_rows[:5], None)]:
+    T = labels.pages()
+    lines = ['---', f'date: {today.isoformat()}', 'generated_by: secondbrain', '---', '',
+             T['review_title'].format(date=today.isoformat()), '',
+             T['review_intro'], '', f'[[{lay.home[:-3]}|{T["back_home"]}]]', '']
+    for title, rows, label in [(T['due_cards'], whole, 'due'), (T['due_inline'], inline, 'earliest'),
+                               (T['new_today'], new_rows[:5], None)]:
         lines.extend([f'## {title}', ''])
         for r in rows:
             detail = f' · {r[label]}' if label else ''
             lines.append(f'- [[{r["path"]}|{r["title"]}]]{detail}')
         if not rows:
-            lines.append('本项暂无。')
+            lines.append(T['none'])
         lines.append('')
-    lines.extend([f'未开始的新卡共 {len(new_rows)} 张，其余从插件队列继续；不在这页转储整个库。',
-                   f'解析不了的复习日期：{len(unparsed)}。', ''])
+    lines.extend([T['new_left'].format(n=len(new_rows)), T['unparsed'].format(n=len(unparsed)), ''])
     trend = []
     for i in range(6, -1, -1):
         rel = f'{lay.projections}/review_state_{(today - timedelta(days=i)).isoformat()}.json'
@@ -204,7 +211,7 @@ def review_projection(snapshot, today: date, *, extra_targets=(), generated_at=N
             'broken_links': len(broken), 'broken_links_measured': True, 'broken_links_scope': 'review_page',
             'due_count': len(whole) + len(inline), 'new_count': len(new_rows),
             'due_top': [{'title': x['title'], 'due': x['due']} for x in whole[:10]], 'trend_7d': trend}
-    return Projection({f'{lay.reviews}/今日复习-{today}.md': '\n'.join(lines).encode(),
+    return Projection({review_page(lay, today): '\n'.join(lines).encode(),
                        f'{lay.projections}/review_state_{today}.json': jobs.encoded(state),
                        f'{lay.projections}/kb_review.json': jobs.encoded(site)}, counts, cycles + unparsed)
 
@@ -216,19 +223,19 @@ def entry_projection(snapshot, today: date, *, final_paths=(), reads=None) -> Pr
     missing = sum(not c.fm.get('pillar') or not c.fm.get('topic') for c in snapshot.cards.values())
     catalog = snapshot.catalog
     directory_counts = _directory_counts(snapshot.root, final_paths)
-    rows = [f'当前库存（{today} 现算）：**{len(snapshot.cards):,} 张概念卡**，{len(catalog["domains"])} 个域；空分类字段 {missing:,} 张。', '',
-            '| 轨 | 域（卡数） |', '|---|---|']
+    T = labels.pages()
+    rows = [T['inventory'].format(date=today, cards=len(snapshot.cards), domains=len(catalog['domains']),
+                                  missing=missing), '', *T['track_table']]
     for track in catalog['tracks']:
-        rows.append(f'| {track["title"]} | ' + '、'.join(f'{d} {counts[d]}' for d in track['domains']) + ' |')
-    rows += ['', '### 目录（本轮最终路径集合）', '', '| 目录 | 文件数 |', '|---|---|']
+        rows.append(f'| {track["title"]} | ' + T['domain_sep'].join(f'{d} {counts[d]}' for d in track['domains']) + ' |')
+    rows += ['', T['dirs_title'], '', *T['dirs_table']]
     rows += [f'| `{d}/` | {directory_counts[d]:,} |' for d in directory_counts]
-    rows += ['', '> 现值用 `secondbrain status` 查询；完整卡片/策展YAML是真源。']
+    rows += ['', T['stats_note']]
     stats = '\n'.join(rows)
-    home = ['# HOME — SecondBrain', '', '## 现在做什么', '',
-        f'1. [[{lay.reviews}/今日复习-{today}|打开今日复习]]；清单缺失时运行 `secondbrain today --apply`。',
-        '2. 合上笔记复述，再打开卡片核对，用 Spaced Repetition 插件评级。',
-        '3. 新资料用 `secondbrain ingest <文件>`；未解决任务用 `secondbrain status`。', '',
-        ' · '.join(f'[[{name[:-3]}]]' for name in lay.entry_docs), '', '## 领域入口', '']
+    home = [line.format(inbox=lay.inbox) for line in T['home']] + ['']
+    if lay.entry_docs:
+        home += [' · '.join(f'[[{name[:-3]}]]' for name in lay.entry_docs), '']
+    home += [T['domains_title'], '']
     seen = set()
     for track in catalog['tracks']:
         home.extend([f'## {track["title"]}', ''])
@@ -237,12 +244,9 @@ def entry_projection(snapshot, today: date, *, final_paths=(), reads=None) -> Pr
             if title not in seen:
                 seen.add(title)
                 total = sum(counts[x] for x, m in catalog['domains'].items() if m['moc'] == title)
-                home.append(f'- [[{lay.mocs}/{title}|{title}]] · {total} 张')
+                home.append(T['map_line'].format(path=f'{lay.mocs}/{title}', title=title, n=total))
         home.append('')
-    home += ['## 库存', '', stats, '', '## 录入与维护', '',
-        '`secondbrain ingest <文件>`：完整来源 → 分卡与去重 → 分类/关系 → 独立复核 → 事务写入 → MOC。', '',
-        '`secondbrain classify --domain <域>` 处理分类；`secondbrain resume --job <任务>` 恢复；`secondbrain refresh` 预览MOC变化。', '',
-        '缺主题或领域的内容保留具体待办；计数下降不代替语义核验。分类与MOC不会改复习调度字段。', '']
+    home += [T['stats_title'], '', stats, '', *T['maintenance']]
     files = {lay.home: '\n'.join(home).encode()}
     issues = []
     documents = []
@@ -271,16 +275,16 @@ def entry_projection(snapshot, today: date, *, final_paths=(), reads=None) -> Pr
                     'missing_or_duplicate_entry_markers',
                     'missing_or_duplicate_dirs_markers'}
     if not any(issue['code'] in marker_codes for issue in issues):
-        migration = '\n'.join(ENTRY_BLOCK)
         for name, text in documents:
             stats_pattern = r'(?s)(<!-- GENERATED:BEGIN kb-stats -->).*?(<!-- GENERATED:END kb-stats -->)'
-            text = re.sub(stats_pattern, lambda m: m[1] + '\n<!-- 由secondbrain从完整库存生成 -->\n\n' + stats + '\n' + m[2], text, count=1)
+            text = re.sub(stats_pattern, lambda m: m[1] + '\n' + T['stats_marker'] + '\n\n' + stats + '\n' + m[2],
+                          text, count=1)
             dirs_pattern = r'(?s)(<!-- GENERATED:BEGIN kb-dirs -->).*?(<!-- GENERATED:END kb-dirs -->)'
             if re.search(dirs_pattern, text):
-                dirs = ['| 目录 | 现有文件（现算） |', '|---|---|']
+                dirs = list(T['dirs_live_table'])
                 dirs += [f'| `{d}/` | {directory_counts[d]:,} |' for d in directory_counts]
                 text = re.sub(dirs_pattern, lambda m: m[1] + '\n\n' + '\n'.join(dirs) + '\n\n' + m[2], text, count=1)
-            migration = '\n'.join(ENTRY_BLOCK).encode()
+            migration = '\n'.join(entry_block()).encode()
             candidate = _replace_or_insert_entry(text.encode(), migration)
             _validate_generated_document(candidate, name)
             files[name] = candidate
@@ -308,7 +312,7 @@ def _projection_files(snapshot, today, *, reviews, entries, refresh_mocs=False, 
     reads = {}
     lay = _layout(snapshot)
     moc = build_mocs(snapshot) if refresh_mocs else None
-    review_targets = ({f'{lay.reviews}/今日复习-{today}.md',
+    review_targets = ({review_page(lay, today),
                        f'{lay.projections}/review_state_{today}.json',
                        f'{lay.projections}/kb_review.json'} if reviews else set())
     planned = set(moc.files) if moc else set()

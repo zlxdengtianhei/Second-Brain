@@ -170,4 +170,4 @@ def test_stale_projection_cannot_overwrite_another_completed_batch(tmp_path, mon
         c.apply(root, 'first')
     assert b'pillar: null' in path.read_bytes()
     assert b'pillar: null' not in other.read_bytes()
-    assert '空分类字段 1 张' in (root / 'HOME.md').read_text()
+    assert 'without pillar or topic: 1.' in (root / 'HOME.md').read_text()

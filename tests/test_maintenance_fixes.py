@@ -9,7 +9,7 @@ from secondbrain import jobs, projections as p, store
 from secondbrain.cli import main
 from secondbrain.projections import generate
 from secondbrain.vault import read_snapshot
-from tests.helpers import build_vault
+from tests.helpers import ENTRY_DOCS_LAYOUT, build_vault
 
 DAY = date(2026, 9, 7)
 STATS = '<!-- GENERATED:BEGIN kb-stats -->old stats<!-- GENERATED:END kb-stats -->'
@@ -24,7 +24,7 @@ def docs(root, suffix=''):
 
 
 def test_f1_snapshot_card_reread_cannot_overwrite_frozen_hash(tmp_path, monkeypatch):
-    root = build_vault(tmp_path)
+    root = build_vault(tmp_path, lay=ENTRY_DOCS_LAYOUT)
     docs(root)
     card = root / '10_Knowledge/attention/card_exist.md'
     before = card.read_bytes()
@@ -44,7 +44,7 @@ def test_f1_snapshot_card_reread_cannot_overwrite_frozen_hash(tmp_path, monkeypa
 
 
 def test_f2_only_controlled_blocks_change(tmp_path):
-    root = build_vault(tmp_path)
+    root = build_vault(tmp_path, lay=ENTRY_DOCS_LAYOUT)
     prose = '用户手写：`kb today`、`kb stats`。它会生成并直接在 Obsidian 里打开。'
     docs(root, prose)
     before = {name: (root / name).read_bytes() for name in ('使用指南.md', '系统总览.md')}
@@ -57,7 +57,7 @@ def test_f2_only_controlled_blocks_change(tmp_path):
 
 
 def test_f3_bad_markers_block_all_document_writes(tmp_path):
-    root = build_vault(tmp_path)
+    root = build_vault(tmp_path, lay=ENTRY_DOCS_LAYOUT)
     docs(root)
     bad = root / '使用指南.md'
     bad.write_text(bad.read_text() + '<!-- GENERATED:BEGIN secondbrain-entry -->orphan\n', encoding='utf-8')
@@ -68,7 +68,7 @@ def test_f3_bad_markers_block_all_document_writes(tmp_path):
 
 
 def test_f3_duplicate_entry_is_rejected(tmp_path):
-    root = build_vault(tmp_path)
+    root = build_vault(tmp_path, lay=ENTRY_DOCS_LAYOUT)
     docs(root)
     guide = root / '使用指南.md'
     guide.write_text(guide.read_text() + ENTRY + '\n', encoding='utf-8')
@@ -79,7 +79,7 @@ def test_f3_duplicate_entry_is_rejected(tmp_path):
 
 
 def test_f3_duplicate_dirs_and_isolated_begin_are_rejected(tmp_path):
-    root = build_vault(tmp_path)
+    root = build_vault(tmp_path, lay=ENTRY_DOCS_LAYOUT)
     docs(root)
     guide = root / '使用指南.md'
     guide.write_text(guide.read_text() + DIRS + '\n', encoding='utf-8')
@@ -90,7 +90,7 @@ def test_f3_duplicate_dirs_and_isolated_begin_are_rejected(tmp_path):
 
 
 def test_f4_prepared_cli_rebuilds_same_argv_and_rejects_changes(tmp_path, monkeypatch):
-    root = build_vault(tmp_path)
+    root = build_vault(tmp_path, lay=ENTRY_DOCS_LAYOUT)
     docs(root)
     argv = ['--vault', str(root), 'daily', '--date', str(DAY), '--apply', '--job', 'f4']
     original = p._projection_files
@@ -108,7 +108,7 @@ def test_f4_prepared_cli_rebuilds_same_argv_and_rejects_changes(tmp_path, monkey
                                    {'generated_at': 'changed'})):
         other = tmp_path / f'changed-{index}'
         other.mkdir()
-        build_vault(other)
+        build_vault(other, lay=ENTRY_DOCS_LAYOUT)
         docs(other)
         monkeypatch.setattr(p, '_projection_files', lambda *a, **k: (_ for _ in ()).throw(RuntimeError('before intent')))
         with pytest.raises(RuntimeError):
@@ -121,7 +121,7 @@ def test_f4_prepared_cli_rebuilds_same_argv_and_rejects_changes(tmp_path, monkey
 
 
 def test_f5_review_receives_exact_final_target_set(tmp_path, monkeypatch):
-    root = build_vault(tmp_path)
+    root = build_vault(tmp_path, lay=ENTRY_DOCS_LAYOUT)
     docs(root)
     seen = []
     real = p.review_projection
@@ -134,7 +134,7 @@ def test_f5_review_receives_exact_final_target_set(tmp_path, monkeypatch):
     result = generate(root, job_id='f5', apply=False, today=DAY, refresh_mocs=True)
     assert seen
     expected_review = {
-        f'50_Reviews/今日复习-{DAY}.md',
+        f'50_Reviews/Daily review {DAY}.md',
         f'_data/projections/review_state_{DAY}.json',
         '_data/projections/kb_review.json',
     }

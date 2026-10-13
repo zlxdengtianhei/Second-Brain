@@ -69,8 +69,10 @@ def parser():
         q.add_argument('--executor', choices=['api', 'host'], help='Override [executor].default')
     refresh = sub.add_parser('refresh', help='Deterministic MOC projection; preview unless --apply')
     refresh.add_argument('--domain', action='append'); refresh.add_argument('--apply', action='store_true'); refresh.add_argument('--job')
-    for name in ['today', 'docs', 'daily']:
-        q = sub.add_parser(name, help='Review/entry projections; preview unless --apply')
+    for name, text in [('today', "Today's review page"),
+                       ('docs', 'HOME and the generated blocks of [layout] entry_docs'),
+                       ('daily', 'today and docs together')]:
+        q = sub.add_parser(name, help=text + '; preview unless --apply')
         q.add_argument('--apply', action='store_true'); q.add_argument('--job')
     daily = sub.choices['daily']
     daily.add_argument('--refresh-mocs', action='store_true')

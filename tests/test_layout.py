@@ -67,10 +67,11 @@ def test_daily_projection_writes_only_configured_folders(tmp_path):
     result = generate(root, job_id='daily', apply=True, today=date(2026, 10, 13))
     assert result['status'] == 'applied'
     paths = set(result['applied_paths'])
-    assert 'Start.md' in paths and 'Daily/今日复习-2026-10-13.md' in paths
+    assert 'Start.md' in paths and 'Daily/Daily review 2026-10-13.md' in paths
     assert 'meta/projections/review_state_2026-10-13.json' in paths
     assert not any(p.split('/')[0] in DEFAULT_DIRS or p == 'HOME.md' for p in paths)
-    assert f'[[Daily/今日复习-2026-10-13|' in (root / 'Start.md').read_text(encoding='utf-8')
+    assert '[[Start|Back to HOME]]' in (root / 'Daily/Daily review 2026-10-13.md').read_text(encoding='utf-8')
+    assert 'Put new material into `Inbox/`' in (root / 'Start.md').read_text(encoding='utf-8')
 
 
 def test_store_follows_the_layout(tmp_path):
