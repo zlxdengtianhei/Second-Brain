@@ -66,6 +66,25 @@ def test_status_queue_and_an_agent_review(vault, capsys):
     assert code == 2 and '--item must look like' in err
 
 
+def test_queue_order_matches_the_registry_with_taxonomy(vault, capsys):
+    from secondbrain import review_registry, reviews
+    from secondbrain.store import state_root
+    now = reviews.now_local(NOW)
+    snap = read_snapshot(vault)
+    expected = review_registry.queue_report(
+        reviews.review_dir(vault), reviews.card_metas(snap), now, new_per_day=10,
+        taxonomy=review_registry.build_taxonomy(
+            [(f'20_MOCs/_pillars/{moc}.yaml', data) for moc, data in snap.taxonomies.items()]))
+    code, queue, err = run(capsys, vault, 'review', 'queue', '--now', NOW)
+    assert code == 0, err
+    assert [c['id'] for c in queue['cards']] == [c['id'] for c in expected['cards']]
+    assert len(queue['cards']) == len(snap.cards)
+    # the replay cache lives in the state directory, next to the job state, never in the vault
+    cache = reviews.cache_dir(vault)
+    assert cache == state_root(vault).parent / 'review-cache' and cache.is_dir()
+    assert not any('review-state' in p.name for p in vault.rglob('*'))
+
+
 def test_import_spaced_repetition_schedules(vault, capsys):
     snap = read_snapshot(vault)
     card = next(c for c in snap.cards.values() if c.title == 'Lantern queue')

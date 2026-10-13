@@ -17,6 +17,9 @@ from . import layout as layouts
 from .store import state_root
 from .vault import read_snapshot
 
+__all__ = ['cache_dir', 'card_metas', 'import_sr', 'log', 'now_local', 'parse_item', 'queue', 'review_dir',
+           'status', 'taxonomy']
+
 
 def _registry():
     try:
@@ -30,9 +33,10 @@ def review_dir(root: Path) -> Path:
     return Path(root) / layouts.of(root).review_log_dir
 
 
-def _cache_dir(root: Path) -> Path | None:
+def cache_dir(root: Path) -> Path | None:
+    """Replay cache: ``<state dir>/vaults/<vault hash>/review-cache/``, never inside the vault."""
     try:
-        return state_root(root) / 'cache'
+        return state_root(root).parent / 'review-cache'
     except (OSError, ValueError):
         return None
 
@@ -56,7 +60,7 @@ def card_metas(snapshot) -> list:
     return out
 
 
-def _taxonomy(snapshot):
+def taxonomy(snapshot):
     lay = snapshot.layout or layouts.DEFAULT
     docs = [(lay.taxonomy_path(moc), data) for moc, data in sorted(snapshot.taxonomies.items())]
     return _registry().build_taxonomy(docs)
@@ -74,7 +78,7 @@ def now_local(value: str | None = None) -> datetime:
 
 def status(root: Path, now: datetime) -> dict:
     snapshot = read_snapshot(root)
-    return _registry().status_report(review_dir(root), card_metas(snapshot), now, cache_dir=_cache_dir(root))
+    return _registry().status_report(review_dir(root), card_metas(snapshot), now, cache_dir=cache_dir(root))
 
 
 def queue(root: Path, now: datetime, *, new_per_day: int | None = None, domains=(), limit: int | None = None,
@@ -87,8 +91,8 @@ def queue(root: Path, now: datetime, *, new_per_day: int | None = None, domains=
     return rr.queue_report(review_dir(root), card_metas(snapshot), now,
                            new_per_day=rr.DEFAULT_NEW_PER_DAY if new_per_day is None else new_per_day,
                            domains=tuple(domains or ()), read_card=read_card if questions else None,
-                           limit=limit, section=section or default_section(), taxonomy=_taxonomy(snapshot),
-                           cache_dir=_cache_dir(root))
+                           limit=limit, section=section or default_section(), taxonomy=taxonomy(snapshot),
+                           cache_dir=cache_dir(root))
 
 
 def parse_item(text: str) -> dict:
@@ -119,7 +123,7 @@ def log(root: Path, card: str, now: datetime, *, rating: int | None = None, item
         raise ValueError('give --rating or at least one --item')
     return rr.log_review(review_dir(root), card, device=device or rr.default_device_id(), now=now,
                          mode='agent', rating=rating, items=list(items) or None, grader=grader, fmt=fmt,
-                         cache_dir=_cache_dir(root))
+                         cache_dir=cache_dir(root))
 
 
 def import_sr(root: Path, now: datetime, *, device: str | None = None, fmt: str = 'jsonl',
@@ -130,4 +134,4 @@ def import_sr(root: Path, now: datetime, *, device: str | None = None, fmt: str 
     metas = {m.id: m for m in card_metas(snapshot)}
     rows = [(metas[c.id], c.raw.decode('utf-8', errors='replace'), c.fm) for c in snapshot.cards.values()]
     return rr.import_sr(review_dir(root), rows, device=device or rr.default_device_id(), now=now, fmt=fmt,
-                        dry_run=dry_run, cache_dir=_cache_dir(root))
+                        dry_run=dry_run, cache_dir=cache_dir(root))
