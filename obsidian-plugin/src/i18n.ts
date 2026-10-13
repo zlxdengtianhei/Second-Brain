@@ -39,6 +39,11 @@ const zh = {
 	"session.skip": "跳过",
 	"session.done": "完成！本次复习 {n} 张。",
 	"session.next": "下一次：{when}",
+	"time.min": "{n} 分钟",
+	"time.hour": "{n} 小时",
+	"time.day": "{n} 天",
+	"time.month": "{n} 个月",
+	"time.year": "{n} 年",
 	"rating.1": "重来",
 	"rating.2": "困难",
 	"rating.3": "记得",
@@ -131,6 +136,10 @@ export function setLocale(code: string): void {
 
 export function t(key: MessageKey, vars: Record<string, string | number> = {}): string {
 	return (current[key] ?? key).replace(/\{(\w+)\}/g, (_, k: string) => (k in vars ? String(vars[k]) : `{${k}}`));
+}
+
+export function timeUnits() {
+	return { min: t("time.min"), hour: t("time.hour"), day: t("time.day"), month: t("time.month"), year: t("time.year") };
 }
 
 export function ratingLabel(r: number): string {

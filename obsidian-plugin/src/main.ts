@@ -1,8 +1,11 @@
 import { Notice, Plugin, parseYaml, type TAbstractFile, TFile, type WorkspaceLeaf } from "obsidian";
+import { extractReviewItems, sectionText } from "./registry";
 import { t } from "./i18n";
 import { ReviewService } from "./service";
 import { mergeSettings, reviewDir, type ReviewSettings } from "./settings";
+import { type LoadedCard, ReviewModal } from "./ui/review-modal";
 import { TodayBlock, TodayView, VIEW_TODAY } from "./ui/today-view";
+import type { IndexedCard } from "./vault/card-index";
 import { CardIndex } from "./vault/card-index";
 import { EventStore, newDeviceId } from "./vault/event-store";
 import { buildTaxonomy } from "./vault/taxonomy";
@@ -111,7 +114,22 @@ export default class SecondBrainReviewPlugin extends Plugin {
 	}
 
 	async startSession(mode: SessionMode): Promise<void> {
-		new Notice(`${mode}: not implemented yet`);
+		if (!this.service.loaded) await this.service.reload();
+		new ReviewModal(this, mode).open();
+	}
+
+	/** Read a card file and pull out what review and explanation need. */
+	async loadCard(card: IndexedCard): Promise<LoadedCard> {
+		const file = this.app.vault.getAbstractFileByPath(card.path);
+		if (!(file instanceof TFile)) throw new Error(`card file not found: ${card.path}`);
+		const text = await this.app.vault.cachedRead(file);
+		return {
+			card,
+			text,
+			items: extractReviewItems(text, this.settings.reviewSection),
+			essence: sectionText(text, "本质"),
+			propositions: sectionText(text, "命题"),
+		};
 	}
 
 	async explainActive(): Promise<void> {
