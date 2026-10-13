@@ -62,6 +62,9 @@ export function parseStamp(value: unknown): Stamp {
 	const [y, mo, d, h, mi, s] = [1, 2, 3, 4, 5, 6].map((i) => Number(m[i]));
 	const frac = Number((m[7] ?? "").padEnd(3, "0").slice(0, 3));
 	const off = m[8];
+	if (off !== "Z" && off !== "z" && (Number(off.slice(1, 3)) > 23 || Number(off.slice(4, 6)) > 59)) {
+		throw new EventError(`ts has an invalid UTC offset: ${value}`);
+	}
 	const offsetMin = off === "Z" || off === "z" ? 0 : (off[0] === "+" ? 1 : -1) * (Number(off.slice(1, 3)) * 60 + Number(off.slice(4, 6)));
 	const wall = Date.UTC(y, mo - 1, d, h, mi, s, frac);
 	const check = new Date(wall);
@@ -234,14 +237,14 @@ export function parseEvent(obj: unknown, source = "", line = 0): ReviewEvent {
 	return { ts, device, card, mode, rating, raw: obj, source, line, importSeed };
 }
 
-/** Parse one log file's text (.jsonl or .md). */
-export function parseLogText(name: string, text: string): { events: ReviewEvent[]; issues: Issue[] } {
+/** Parse one log file's text (.jsonl or .md), or the tail of it that starts at line `firstLine`. */
+export function parseLogText(name: string, text: string, firstLine = 1): { events: ReviewEvent[]; issues: Issue[] } {
 	const isMd = name.endsWith(".md");
 	const events: ReviewEvent[] = [];
 	const issues: Issue[] = [];
-	const lines = text.replace(/^﻿+/, "").split("\n");
+	const lines = text.replace(/^\uFEFF+/, "").split("\n");
 	lines.forEach((raw, idx) => {
-		const no = idx + 1;
+		const no = idx + firstLine;
 		const line = raw.trim();
 		if (!line) return;
 		if (isMd && !line.startsWith("{")) return;
@@ -255,8 +258,8 @@ export function parseLogText(name: string, text: string): { events: ReviewEvent[
 		try {
 			events.push(parseEvent(obj, name, no));
 		} catch (e) {
-			if (!(e instanceof EventError)) throw e;
-			issues.push({ source: name, line: no, reason: e.message });
+			// One bad line must never stop the replay of the others.
+			issues.push({ source: name, line: no, reason: e instanceof EventError ? e.message : `invalid event: ${String(e)}` });
 		}
 	});
 	return { events, issues };

@@ -15,6 +15,8 @@ export interface DashboardModel {
 	loaded: boolean;
 	date: string;
 	due: number;
+	/** Due today and not reviewed yet today (今日未复习). */
+	dueNotReviewed: number;
 	/** New cards started today, and the daily maximum. */
 	newToday: number;
 	newMax: number;
@@ -59,6 +61,7 @@ export function dashboardModel(
 		loaded: opts.loaded,
 		date: summary.today,
 		due: queue.due.length,
+		dueNotReviewed: summary.totals.dueNotReviewedToday,
 		newToday: summary.newToday,
 		newMax: opts.newPerDay,
 		newLeft: queue.new.length,
@@ -115,6 +118,7 @@ export function renderDashboard(el: HTMLElement, m: DashboardModel, actions: Das
 
 	const stats = el.createDiv({ cls: "sbr-stats" });
 	stat(stats, t("stat.due"), t("stat.cards", { n: m.due }), m.due ? "sbr-accent" : "");
+	stat(stats, t("stat.notReviewed"), t("stat.cards", { n: m.dueNotReviewed }), m.dueNotReviewed ? "sbr-accent" : "");
 	stat(stats, t("stat.new"), t("stat.newQuota", { n: m.newToday, max: m.newMax }));
 	stat(stats, t("stat.done"), t("stat.cards", { n: m.doneToday }));
 	stat(stats, t("stat.streak"), t("stat.days", { n: m.streak }));
@@ -129,8 +133,10 @@ export function renderDashboard(el: HTMLElement, m: DashboardModel, actions: Das
 	ex.onclick = () => actions.explain();
 	if (left === 0) el.createDiv({ cls: "sbr-muted", text: t("queue.empty") });
 
-	if (!compact || m.rows.length <= 12) {
-		const table = el.createEl("table", { cls: "sbr-domains" });
+	{
+		// In a note (compact) the table scrolls inside a fixed height, so long domain lists stay usable.
+		const wrap = el.createDiv({ cls: compact ? "sbr-domains-wrap sbr-compact" : "sbr-domains-wrap" });
+		const table = wrap.createEl("table", { cls: "sbr-domains" });
 		const hr = table.createEl("thead").createEl("tr");
 		for (const k of ["domain", "unlearned", "learning", "review", "mastered", "due"] as const) {
 			hr.createEl("th", { text: t(`domain.header.${k}`) });

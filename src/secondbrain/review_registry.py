@@ -45,8 +45,8 @@ MODES_REVIEW = ("flip", "qa", "agent")
 MODE_IMPORT = "import"
 RATING_NAMES = {1: "again", 2: "hard", 3: "good", 4: "easy"}
 
-_DEVICE_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
-_LOG_NAME_RE = re.compile(r"^events-.+\.(jsonl|md)$")
+_DEVICE_RE = re.compile(r"[A-Za-z0-9_-]{1,64}")  # use fullmatch: "$" would accept a trailing newline
+_LOG_NAME_RE = re.compile(r"events-.+\.(jsonl|md)")
 _MD_HEADER = "---\nformat: secondbrain-review-log\n---\n"
 _EPOCH_DATE = date(1970, 1, 1)
 _UTC = timezone.utc
@@ -107,7 +107,9 @@ class CardMeta:
     status: str = ""
     path: str = ""
     relations: tuple[tuple[str, str], ...] = ()
-    rank: int = 0
+    rank: float = 0
+    pillar: str = ""
+    topic: str = ""
 
 
 @dataclass
@@ -146,6 +148,7 @@ class ReplayResult:
     review_days: set[int] = field(default_factory=set)  # learning days with >=1 review
     reviews_by_day: dict[int, int] = field(default_factory=dict)
     first_day: dict[str, int] = field(default_factory=dict)  # card -> first review day
+    loaded_from: str = "events"  # "events" (full replay) or "cache" (checkpoint + new lines)
 
 
 class EventError(ValueError):
@@ -162,22 +165,24 @@ def _to_ms(dt: datetime) -> int:
     return (dt - _EPOCH_UTC) // timedelta(milliseconds=1)
 
 
+# Patterns are used with fullmatch (a "$" anchor would also accept a trailing newline).
 _TS_RE = re.compile(
-    r"^(\d{4})-(\d{2})-(\d{2})[Tt ](\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,9}))?([Zz]|[+-]\d{2}:\d{2})$")
-_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+    r"(\d{4})-(\d{2})-(\d{2})[Tt ](\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,9}))?([Zz]|[+-]\d{2}:\d{2})")
+_DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
 
 
 def parse_ts(value: Any) -> datetime:
     """Parse an RFC 3339 timestamp with an offset; truncate to milliseconds."""
-    if not isinstance(value, str) or not _TS_RE.match(value):
+    m = _TS_RE.fullmatch(value) if isinstance(value, str) else None
+    if m is None:
         raise EventError(f"ts is not RFC 3339 with an offset: {value!r}")
-    m = _TS_RE.match(value)
-    assert m is not None
     frac = (m.group(7) or "").ljust(3, "0")[:3]
     off = m.group(8)
-    tz = _UTC if off in ("Z", "z") else timezone(
-        (1 if off[0] == "+" else -1) * timedelta(hours=int(off[1:3]), minutes=int(off[4:6])))
+    if off not in ("Z", "z") and (int(off[1:3]) > 23 or int(off[4:6]) > 59):
+        raise EventError(f"ts has an invalid UTC offset: {value!r}")
     try:
+        tz = _UTC if off in ("Z", "z") else timezone(
+            (1 if off[0] == "+" else -1) * timedelta(hours=int(off[1:3]), minutes=int(off[4:6])))
         return datetime(int(m.group(1)), int(m.group(2)), int(m.group(3)), int(m.group(4)),
                         int(m.group(5)), int(m.group(6)), int(frac) * 1000, tzinfo=tz)
     except ValueError as exc:
@@ -314,9 +319,9 @@ def _parse_import(seed: Any) -> dict[str, Any]:
         value = seed.get(key)
         if key == "last_review" and (value is None or value == ""):
             continue
-        if not isinstance(value, str) or not (_DATE_RE.match(value) or _TS_RE.match(value)):
+        if not isinstance(value, str) or not (_DATE_RE.fullmatch(value) or _TS_RE.fullmatch(value)):
             raise EventError(f"import.{key} must be a YYYY-MM-DD date or an RFC 3339 timestamp")
-        if _DATE_RE.match(value):
+        if _DATE_RE.fullmatch(value):
             try:
                 date.fromisoformat(value)
             except ValueError as exc:
@@ -346,7 +351,7 @@ def parse_event(obj: Any, source: str = "", line: int = 0) -> Event:
         raise EventError(f"unsupported version: {v!r}")
     ts = parse_ts(obj.get("ts"))
     device = _str_field(obj, "device")
-    if not _DEVICE_RE.match(device):
+    if not _DEVICE_RE.fullmatch(device):
         raise EventError(f"device id is not allowed: {device!r}")
     card = _str_field(obj, "card")
     mode = _str_field(obj, "mode")
@@ -377,8 +382,8 @@ def parse_event(obj: Any, source: str = "", line: int = 0) -> Event:
                  raw=obj, source=source, line=line, import_seed=seed)
 
 
-def parse_log_text(name: str, text: str) -> tuple[list[Event], list[Issue]]:
-    """Parse the content of one log file (``.jsonl`` or ``.md``)."""
+def parse_log_text(name: str, text: str, first_line: int = 1) -> tuple[list[Event], list[Issue]]:
+    """Parse the content of one log file (``.jsonl`` or ``.md``), or of its tail from ``first_line``."""
     is_md = name.endswith(".md")
     text = text.lstrip("\ufeff")
     events: list[Event] = []
@@ -391,13 +396,14 @@ def parse_log_text(name: str, text: str) -> tuple[list[Event], list[Issue]]:
             continue
         try:
             obj = json.loads(line, parse_constant=_reject_constant)
-        except (json.JSONDecodeError, ValueError) as exc:
-            issues.append(Issue(name, no, f"invalid JSON: {getattr(exc, 'msg', exc)}"))
+        except Exception as exc:  # JSONDecodeError, NaN constants, nesting too deep
+            issues.append(Issue(name, no + first_line - 1, f"invalid JSON: {getattr(exc, 'msg', exc)}"))
             continue
         try:
-            events.append(parse_event(obj, name, no))
-        except EventError as exc:
-            issues.append(Issue(name, no, str(exc)))
+            events.append(parse_event(obj, name, no + first_line - 1))
+        except Exception as exc:  # one bad line must never stop the replay of the others
+            issues.append(Issue(name, no + first_line - 1, str(exc) if isinstance(exc, EventError)
+                                else f"invalid event: {exc}"))
     return events, issues
 
 
@@ -408,14 +414,15 @@ def _reject_constant(name: str) -> Any:
 def log_files(review_dir: Path) -> list[Path]:
     if not review_dir.is_dir():
         return []
-    return sorted(p for p in review_dir.iterdir() if p.is_file() and _LOG_NAME_RE.match(p.name))
+    return sorted(p for p in review_dir.iterdir() if p.is_file() and _LOG_NAME_RE.fullmatch(p.name))
 
 
 def read_logs(review_dir: Path) -> tuple[list[Event], list[Issue]]:
     events: list[Event] = []
     issues: list[Issue] = []
     for path in log_files(review_dir):
-        ev, iss = parse_log_text(path.name, path.read_text(encoding="utf-8", errors="replace"))
+        # Bytes, not read_text: universal newlines would split on a lone "\r" unlike the TS reader.
+        ev, iss = parse_log_text(path.name, path.read_bytes().decode("utf-8", errors="replace"))
         events.extend(ev)
         issues.extend(iss)
     return events, issues
@@ -603,32 +610,171 @@ class Replayer:
 
 
 def _seed_time(value: str, tz: Any, day_start_hour: int) -> datetime:
-    if _DATE_RE.match(value):
+    if _DATE_RE.fullmatch(value):
         d = date.fromisoformat(value)
         return datetime(d.year, d.month, d.day, day_start_hour, tzinfo=tz)
     return parse_ts(value)
 
 
-def replay(events: Iterable[Event], *, day_start_hour: int = DAY_START_HOUR) -> ReplayResult:
-    """Replay events into per-card states (docs section 4)."""
+def _apply_ordered(result: ReplayResult, ordered: Iterable[Event], day_start_hour: int) -> None:
     rp = Replayer(day_start_hour)
-    states: dict[str, CardState] = {}
-    result = ReplayResult(states=states, issues=[])
-    for ev in order_events(events):
+    states = result.states
+    for ev in ordered:
         states[ev.card] = rp.apply(states.get(ev.card), ev)
         if not ev.is_import:
             day = learning_day(ev.ts, day_start_hour)
             result.review_days.add(day)
             result.reviews_by_day[day] = result.reviews_by_day.get(day, 0) + 1
             result.first_day.setdefault(ev.card, day)
+
+
+def replay(events: Iterable[Event], *, day_start_hour: int = DAY_START_HOUR) -> ReplayResult:
+    """Replay events into per-card states (docs section 4)."""
+    result = ReplayResult(states={}, issues=[])
+    _apply_ordered(result, order_events(events), day_start_hour)
     return result
 
 
-def load(review_dir: Path, *, day_start_hour: int = DAY_START_HOUR) -> ReplayResult:
-    events, issues = read_logs(review_dir)
-    result = replay(events, day_start_hour=day_start_hour)
-    result.issues = issues
+def load(review_dir: Path, *, day_start_hour: int = DAY_START_HOUR,
+         cache_dir: Path | None = None) -> ReplayResult:
+    """Replay all logs. With ``cache_dir``, start from this machine's checkpoint (docs section 4.1)."""
+    if cache_dir is None:
+        return _load_full(review_dir, day_start_hour)[0]
+    path = cache_path(review_dir, cache_dir)
+    cached = _read_cache(path, day_start_hour)
+    loaded = _load_incremental(review_dir, cached, day_start_hour) if cached else None
+    result, files, watermark, clean = loaded or _load_full(review_dir, day_start_hour)
+    if clean:
+        _write_cache(path, result, files, watermark, day_start_hour)
     return result
+
+
+# --------------------------------------------------------------------------
+# State cache (docs section 4.1): a checkpoint of the replay plus how far each log was read
+# --------------------------------------------------------------------------
+CACHE_FORMAT = 1
+
+
+def cache_path(review_dir: Path, cache_dir: Path) -> Path:
+    key = hashlib.sha256(str(review_dir.resolve()).encode("utf-8")).hexdigest()[:16]
+    return cache_dir / f"review-state-{key}.json"
+
+
+def _cache_meta(day_start_hour: int) -> dict[str, Any]:
+    try:
+        from importlib.metadata import version
+        lib = version("fsrs")
+    except Exception:  # pragma: no cover - metadata missing in odd installs
+        lib = "unknown"
+    return {"cache": CACHE_FORMAT, "schema": SCHEMA_VERSION, "day_start": day_start_hour, "fsrs": lib,
+            "params": list(FSRS_PARAMETERS), "retention": DESIRED_RETENTION,
+            "steps": list(LEARNING_STEPS_MIN), "relearning": list(RELEARNING_STEPS_MIN),
+            "max_interval": MAXIMUM_INTERVAL}
+
+
+def _key(ev: Event) -> list[Any]:
+    return [ev.instant_ms, ev.device, ev.card, ev.source, ev.line]
+
+
+def _load_full(review_dir: Path, day_start_hour: int):
+    events: list[Event] = []
+    issues: list[Issue] = []
+    files: dict[str, dict[str, Any]] = {}
+    clean = True
+    for path in log_files(review_dir):
+        data = path.read_bytes()
+        ev, iss = parse_log_text(path.name, data.decode("utf-8", errors="replace"))
+        events.extend(ev)
+        issues.extend(iss)
+        files[path.name] = {"bytes": len(data), "lines": data.count(b"\n"),
+                            "sha256": hashlib.sha256(data).hexdigest()}
+        clean = clean and (not data or data.endswith(b"\n"))
+    ordered = order_events(events)
+    result = ReplayResult(states={}, issues=issues)
+    _apply_ordered(result, ordered, day_start_hour)
+    return result, files, (_key(ordered[-1]) if ordered else None), clean
+
+
+def _load_incremental(review_dir: Path, cached: tuple[ReplayResult, dict[str, Any], Any],
+                      day_start_hour: int):
+    """Read only what was appended since the checkpoint. None when a full replay is needed."""
+    result, old_files, watermark = cached
+    paths = log_files(review_dir)
+    if any(name not in {p.name for p in paths} for name in old_files):
+        return None  # a log disappeared
+    new_events: list[Event] = []
+    new_issues: list[Issue] = []
+    files: dict[str, dict[str, Any]] = {}
+    for p in paths:
+        old = old_files.get(p.name)
+        data = p.read_bytes()  # hashing is cheap; parsing and replaying the old lines is what we skip
+        start, line0 = (old["bytes"], old["lines"]) if old else (0, 0)
+        if old and (len(data) < start or hashlib.sha256(data[:start]).hexdigest() != old["sha256"]):
+            return None  # the part already read was changed or truncated
+        rest = data[start:]
+        if rest and not rest.endswith(b"\n"):
+            return None  # a line is still being written or was cut off
+        if rest:
+            ev, iss = parse_log_text(p.name, rest.decode("utf-8", errors="replace"), first_line=line0 + 1)
+            new_events.extend(ev)
+            new_issues.extend(iss)
+        files[p.name] = {"bytes": len(data), "lines": line0 + rest.count(b"\n"),
+                         "sha256": hashlib.sha256(data).hexdigest()}
+    ordered = order_events(new_events)
+    if ordered and watermark is not None and ordered[0].instant_ms <= watermark[0]:
+        return None  # an event older than the checkpoint arrived (another device synced late)
+    _apply_ordered(result, ordered, day_start_hour)
+    result.issues = sorted(result.issues + new_issues, key=lambda i: (i.source, i.line))
+    result.loaded_from = "cache"
+    return result, files, (_key(ordered[-1]) if ordered else watermark), True
+
+
+def _state_to_json(st: CardState) -> dict[str, Any]:
+    return {"state": st.state, "stability": st.stability, "difficulty": st.difficulty,
+            "due": format_utc(st.due), "last_review": format_utc(st.last_review), "reps": st.reps,
+            "lapses": st.lapses, "step": st.step,
+            "first_review": format_utc(st.first_review) if st.first_review else None,
+            "last_day": st.last_day, "events": st.events, "sched_day": st._sched_day}
+
+
+def _state_from_json(card: str, d: Mapping[str, Any]) -> CardState:
+    return CardState(card=card, state=d["state"], stability=d["stability"], difficulty=d["difficulty"],
+                     due=parse_ts(d["due"]), last_review=parse_ts(d["last_review"]), reps=d["reps"],
+                     lapses=d["lapses"], step=d["step"],
+                     first_review=parse_ts(d["first_review"]) if d["first_review"] else None,
+                     last_day=d["last_day"], events=d["events"], _sched_day=d["sched_day"])
+
+
+def _write_cache(path: Path, result: ReplayResult, files: dict[str, Any], watermark: Any,
+                 day_start_hour: int) -> None:
+    data = {"meta": _cache_meta(day_start_hour), "files": files, "watermark": watermark,
+            "states": {c: _state_to_json(st) for c, st in result.states.items()},
+            "review_days": sorted(result.review_days),
+            "reviews_by_day": {str(d): n for d, n in result.reviews_by_day.items()},
+            "first_day": result.first_day, "issues": [i.as_dict() for i in result.issues]}
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+        tmp.write_text(json.dumps(data, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+        os.replace(tmp, path)
+    except OSError:
+        pass  # the cache only saves time; the logs stay the record
+
+
+def _read_cache(path: Path, day_start_hour: int):
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if data.get("meta") != _cache_meta(day_start_hour):
+            return None
+        result = ReplayResult(
+            states={c: _state_from_json(c, d) for c, d in data["states"].items()},
+            issues=[Issue(i["source"], i["line"], i["reason"]) for i in data["issues"]],
+            review_days=set(data["review_days"]),
+            reviews_by_day={int(d): n for d, n in data["reviews_by_day"].items()},
+            first_day=dict(data["first_day"]))
+        return result, dict(data["files"]), data["watermark"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
 
 
 # --------------------------------------------------------------------------
@@ -755,6 +901,60 @@ def learning_order(cards: Sequence[CardMeta]) -> tuple[list[CardMeta], list[str]
     return ordered, breaks
 
 
+@dataclass(frozen=True)
+class PillarInfo:
+    name: str
+    map_title: str
+    why: str
+    order: float
+    topics: tuple[str, ...]
+
+
+def build_taxonomy(docs: Iterable[tuple[str, Any]]) -> dict[str, PillarInfo]:
+    """Pillars from parsed taxonomy YAML documents ``(path, data)``. A pillar name defined twice keeps the first."""
+    pillars: dict[str, PillarInfo] = {}
+    for path, data in docs:
+        if not isinstance(data, Mapping):
+            continue
+        title = data.get("title")
+        if not isinstance(title, str) or not title:
+            title = re.sub(r"\.ya?ml$", "", path.rsplit("/", 1)[-1])
+        raw = data.get("pillars")
+        for i, rec in enumerate(raw if isinstance(raw, list) else []):
+            if not isinstance(rec, Mapping):
+                continue
+            name = rec.get("name").strip() if isinstance(rec.get("name"), str) else ""
+            if not name or name in pillars:
+                continue
+            order = rec.get("order")
+            topics = rec.get("topics")
+            why = rec.get("why")
+            pillars[name] = PillarInfo(
+                name=name, map_title=title, why=why.strip() if isinstance(why, str) else "",
+                order=order if isinstance(order, (int, float)) and not isinstance(order, bool) else i + 1,
+                topics=tuple(t for t in topics if isinstance(t, str)) if isinstance(topics, list) else ())
+    return pillars
+
+
+def rank_for(meta: CardMeta, pillars: Mapping[str, PillarInfo], domain_order: Mapping[str, int]) -> float:
+    """Tie-break rank for new cards: study-domain position, pillar order, topic position (same as the plugin)."""
+    d = domain_order.get(meta.domain, len(domain_order))
+    p = pillars.get(meta.pillar)
+    pillar_pos = min(p.order, 998) if p else 999
+    t = p.topics.index(meta.topic) if p and meta.topic in p.topics else -1
+    topic_pos = min(t, 998) if t >= 0 else 999
+    return d * 1_000_000 + pillar_pos * 1_000 + topic_pos
+
+
+def rank_cards(cards: Iterable[CardMeta], pillars: Mapping[str, PillarInfo],
+               study_domains: Sequence[str] = ()) -> list[CardMeta]:
+    """Cards with ``rank`` set. Domain order: the study domains as given, else all domains sorted."""
+    metas = list(cards)
+    names = list(study_domains) if study_domains else sorted({m.domain for m in metas})
+    order = {d: i for i, d in enumerate(names)}
+    return [replace(m, rank=rank_for(m, pillars, order)) for m in metas]
+
+
 def eligible_new(meta: CardMeta, domains: Sequence[str]) -> bool:
     if meta.kind == "record" or meta.status == "needs-review":
         return False
@@ -828,7 +1028,7 @@ def make_event(card: str, *, device: str, now: datetime, mode: str = "agent",
 def log_path(review_dir: Path, device: str, fmt: str = "jsonl") -> Path:
     if fmt not in ("jsonl", "md"):
         raise ValueError("fmt must be jsonl or md")
-    if not _DEVICE_RE.match(device):
+    if not _DEVICE_RE.fullmatch(device):
         raise ValueError(f"device id is not allowed: {device!r}")
     return review_dir / f"events-{device}.{fmt}"
 
@@ -933,9 +1133,10 @@ def plan_sr_import(cards: Iterable[tuple[CardMeta, str, Mapping[str, Any] | None
 
 
 def import_sr(review_dir: Path, cards: Iterable[tuple[CardMeta, str, Mapping[str, Any] | None]], *,
-              device: str, now: datetime, fmt: str = "jsonl", dry_run: bool = False) -> dict[str, Any]:
+              device: str, now: datetime, fmt: str = "jsonl", dry_run: bool = False,
+              cache_dir: Path | None = None) -> dict[str, Any]:
     """One-time import of Spaced Repetition schedules as ``import`` events. Card files are not changed."""
-    found, skipped = plan_sr_import(cards, load(review_dir))
+    found, skipped = plan_sr_import(cards, load(review_dir, cache_dir=cache_dir))
     events = [make_import_event(m.id, seed, device=device, now=now) for m, seed in found]
     path = append_events(review_dir, events, fmt=fmt) if events and not dry_run else None
     return {"imported": 0 if dry_run else len(events), "found": len(events), "skipped": skipped,
@@ -952,8 +1153,9 @@ def make_import_event(card: str, seed: Mapping[str, Any], *, device: str, now: d
 # --------------------------------------------------------------------------
 # CLI helpers: sb review status | queue | log
 # --------------------------------------------------------------------------
-def status_report(review_dir: Path, cards: Iterable[CardMeta], now: datetime) -> dict[str, Any]:
-    result = load(review_dir)
+def status_report(review_dir: Path, cards: Iterable[CardMeta], now: datetime, *,
+                  cache_dir: Path | None = None) -> dict[str, Any]:
+    result = load(review_dir, cache_dir=cache_dir)
     report = summarize(cards, result, now)
     report["issue_list"] = [i.as_dict() for i in result.issues[:50]]
     return report
@@ -962,10 +1164,17 @@ def status_report(review_dir: Path, cards: Iterable[CardMeta], now: datetime) ->
 def queue_report(review_dir: Path, cards: Iterable[CardMeta], now: datetime, *,
                  new_per_day: int = DEFAULT_NEW_PER_DAY, domains: Sequence[str] = (),
                  read_card: Callable[[CardMeta], str] | None = None,
-                 limit: int | None = None, section: str = DEFAULT_REVIEW_SECTION) -> dict[str, Any]:
-    """Queue as JSON-ready data. With ``read_card`` each entry carries its questions."""
-    result = load(review_dir)
-    q = build_queue(cards, result, now, new_per_day=new_per_day, domains=domains)
+                 limit: int | None = None, section: str = DEFAULT_REVIEW_SECTION,
+                 taxonomy: Mapping[str, PillarInfo] | None = None,
+                 cache_dir: Path | None = None) -> dict[str, Any]:
+    """Queue as JSON-ready data. With ``read_card`` each entry carries its questions.
+
+    Pass ``taxonomy`` (from ``build_taxonomy``) so new cards come in the same order as in the
+    Obsidian plugin: study domain, then pillar order, then topic position.
+    """
+    result = load(review_dir, cache_dir=cache_dir)
+    metas = rank_cards(cards, taxonomy, domains) if taxonomy is not None else list(cards)
+    q = build_queue(metas, result, now, new_per_day=new_per_day, domains=domains)
 
     def entry(meta: CardMeta, kind: str) -> dict[str, Any]:
         st = result.states.get(meta.id)
@@ -989,10 +1198,11 @@ def queue_report(review_dir: Path, cards: Iterable[CardMeta], now: datetime, *,
 
 def log_review(review_dir: Path, card: str, *, device: str, now: datetime, mode: str = "agent",
                rating: int | None = None, items: Sequence[Mapping[str, Any]] | None = None,
-               grader: str | None = None, fmt: str = "jsonl") -> dict[str, Any]:
+               grader: str | None = None, fmt: str = "jsonl",
+               cache_dir: Path | None = None) -> dict[str, Any]:
     """Append one review and return the card's new state."""
     event = make_event(card, device=device, now=now, mode=mode, rating=rating, items=items, grader=grader)
     path = append_event(review_dir, event, fmt=fmt)
-    result = load(review_dir)
+    result = load(review_dir, cache_dir=cache_dir)
     st = result.states.get(card)
     return {"written": str(path), "event": event, "state": st.as_dict() if st else None}

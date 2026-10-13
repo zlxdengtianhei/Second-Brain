@@ -1,3 +1,5 @@
+import { cmpCodePoint } from "../registry";
+
 // Taxonomy files (<taxonomy>/*.yaml): domain map title, pillars with `why`, topics in order.
 // Pillar names are unique across the vault, so a card's `pillar` finds its map without the domain.
 
@@ -69,6 +71,21 @@ export function rankFor(
 	const t = p ? p.topics.indexOf(card.topic) : -1;
 	const topicPos = t >= 0 ? Math.min(t, 998) : 999;
 	return d * 1_000_000 + pillarPos * 1_000 + topicPos;
+}
+
+/**
+ * Cards with `rank` set (the Python twin is `rank_cards`). Domain order: the study domains as given,
+ * else every domain sorted by code point.
+ */
+export function rankCards<C extends { domain: string; pillar: string; topic: string }>(
+	cards: C[],
+	tax: Taxonomy,
+	studyDomains: readonly string[],
+): (C & { rank: number })[] {
+	const names = studyDomains.length ? [...studyDomains] : [...new Set(cards.map((c) => c.domain))].sort(cmpCodePoint);
+	const order = new Map<string, number>();
+	names.forEach((d, i) => order.set(d, i));
+	return cards.map((c) => ({ ...c, rank: rankFor(c, tax, order) }));
 }
 
 /** Map title of each domain, by the most common pillar map among the domain's cards. */

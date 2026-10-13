@@ -162,6 +162,104 @@ def test_append_events_rejects_mixed_devices(tmp_path: Path) -> None:
 
 
 # --------------------------------------------------------------------------
+# State cache: a checkpointed load must equal a full replay
+# --------------------------------------------------------------------------
+def _full_snapshot(result: rr.ReplayResult) -> dict:
+    return {
+        "states": {c: {**st.as_dict(), "step": st.step, "sched_day": st._sched_day, "events": st.events,
+                       "last_day": st.last_day,
+                       "first_review": rr.format_utc(st.first_review) if st.first_review else None}
+                   for c, st in sorted(result.states.items())},
+        "review_days": sorted(result.review_days),
+        "reviews_by_day": dict(sorted(result.reviews_by_day.items())),
+        "first_day": dict(sorted(result.first_day.items())),
+        "issues": sorted((i.source, i.line, i.reason) for i in result.issues),
+    }
+
+
+def _append_random(review_dir: Path, start: datetime, n: int, seed: int,
+                   devices: tuple[str, ...] = ("obs-a", "cli-b")) -> datetime:
+    rnd = __import__("random").Random(seed)
+    t = start
+    for _ in range(n):
+        t += timedelta(minutes=rnd.choice([1, 7, 30, 600, 1440, 4000]))
+        rating = rnd.choice([1, 2, 3, 3, 3, 4])
+        ev = rr.make_event(f"ex_c{rnd.randrange(25)}", device=rnd.choice(devices), now=t, rating=rating,
+                           mode="flip")
+        rr.append_event(review_dir, ev)
+    return t
+
+
+def _assert_same_as_full(review_dir: Path, cache_dir: Path, expect_from: str) -> rr.ReplayResult:
+    cached = rr.load(review_dir, cache_dir=cache_dir)
+    assert cached.loaded_from == expect_from
+    assert _full_snapshot(cached) == _full_snapshot(rr.load(review_dir))
+    return cached
+
+
+def test_cache_gives_the_same_state_as_a_full_replay(tmp_path: Path) -> None:
+    logs, cache = tmp_path / "review", tmp_path / "cache"
+    bad = next(v for v in VECTORS["vectors"] if v["name"] == "bad-lines-skipped")
+    _write_files(tmp_path, bad["files"])  # starts with issues and a valid card
+    t = _append_random(logs, datetime(2026, 3, 3, 8, tzinfo=timezone(timedelta(hours=1))), 300, seed=1)
+    _assert_same_as_full(logs, cache, "events")  # cold: full replay, writes the checkpoint
+    assert rr.cache_path(logs, cache).exists()
+    _assert_same_as_full(logs, cache, "cache")  # nothing new
+    t = _append_random(logs, t, 120, seed=2, devices=("obs-a", "cli-b", "obs-new"))
+    _assert_same_as_full(logs, cache, "cache")  # appended lines, one new device file
+    with open(logs / "events-obs-a.jsonl", "a", encoding="utf-8") as fh:
+        fh.write("{broken\n")
+    _append_random(logs, t, 40, seed=3)
+    res = _assert_same_as_full(logs, cache, "cache")
+    assert any(i.reason.startswith("invalid JSON") for i in res.issues)
+
+
+def test_cache_falls_back_to_a_full_replay(tmp_path: Path) -> None:
+    logs, cache = tmp_path / "review", tmp_path / "cache"
+    tz = timezone(timedelta(hours=1))
+    t = _append_random(logs, datetime(2026, 3, 3, 8, tzinfo=tz), 200, seed=4)
+    rr.load(logs, cache_dir=cache)
+    # An event older than the checkpoint (a device synced late).
+    rr.append_event(logs, rr.make_event("ex_c1", device="obs-late", now=t - timedelta(days=30), rating=1))
+    _assert_same_as_full(logs, cache, "events")
+    # An old line was edited in place.
+    path = logs / "events-obs-a.jsonl"
+    text = path.read_text(encoding="utf-8")
+    path.write_text(text.replace('"rating":3', '"rating":2', 1), encoding="utf-8")
+    _assert_same_as_full(logs, cache, "events")
+    # A log file disappeared.
+    (logs / "events-obs-late.jsonl").unlink()
+    _assert_same_as_full(logs, cache, "events")
+    # A corrupt checkpoint is ignored.
+    rr.cache_path(logs, cache).write_text("{not json", encoding="utf-8")
+    _assert_same_as_full(logs, cache, "events")
+    _assert_same_as_full(logs, cache, "cache")
+
+
+def test_cache_is_not_written_while_a_line_is_incomplete(tmp_path: Path) -> None:
+    logs, cache = tmp_path / "review", tmp_path / "cache"
+    _append_random(logs, datetime(2026, 3, 3, 8, tzinfo=timezone.utc), 50, seed=5)
+    rr.load(logs, cache_dir=cache)
+    before = rr.cache_path(logs, cache).read_bytes()
+    with open(logs / "events-cli-b.jsonl", "a", encoding="utf-8") as fh:
+        fh.write('{"v":1,"ts":"2026-0')  # a writer is mid-line
+    _assert_same_as_full(logs, cache, "events")
+    assert rr.cache_path(logs, cache).read_bytes() == before
+
+
+def test_cli_helpers_accept_a_cache_dir(tmp_path: Path) -> None:
+    review_dir = _write_files(tmp_path, QUEUE["files"])
+    cache = tmp_path / "cache"
+    now = _queue_now()
+    first = rr.status_report(review_dir, _queue_cards(), now, cache_dir=cache)
+    out = rr.log_review(review_dir, "ex_tls", device="cli-test", now=now, rating=3, cache_dir=cache)
+    assert out["state"]["reps"] == 1
+    after = rr.status_report(review_dir, _queue_cards(), now, cache_dir=cache)
+    assert after["new_today"] == first["new_today"] + 1
+    assert after == rr.status_report(review_dir, _queue_cards(), now)
+
+
+# --------------------------------------------------------------------------
 # Status and queue
 # --------------------------------------------------------------------------
 def _queue_cards() -> list[rr.CardMeta]:
@@ -194,6 +292,37 @@ def test_queue(tmp_path: Path, case: dict) -> None:
     assert [m.id for m in q["new"]] == case["new"]
     for key in ("new_quota", "new_available", "cycle_breaks"):
         assert q[key] == case[key], key
+
+
+RANK = json.loads((FIXTURES / "rank.json").read_text(encoding="utf-8"))
+
+
+def _rank_cards() -> list[rr.CardMeta]:
+    return [rr.CardMeta(id=c["id"], domain=c["domain"], pillar=c["pillar"], topic=c["topic"],
+                        relations=tuple((r[0], r[1]) for r in c.get("relations", [])))
+            for c in RANK["cards"]]
+
+
+@pytest.mark.parametrize("case", RANK["cases"], ids=lambda c: c["name"])
+def test_rank_matches_plugin_order(case: dict) -> None:
+    pillars = rr.build_taxonomy((d["path"], d["data"]) for d in RANK["taxonomy"])
+    ranked = rr.rank_cards(_rank_cards(), pillars, case["study_domains"])
+    assert {m.id: m.rank for m in ranked} == case["ranks"]
+    empty = rr.ReplayResult(states={}, issues=[])
+    q = rr.build_queue(ranked, empty, rr.parse_ts(RANK["now"]), new_per_day=RANK["new_per_day"],
+                       domains=case["study_domains"])
+    assert [m.id for m in q["new"]] == case["new"]
+
+
+def test_queue_report_uses_taxonomy_rank(tmp_path: Path) -> None:
+    pillars = rr.build_taxonomy((d["path"], d["data"]) for d in RANK["taxonomy"])
+    case = RANK["cases"][1]
+    out = rr.queue_report(tmp_path, _rank_cards(), rr.parse_ts(RANK["now"]), new_per_day=RANK["new_per_day"],
+                          domains=case["study_domains"], taxonomy=pillars)
+    assert [c["id"] for c in out["cards"]] == case["new"]
+    plain = rr.queue_report(tmp_path, _rank_cards(), rr.parse_ts(RANK["now"]), new_per_day=RANK["new_per_day"],
+                            domains=case["study_domains"])
+    assert [c["id"] for c in plain["cards"]] != case["new"]  # without the taxonomy the order is by id
 
 
 def test_learning_order_keeps_every_card_on_long_cycles() -> None:

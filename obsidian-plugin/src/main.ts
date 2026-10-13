@@ -16,6 +16,7 @@ import { TodayBlock, TodayView, VIEW_TODAY } from "./ui/today-view";
 import type { IndexedCard } from "./vault/card-index";
 import { CardIndex } from "./vault/card-index";
 import { EventStore, newDeviceId } from "./vault/event-store";
+import { IdbCache } from "./vault/idb-cache";
 import { buildTaxonomy } from "./vault/taxonomy";
 
 const DEVICE_KEY = "secondbrain-review:device";
@@ -34,9 +35,11 @@ export default class SecondBrainReviewPlugin extends Plugin {
 		this.settings = mergeSettings(await this.loadData());
 		this.index = new CardIndex(this.app, () => this.settings.knowledge);
 		const store = new EventStore(this.app.vault.adapter, () => reviewDir(this.settings), this.deviceId(), () => this.settings.logFormat);
+		const cache = new IdbCache(() => `${(this.app as { appId?: string }).appId ?? this.app.vault.getName()}|${reviewDir(this.settings)}|${store.device}`);
 		this.service = new ReviewService(this.index, store, {
 			newPerDay: () => this.settings.newPerDay,
 			studyDomains: () => this.settings.studyDomains,
+			cache,
 		});
 		this.index.onChange(() => this.service.notify());
 		AiProvidersClient.init(this.app, this);
@@ -143,8 +146,8 @@ export default class SecondBrainReviewPlugin extends Plugin {
 			card,
 			text,
 			items: extractReviewItems(text, this.settings.reviewSection),
-			essence: sectionText(text, "本质"),
-			propositions: sectionText(text, "命题"),
+			essence: sectionText(text, this.settings.essenceSection),
+			propositions: sectionText(text, this.settings.propositionsSection),
 		};
 	}
 

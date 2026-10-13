@@ -4,6 +4,7 @@ import {
 	isValidDevice,
 	type Issue,
 	LOG_NAME_RE,
+	type LogText,
 	MD_HEADER,
 	parseLogText,
 	type ReviewEvent,
@@ -56,26 +57,36 @@ export class EventStore {
 		return !name.includes("/") && LOG_NAME_RE.test(name);
 	}
 
-	/** Read and parse every log file, in name order. */
-	async readAll(): Promise<{ events: ReviewEvent[]; issues: Issue[]; files: number }> {
+	/** Every log file's text, in name order. */
+	async readTexts(): Promise<LogText[]> {
 		const dir = this.directory;
-		const events: ReviewEvent[] = [];
-		const issues: Issue[] = [];
-		if (!(await this.adapter.exists(dir))) return { events, issues, files: 0 };
+		if (!(await this.adapter.exists(dir))) return [];
 		const listed = await this.adapter.list(dir);
 		const names = listed.files
 			.map((p) => p.slice(p.lastIndexOf("/") + 1))
 			.filter((n) => LOG_NAME_RE.test(n))
 			.sort(cmpCodePoint);
+		const out: LogText[] = [];
 		for (const name of names) {
 			const path = `${dir}/${name}`;
 			const text = await this.adapter.read(path);
 			this.endsWithNewline.set(path, text === "" || text.endsWith("\n"));
+			out.push({ name, text });
+		}
+		return out;
+	}
+
+	/** Read and parse every log file, in name order. */
+	async readAll(): Promise<{ events: ReviewEvent[]; issues: Issue[]; files: number }> {
+		const events: ReviewEvent[] = [];
+		const issues: Issue[] = [];
+		const texts = await this.readTexts();
+		for (const { name, text } of texts) {
 			const r = parseLogText(name, text);
 			events.push(...r.events);
 			issues.push(...r.issues);
 		}
-		return { events, issues, files: names.length };
+		return { events, issues, files: texts.length };
 	}
 
 	/** Append one validated event line to this device's log. Calls are serialized. */

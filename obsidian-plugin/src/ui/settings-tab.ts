@@ -119,6 +119,8 @@ export class ReviewSettingTab extends PluginSettingTab {
 		text(t("settings.taxonomy"), s.taxonomy, (v) => (s.taxonomy = v));
 		text(t("settings.data"), s.data, (v) => (s.data = v));
 		text(t("settings.section"), s.reviewSection, (v) => (s.reviewSection = v));
+		text(t("settings.essenceSection"), s.essenceSection, (v) => (s.essenceSection = v));
+		text(t("settings.propositionsSection"), s.propositionsSection, (v) => (s.propositionsSection = v));
 		new Setting(containerEl)
 			.setName(t("settings.logFormat"))
 			.setDesc(t("settings.logFormat.desc"))

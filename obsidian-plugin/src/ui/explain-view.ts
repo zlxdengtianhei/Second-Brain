@@ -94,7 +94,7 @@ export class ExplainView extends ItemView {
 			let essence = "";
 			if (target) {
 				const file = p.app.vault.getAbstractFileByPath(target.path);
-				if (file instanceof TFile) essence = sectionText(await p.app.vault.cachedRead(file), "本质");
+				if (file instanceof TFile) essence = sectionText(await p.app.vault.cachedRead(file), s.essenceSection);
 			}
 			related.push({ title: target?.title ?? rel.target, type: rel.type, essence });
 		}
@@ -106,7 +106,7 @@ export class ExplainView extends ItemView {
 			pillar: svc.taxonomy.pillars.get(card.pillar),
 			domainTitle: svc.domainTitles().get(card.domain) ?? card.domain,
 			siblings: siblingTitles(card, svc.rankedCards().slice().sort((a, b) => (a.rank ?? 0) - (b.rank ?? 0)), s.explainSiblings),
-			learnerState: learnerState(svc.history(card.id, 20), svc.state(card.id)?.reps ?? 0, {
+			learnerState: learnerState(svc.history(card.id), svc.state(card.id)?.reps ?? 0, {
 				none: t("learner.none"),
 				summary: (n, date, rating) => t("learner.summary", { n, date, rating: ratingLabel(rating) }),
 				missing: (items) => t("learner.missing", { items }),

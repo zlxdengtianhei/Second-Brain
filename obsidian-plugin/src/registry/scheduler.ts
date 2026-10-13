@@ -19,6 +19,27 @@ export const FSRS_PARAMETERS = [
 
 export type SchedState = "learning" | "review" | "relearning";
 
+/** What the explanation needs to know about a past event; kept per card so no old event has to be re-read. */
+export interface RecentEvent {
+	ms: number;
+	offsetMin: number;
+	mode: string;
+	rating: number | null;
+	missing: string[];
+}
+
+export const RECENT_LIMIT = 5;
+
+function recentOf(ev: ReviewEvent): RecentEvent {
+	const items = Array.isArray(ev.raw.items) ? (ev.raw.items as Record<string, unknown>[]) : [];
+	const missing = items.flatMap((i) => (Array.isArray(i.missing) ? i.missing.filter((m): m is string => typeof m === "string") : []));
+	return { ms: ev.ts.ms, offsetMin: ev.ts.offsetMin, mode: ev.mode, rating: ev.rating, missing };
+}
+
+function withRecent(prev: CardState | undefined, ev: ReviewEvent): RecentEvent[] {
+	return [...(prev?.recent ?? []), recentOf(ev)].slice(-RECENT_LIMIT);
+}
+
 export interface CardState {
 	card: string;
 	state: SchedState;
@@ -36,7 +57,8 @@ export interface CardState {
 	/** Scheduler day: never goes backwards. */
 	schedDay: number;
 	events: number;
-	lastEvent: ReviewEvent | null;
+	/** The last few events of this card, oldest first. */
+	recent: RecentEvent[];
 	fsrsCard: Card;
 }
 
@@ -116,7 +138,7 @@ function seed(ev: ReviewEvent, prev: CardState | undefined, dayStartHour: number
 		lastDay: prev?.lastDay ?? null,
 		schedDay,
 		events: (prev?.events ?? 0) + 1,
-		lastEvent: ev,
+		recent: withRecent(prev, ev),
 		fsrsCard,
 	};
 }
@@ -143,7 +165,7 @@ export function applyEvent(prev: CardState | undefined, ev: ReviewEvent, dayStar
 		lastDay: day,
 		schedDay,
 		events: (prev?.events ?? 0) + 1,
-		lastEvent: ev,
+		recent: withRecent(prev, ev),
 		fsrsCard: next,
 	};
 }

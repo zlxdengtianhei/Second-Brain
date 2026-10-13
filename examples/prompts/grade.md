@@ -1,5 +1,6 @@
 <!--
-Grading prompt for SecondBrain Review (Q&A mode) and for `sb review` agents.
+Grading prompt for SecondBrain Review (Q&A mode). Terminal agents can use the same prompt and log the
+result with the Python API (`secondbrain.review_registry.log_review`).
 Copy it to the vault path set in the plugin settings (default 90_Meta/prompts/grade.md) to customize.
 Sections: [system] and [user]. Placeholders: {{question}}, {{answer}} (reference answer),
 {{propositions}} (the card's 命题 section), {{user_answer}}.

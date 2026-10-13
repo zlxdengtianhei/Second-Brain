@@ -1,8 +1,10 @@
 // Loads the shared fixtures in <repo>/tests/fixtures/review/.
 import { readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-export const FIXTURES = fileURLToPath(new URL("../../tests/fixtures/review/", import.meta.url));
+// Path arithmetic instead of new URL(): under happy-dom the global URL is the DOM one.
+export const FIXTURES = resolve(dirname(fileURLToPath(import.meta.url)), "../../tests/fixtures/review") + "/";
 
 export function fixture<T = any>(name: string): T {
 	return JSON.parse(readFileSync(FIXTURES + name, "utf8")) as T;

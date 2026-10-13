@@ -10,8 +10,13 @@ Three writers share one format:
 |---|---|---|
 | Obsidian plugin, flip mode | `flip` | `obsidian-plugin/` |
 | Obsidian plugin, question-and-answer mode (LLM grading) | `qa` | `obsidian-plugin/` |
-| Terminal agent through the CLI (`sb review log`) | `agent` | `src/secondbrain/review_registry.py` |
+| Terminal agent through the Python API (`log_review`) | `agent` | `src/secondbrain/review_registry.py` |
 | One-time import of Spaced Repetition plugin data | `import` | both |
+
+There is no `sb review` command yet. Today the Python side is an API:
+`status_report`, `queue_report`, `log_review` and `import_sr` in
+`secondbrain.review_registry` return JSON-ready data; a CLI subcommand will call
+them.
 
 Two implementations replay the log: Python (`review_registry.py`, py-fsrs) and
 TypeScript (`obsidian-plugin/src/registry/`, ts-fsrs). Both must produce the same
@@ -26,8 +31,8 @@ state for the same events. The shared test vectors in
   its own file, so two devices never edit the same file.
 - `<device>` matches `[A-Za-z0-9_-]{1,64}`. The plugin generates
   `obs-<random>` once per device and keeps it in device-local storage (not in
-  the synced plugin settings). The CLI uses `cli-<hash of hostname>` unless
-  configured.
+  the synced plugin settings). Python callers pass a device id;
+  `default_device_id()` gives `cli-<hash of hostname>`.
 - Readers read every file that matches `events-*.jsonl` or `events-*.md`.
   Conflict copies made by sync tools (for example
   `events-obs-1a2b (conflict).jsonl`) match the pattern too; duplicate events
@@ -77,7 +82,7 @@ an invalid event is never written.
 | Field | Type | Required | Meaning |
 |---|---|---|---|
 | `v` | integer | yes | Format version. Readers skip lines with an unknown version and report an issue. |
-| `ts` | string | yes | Review time, RFC 3339 with a UTC offset (`Z` or `+02:00`). Writers use local time with milliseconds. The offset is part of the data: it decides the learning day (section 3.1). |
+| `ts` | string | yes | Review time, RFC 3339 with a UTC offset (`Z` or `+02:00`; offset hours 00–23, minutes 00–59). Writers use local time with milliseconds. The offset is part of the data: it decides the learning day (section 3.1). |
 | `device` | string | yes | Writer device id. |
 | `card` | string | yes | The card's frontmatter `id`. Renaming or moving a card file does not break its history. |
 | `mode` | string | yes | `flip`, `qa`, `agent` or `import`. Readers treat any mode other than `import` as a review, so new modes stay readable. |
@@ -89,7 +94,8 @@ an invalid event is never written.
 | `import` | object | for `import` | Seed state from another scheduler (section 2.2). |
 
 Readers ignore unknown fields. Writers must not reuse a field name with a
-different meaning.
+different meaning. Patterns (`ts`, dates, `device`) must match the whole value:
+a value with a trailing newline is invalid.
 
 ### 2.1 Questions and card rating
 
@@ -235,8 +241,33 @@ The result for each card that has at least one event:
 | `first_review` | Time of the first non-import review, or none |
 | `last_day` | Learning-day index of the last non-import review, or none |
 
-A state cache (`state.json`) is optional and only for speed. Deleting it must
-not lose anything; replaying all logs rebuilds it.
+### 4.1 State cache
+
+A reader may keep a checkpoint so that it does not replay the whole history at
+every start. The checkpoint is device-local and private to one implementation:
+the plugin keeps it in IndexedDB, Python callers pass a `cache_dir` (for example
+under `~/.cache/secondbrain/`). It is never stored in the vault and never read
+by another device. Deleting it loses nothing.
+
+A checkpoint holds the replay result (every card's state, the review days, the
+first-review day of each card, the issues), the newest applied event, and for
+each log file how much was read: length, line count and a hash of that prefix.
+
+Loading with a checkpoint:
+
+1. For every log file, the prefix that was read must be unchanged (same hash)
+   and the file must not have shrunk; every file in the checkpoint must still
+   exist.
+2. Only the lines after that prefix are parsed. If a file does not end with a
+   newline (a line is still being written), the load is a full replay and no
+   checkpoint is saved.
+3. The new events are applied in replay order if all of them are later than
+   the newest applied event. An older event (a device that synced late) means a
+   full replay.
+4. Anything else unexpected (another format version, other FSRS parameters or
+   library version, a damaged checkpoint) also means a full replay.
+
+The result must equal a full replay; both test suites check this.
 
 ## 5. Status
 
@@ -290,8 +321,14 @@ The daily queue lists due cards first, then new cards.
     so they conflict with the prerequisite edges. Edges to cards outside the
     candidate set, and self-edges, are ignored.
   - Ties: among cards that are ready, the smallest (`rank`, `id`) comes first.
-    `rank` is an integer the caller computes (for example from the domain's
-    pillar and topic order); the default is 0.
+    `rank` = domain position × 1,000,000 + pillar order × 1,000 + topic
+    position. Domain position is the index in the study domains, or in all
+    domains sorted by code point when none are selected. Pillar order is the
+    pillar's `order` in the taxonomy YAML (its list position + 1 when missing);
+    topic position is the index of the card's `topic` in the pillar's `topics`.
+    Unknown pillars and topics get 999. Python: `build_taxonomy` and
+    `rank_cards` (pass `taxonomy=` to `queue_report`); plugin: `rankCards`.
+    `tests/fixtures/review/rank.json` holds the shared expectations.
   - Cycles: when cards remain but none is ready, the remaining card with the
     smallest (`rank`, `id`) is taken next and reported as a cycle break. No
     card is dropped.

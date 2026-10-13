@@ -116,22 +116,16 @@ export function siblingTitles(card: IndexedCard, all: Iterable<IndexedCard>, lim
 
 /** One or two lines about the learner's history with this card. Events: newest first. */
 export function learnerState(
-	events: { mode: string; rating: number | null; ts: { ms: number; offsetMin: number }; raw: Record<string, unknown> }[],
+	events: { mode: string; rating: number | null; ms: number; offsetMin: number; missing: string[] }[],
 	reps: number,
 	labels: { none: string; summary: (n: number, date: string, rating: number) => string; missing: (items: string) => string },
 ): string {
 	const reviews = events.filter((e) => e.mode !== "import" && e.rating !== null);
 	if (!reviews.length) return labels.none;
 	const last = reviews[0];
-	const date = new Date(last.ts.ms + last.ts.offsetMin * 60_000).toISOString().slice(0, 10);
+	const date = new Date(last.ms + last.offsetMin * 60_000).toISOString().slice(0, 10);
 	const lines = [labels.summary(Math.max(reps, reviews.length), date, last.rating!)];
-	for (const e of reviews) {
-		const items = Array.isArray(e.raw.items) ? (e.raw.items as Record<string, unknown>[]) : [];
-		const missing = items.flatMap((i) => (Array.isArray(i.missing) ? i.missing.filter((m): m is string => typeof m === "string") : []));
-		if (missing.length) {
-			lines.push(labels.missing(missing.slice(0, 6).join("；")));
-			break;
-		}
-	}
+	const withMissing = reviews.find((e) => e.missing.length);
+	if (withMissing) lines.push(labels.missing(withMissing.missing.slice(0, 6).join("；")));
 	return lines.join("\n");
 }

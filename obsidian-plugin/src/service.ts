@@ -1,29 +1,30 @@
 // ReviewService: the plugin's single owner of review state.
-// Cards come from the index, events from the store; state is always a replay of the events.
+// Cards come from the index, events from the store; state is always a replay of the events,
+// started from this device's checkpoint when one is valid (docs/review-registry.md section 4.1).
 import {
 	applyEvent,
 	buildQueue,
+	type CardState,
+	type Checkpoint,
 	countEvent,
 	DAY_START_HOUR,
+	emptyResult,
+	learningDay,
+	loadLogs,
 	localNow,
 	makeEvent,
 	type NewEvent,
-	orderEvents,
 	parseEvent,
 	type Queue,
-	replay,
+	type RecentEvent,
 	type ReplayResult,
-	emptyResult,
-	learningDay,
-	type ReviewEvent,
 	type Stamp,
 	summarize,
 	type Summary,
-	type CardState,
 } from "./registry";
 import type { IndexedCard } from "./vault/card-index";
 import type { EventStore } from "./vault/event-store";
-import { domainMapTitles, emptyTaxonomy, rankFor, type Taxonomy } from "./vault/taxonomy";
+import { domainMapTitles, emptyTaxonomy, rankCards, type Taxonomy } from "./vault/taxonomy";
 
 export interface CardSource {
 	all(): IndexedCard[];
@@ -31,16 +32,24 @@ export interface CardSource {
 	version: number;
 }
 
+/** Device-local storage for the replay checkpoint. Losing it only costs time. */
+export interface CacheStore {
+	load(): Promise<unknown>;
+	save(checkpoint: Checkpoint): Promise<void>;
+}
+
 export interface ServiceOptions {
 	newPerDay: () => number;
 	studyDomains: () => string[];
 	clock?: () => Stamp;
+	cache?: CacheStore;
 }
 
+type EventKey = { ms: number };
+
 export class ReviewService {
-	private events: ReviewEvent[] = [];
 	private result: ReplayResult = emptyResult();
-	private lastKey: ReviewEvent | null = null;
+	private lastKey: EventKey | null = null;
 	private ranked: { version: string; cards: IndexedCard[] } | null = null;
 	private listeners = new Set<() => void>();
 	/** Bumped whenever events or the taxonomy change; keys the queue and summary caches. */
@@ -48,6 +57,8 @@ export class ReviewService {
 	private cache = new Map<string, { key: string; value: unknown }>();
 	taxonomy: Taxonomy = emptyTaxonomy();
 	loaded = false;
+	/** "events" after a full replay, "cache" after continuing from the checkpoint. */
+	loadedFrom: "events" | "cache" | "" = "";
 
 	constructor(
 		readonly cards: CardSource,
@@ -75,29 +86,28 @@ export class ReviewService {
 		this.notify();
 	}
 
-	/** Re-read every log file and replay from scratch. */
-	async reload(): Promise<void> {
-		const { events, issues } = await this.store.readAll();
-		this.events = events;
-		this.result = replay(events);
-		this.result.issues = issues;
-		const ordered = orderEvents(events);
-		this.lastKey = ordered[ordered.length - 1] ?? null;
+	/** Read the logs and rebuild state; `full` ignores the checkpoint. */
+	async reload(full = false): Promise<void> {
+		const files = await this.store.readTexts();
+		const saved = full || !this.opts.cache ? null : await this.opts.cache.load().catch(() => null);
+		const out = loadLogs(files, saved as Checkpoint | null);
+		this.result = out.result;
+		this.lastKey = out.watermark ? { ms: out.watermark[0] } : null;
+		this.loadedFrom = out.from;
 		this.loaded = true;
 		this.version++;
+		if (out.checkpoint && this.opts.cache) {
+			await this.opts.cache.save(out.checkpoint).catch((e) => console.warn("[secondbrain-review] cannot save review cache", e));
+		}
 		this.notify();
 	}
 
 	/** Cards with their tie-break rank for the new-card order (cached per index/settings version). */
 	rankedCards(): IndexedCard[] {
 		const domains = this.opts.studyDomains();
-		const version = `${this.cards.version}|${domains.join(",")}|${this.taxonomy.pillars.size}`;
+		const version = `${this.cards.version}|${domains.join(",")}|${this.version}`;
 		if (this.ranked?.version === version) return this.ranked.cards;
-		const all = this.cards.all();
-		const order = new Map<string, number>();
-		if (domains.length) domains.forEach((d, i) => order.set(d, i));
-		else [...new Set(all.map((c) => c.domain))].sort().forEach((d, i) => order.set(d, i));
-		const cards = all.map((c) => ({ ...c, rank: rankFor(c, this.taxonomy, order) }));
+		const cards = rankCards(this.cards.all(), this.taxonomy, domains);
 		this.ranked = { version, cards };
 		return cards;
 	}
@@ -137,28 +147,44 @@ export class ReviewService {
 		return domainMapTitles(this.cards.all(), this.taxonomy);
 	}
 
-	/** Recent events of one card, newest first. */
-	history(cardId: string, limit = 5): ReviewEvent[] {
-		return this.events
-			.filter((e) => e.card === cardId)
-			.sort((a, b) => b.ts.ms - a.ts.ms)
-			.slice(0, limit);
+	/** The last few events of one card, newest first. */
+	history(cardId: string): RecentEvent[] {
+		return [...(this.result.states.get(cardId)?.recent ?? [])].reverse();
 	}
 
-	/** Write many events at once (imports), then replay everything. */
-	async recordBatch(inputs: (Omit<NewEvent, "device" | "now"> & { now?: Stamp })[]): Promise<number> {
-		if (!inputs.length) return 0;
-		const objs = inputs.map((input) => makeEvent({ ...input, device: this.store.device, now: input.now ?? this.now() }));
-		const path = await this.store.appendMany(objs);
+	/**
+	 * Apply events this device just wrote. They normally come after everything replayed so far;
+	 * if not (the clock went backwards), replay all logs instead.
+	 */
+	private async applyWritten(objs: Record<string, unknown>[], path: string): Promise<void> {
 		const source = path.slice(path.lastIndexOf("/") + 1);
-		for (const obj of objs) this.events.push(parseEvent(obj, source, Number.MAX_SAFE_INTEGER));
-		const issues = this.result.issues;
-		this.result = replay(this.events);
-		this.result.issues = issues;
-		const ordered = orderEvents(this.events);
-		this.lastKey = ordered[ordered.length - 1] ?? null;
+		const events = objs.map((obj) => parseEvent(obj, source, Number.MAX_SAFE_INTEGER));
+		let last = this.lastKey?.ms ?? -Infinity;
+		const inOrder = events.every((ev) => {
+			const ok = ev.ts.ms > last;
+			last = ev.ts.ms;
+			return ok;
+		});
+		if (!inOrder) return this.reload(true);
+		for (const ev of events) {
+			this.result.states.set(ev.card, applyEvent(this.result.states.get(ev.card), ev, DAY_START_HOUR));
+			countEvent(this.result, ev, DAY_START_HOUR);
+		}
+		this.lastKey = { ms: last };
 		this.version++;
 		this.notify();
+	}
+
+	/** Write many events at once (imports). */
+	async recordBatch(inputs: (Omit<NewEvent, "device" | "now"> & { now?: Stamp })[]): Promise<number> {
+		if (!inputs.length) return 0;
+		const base = this.now();
+		// Distinct instants keep the order of the batch and avoid duplicate keys.
+		const objs = inputs.map((input, i) =>
+			makeEvent({ ...input, device: this.store.device, now: input.now ?? { ms: base.ms + i, offsetMin: base.offsetMin } }),
+		);
+		const path = await this.store.appendMany(objs);
+		await this.applyWritten(objs, path);
 		return objs.length;
 	}
 
@@ -166,22 +192,7 @@ export class ReviewService {
 	async record(input: Omit<NewEvent, "device" | "now"> & { now?: Stamp }): Promise<CardState | undefined> {
 		const obj = makeEvent({ ...input, device: this.store.device, now: input.now ?? this.now() });
 		const path = await this.store.append(obj);
-		const ev = parseEvent(obj, path.slice(path.lastIndexOf("/") + 1), Number.MAX_SAFE_INTEGER);
-		this.events.push(ev);
-		const after = this.lastKey === null || ev.ts.ms > this.lastKey.ts.ms;
-		if (after) {
-			this.result.states.set(ev.card, applyEvent(this.result.states.get(ev.card), ev, DAY_START_HOUR));
-			countEvent(this.result, ev, DAY_START_HOUR);
-			this.lastKey = ev;
-		} else {
-			const issues = this.result.issues;
-			this.result = replay(this.events);
-			this.result.issues = issues;
-			const ordered = orderEvents(this.events);
-			this.lastKey = ordered[ordered.length - 1] ?? null;
-		}
-		this.version++;
-		this.notify();
-		return this.result.states.get(ev.card);
+		await this.applyWritten([obj], path);
+		return this.result.states.get(input.card);
 	}
 }

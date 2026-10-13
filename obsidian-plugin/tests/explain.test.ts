@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { cardBody, explainVars, learnerState, selectRelations, siblingTitles, truncate } from "../src/llm/explain-context";
 import { DEFAULT_EXPLAIN_TEMPLATE, parseTemplate, renderMessages } from "../src/llm/prompts";
-import { parseEvent } from "../src/registry";
+import { parseEvent, replay } from "../src/registry";
 import { cardFromFrontmatter, type IndexedCard } from "../src/vault/card-index";
 import { buildTaxonomy } from "../src/vault/taxonomy";
 import { fixtureText } from "./fixtures";
@@ -58,7 +58,8 @@ describe("explain context", () => {
 		const ev = (ts: string, rating: number, items?: unknown) => parseEvent({ v: 1, ts, device: "obs-a", card: "c", mode: items ? "qa" : "flip", rating, ...(items ? { items } : {}) });
 		const labels = { none: "none", summary: (n: number, d: string, r: number) => `${n}|${d}|${r}`, missing: (s: string) => `missing ${s}` };
 		expect(learnerState([], 0, labels)).toBe("none");
-		const history = [ev("2026-03-05T08:00:00.000+01:00", 3), ev("2026-03-04T08:00:00.000+01:00", 2, [{ q: "h:1", rating: 2, missing: ["loop invariant"] }])];
+		const result = replay([ev("2026-03-04T08:00:00.000+01:00", 2, [{ q: "h:1", rating: 2, missing: ["loop invariant"] }]), ev("2026-03-05T08:00:00.000+01:00", 3)]);
+		const history = [...result.states.get("c")!.recent].reverse();
 		expect(learnerState(history, 2, labels)).toBe("2|2026-03-05|3\nmissing loop invariant");
 	});
 	it("truncates on characters, not bytes", () => {

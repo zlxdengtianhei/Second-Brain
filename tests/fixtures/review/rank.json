@@ -1,0 +1,44 @@
+{
+  "format": 1,
+  "note": "New-card ranking shared by the Python registry (rank_cards) and the plugin (rankCards): study-domain position, then pillar order, then topic position. Expectations are hand-computed from docs/review-registry.md section 6.",
+  "taxonomy": [
+    {"path": "20_MOCs/_pillars/Algorithms.yaml", "data": {"title": "Algorithms", "pillars": [
+      {"name": "Searching", "order": 2, "why": "Find items fast.", "topics": ["Linear", "Divide and conquer search"]},
+      {"name": "Basics", "order": 1, "why": "Ground first.", "topics": ["Arrays", "Lists"]}
+    ]}},
+    {"path": "20_MOCs/_pillars/Networking.yml", "data": {"pillars": [
+      {"name": "Transport", "topics": ["Connection setup", "Reliability"]},
+      {"name": "Security", "topics": ["TLS"]},
+      {"name": "Basics", "order": 9, "topics": ["Duplicate pillar name: the first definition wins"]}
+    ]}},
+    {"path": "20_MOCs/_pillars/Broken.yaml", "data": "not a mapping"}
+  ],
+  "cards": [
+    {"id": "r_bs", "domain": "algo", "pillar": "Searching", "topic": "Divide and conquer search", "relations": [["depends_on", "r_arr"]]},
+    {"id": "r_lin", "domain": "algo", "pillar": "Searching", "topic": "Linear"},
+    {"id": "r_arr", "domain": "algo", "pillar": "Basics", "topic": "Arrays"},
+    {"id": "r_list", "domain": "algo", "pillar": "Basics", "topic": "Lists"},
+    {"id": "r_odd", "domain": "algo", "pillar": "Basics", "topic": "A topic that is not listed"},
+    {"id": "r_none", "domain": "algo", "pillar": "No such pillar", "topic": ""},
+    {"id": "r_tcp", "domain": "net", "pillar": "Transport", "topic": "Connection setup"},
+    {"id": "r_rel", "domain": "net", "pillar": "Transport", "topic": "Reliability"},
+    {"id": "r_tls", "domain": "net", "pillar": "Security", "topic": "TLS", "relations": [["depends_on", "r_tcp"]]},
+    {"id": "r_x", "domain": "", "pillar": "", "topic": ""}
+  ],
+  "now": "2026-03-10T12:00:00.000+01:00",
+  "new_per_day": 20,
+  "cases": [
+    {
+      "name": "all-domains",
+      "study_domains": [],
+      "ranks": {"r_x": 999999, "r_arr": 1001000, "r_list": 1001001, "r_odd": 1001999, "r_lin": 1002000, "r_bs": 1002001, "r_none": 1999999, "r_tcp": 2001000, "r_rel": 2001001, "r_tls": 2002000},
+      "new": ["r_x", "r_arr", "r_list", "r_odd", "r_lin", "r_bs", "r_none", "r_tcp", "r_rel", "r_tls"]
+    },
+    {
+      "name": "study-domains-in-given-order",
+      "study_domains": ["net", "algo"],
+      "ranks": {"r_tcp": 1000, "r_rel": 1001, "r_tls": 2000, "r_arr": 1001000, "r_list": 1001001, "r_odd": 1001999, "r_lin": 1002000, "r_bs": 1002001, "r_none": 1999999, "r_x": 2999999},
+      "new": ["r_tcp", "r_rel", "r_tls", "r_arr", "r_list", "r_odd", "r_lin", "r_bs", "r_none"]
+    }
+  ]
+}

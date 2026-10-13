@@ -21,7 +21,7 @@
 }
 .sbr-stats {
 	display: grid;
-	grid-template-columns: repeat(4, minmax(0, 1fr));
+	grid-template-columns: repeat(auto-fit, minmax(64px, 1fr));
 	gap: 6px;
 	margin-bottom: 10px;
 }
@@ -54,6 +54,15 @@
 .sbr-warn {
 	color: var(--text-warning);
 	margin: 6px 0;
+}
+.sbr-domains-wrap.sbr-compact {
+	max-height: 18em;
+	overflow-y: auto;
+}
+.sbr-domains-wrap.sbr-compact thead th {
+	position: sticky;
+	top: 0;
+	background: var(--background-primary);
 }
 .sbr-domains {
 	width: 100%;

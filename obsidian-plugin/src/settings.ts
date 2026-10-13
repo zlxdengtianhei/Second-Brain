@@ -6,8 +6,10 @@ export interface ReviewSettings {
 	knowledge: string;
 	taxonomy: string;
 	data: string;
-	/** Heading of the section that holds `question::answer` lines. */
+	/** Headings of the card sections the plugin reads. */
 	reviewSection: string;
+	essenceSection: string;
+	propositionsSection: string;
 	logFormat: LogFormat;
 	newPerDay: number;
 	/** Empty = all domains. Order sets which domain's new cards come first. */
@@ -31,6 +33,8 @@ export const DEFAULT_SETTINGS: ReviewSettings = {
 	taxonomy: "20_MOCs/_pillars",
 	data: "_data",
 	reviewSection: "复习卡",
+	essenceSection: "本质",
+	propositionsSection: "命题",
 	logFormat: "jsonl",
 	newPerDay: 10,
 	studyDomains: [],

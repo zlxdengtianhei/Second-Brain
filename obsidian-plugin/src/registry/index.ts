@@ -3,3 +3,4 @@ export * from "./events";
 export * from "./scheduler";
 export * from "./status";
 export * from "./cards";
+export * from "./checkpoint";

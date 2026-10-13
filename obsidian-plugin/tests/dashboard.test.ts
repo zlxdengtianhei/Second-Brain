@@ -21,7 +21,7 @@ function model(studyDomains: string[]) {
 describe("dashboardModel", () => {
 	it("shows due, new quota used, done today, streak and per-domain rows", () => {
 		const m = model([]);
-		expect([m.due, m.newToday, m.newMax, m.newLeft, m.doneToday, m.streak]).toEqual([2, 1, 10, 8, 1, 3]);
+		expect([m.due, m.dueNotReviewed, m.newToday, m.newMax, m.newLeft, m.doneToday, m.streak]).toEqual([2, 1, 1, 10, 8, 1, 3]);
 		expect(m.rows.map((r) => r.label)).toEqual(["Algorithms", "Networking"]);
 		expect(m.totals.counts.total).toBe(14);
 		const net = m.rows[1];
