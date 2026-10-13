@@ -1,0 +1,18 @@
+{
+  "name": "secondbrain-mermaid-check",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Parse and render Mermaid blocks with the exact Mermaid build that Obsidian ships, in a headless browser.",
+  "type": "module",
+  "license": "MIT",
+  "bin": {
+    "mermaid-check": "check.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "mermaid": "11.13.0",
+    "puppeteer-core": "23.11.1"
+  }
+}
