@@ -94,7 +94,13 @@ MOC = {
 PAGES = {
     'zh': {
         'review_page': '今日复习-{date}',
-        'inverse_gloss': '{type} 的反向',  # catalog gloss of a new inverse relation word (domcreate)
+        # meaning of a relation type as shown to models (catalog.relation_meanings)
+        'relation_plain': 'A {type} B',
+        'relation_forward': 'A {type} B：{gloss}',
+        'relation_inverse': 'A {type} B 等于 B {other} A',
+        'relation_inverse_gloss': 'A {type} B 等于 B {other} A；{other}：{gloss}',
+        'relation_symmetric': 'A {type} B 与 B {type} A 同义',
+        'relation_symmetric_gloss': 'A {type} B 与 B {type} A 同义：{gloss}',
         'review_title': '# 今日复习 {date}',
         'review_intro': '先合上笔记复述，再打开核对；评级用 HOME 里的 SecondBrain Review 面板。',
         'back_home': '返回首页',
@@ -145,7 +151,12 @@ PAGES = {
         'review_intro': 'Recall first with the note closed, then open it to check; rate cards in the '
                         'SecondBrain Review dashboard on HOME.',
         'back_home': 'Back to HOME',
-        'inverse_gloss': 'inverse of {type}',
+        'relation_plain': 'A {type} B',
+        'relation_forward': 'A {type} B: {gloss}',
+        'relation_inverse': 'A {type} B means B {other} A',
+        'relation_inverse_gloss': 'A {type} B means B {other} A; {other}: {gloss}',
+        'relation_symmetric': 'A {type} B means the same as B {type} A',
+        'relation_symmetric_gloss': 'A {type} B means the same as B {type} A: {gloss}',
         'due_cards': 'Due cards',
         'new_today': "Today's new cards",
         'none': 'Nothing here.',

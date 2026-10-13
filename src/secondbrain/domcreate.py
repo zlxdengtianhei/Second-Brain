@@ -15,7 +15,7 @@ import json
 from dataclasses import replace
 from pathlib import Path
 
-from . import jobs, labels
+from . import jobs
 from . import layout as layouts
 from .catalog import validate_catalog
 from .classification import writable_snapshot
@@ -149,8 +149,8 @@ def _catalog_after(catalog: dict, packet: dict, proposal: dict) -> dict:
         data.setdefault('inverse_relations', {})[w['type']] = w['inverse']
         data['inverse_relations'][w['inverse']] = w['type']
         data.setdefault('relation_gloss', {})[w['type']] = w['gloss']
-        data['relation_gloss'][w['inverse']] = w.get('inverse_gloss') or labels.pages(
-            labels.recorded_language(data))['inverse_gloss'].format(type=w['type'])
+        if w.get('inverse_gloss'):  # otherwise its meaning is derived from the gloss of `type`
+            data['relation_gloss'][w['inverse']] = w['inverse_gloss']
     if new_words:
         data.setdefault('domain_relations', {})[domain] = new_words
     return validate_catalog(data)

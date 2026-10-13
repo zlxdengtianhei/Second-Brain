@@ -180,3 +180,43 @@ def taxonomy_packet(snapshot, domains: list) -> dict:
         "domain_mocs": domain_mocs,
         "taxonomies": taxonomies,
     }
+
+
+def relation_types(catalog: dict) -> list:
+    """Every relation type a card may use: ``relation_types`` plus the words of ``domain_relations``."""
+    rels = list(catalog.get('relation_types') or [])
+    for words in (catalog.get('domain_relations') or {}).values():
+        rels += [w for w in words if isinstance(w, str) and w not in rels]
+    return rels
+
+
+def relation_meanings(catalog: dict, types=None, language: str | None = None) -> dict:
+    """``{type: meaning}`` in the form "A <type> B ...", where A holds the relation and B is its target.
+
+    One source of truth: a type's own ``relation_gloss``, else the meaning of
+    its inverse from ``inverse_relations`` ("A used_by B means B tool_for A"),
+    so a type and its inverse cannot be explained in opposite directions.
+    """
+    from . import labels
+    words = labels.pages(language or labels.recorded_language(catalog))
+    glosses = catalog.get('relation_gloss') or {}
+    inverse = catalog.get('inverse_relations') or {}
+
+    def gloss(name):
+        value = glosses.get(name)
+        return value.strip() if isinstance(value, str) and value.strip() else None
+
+    out = {}
+    for name in relation_types(catalog) if types is None else types:
+        other, own = inverse.get(name), gloss(name)
+        if other == name:
+            key = 'relation_symmetric_gloss' if own else 'relation_symmetric'
+        elif own:
+            key = 'relation_forward'
+        elif other:
+            key = 'relation_inverse_gloss' if gloss(other) else 'relation_inverse'
+            own = gloss(other)
+        else:
+            key = 'relation_plain'
+        out[name] = words[key].format(type=name, other=other, gloss=own)
+    return out

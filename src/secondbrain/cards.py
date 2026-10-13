@@ -88,15 +88,14 @@ def render_body(fields: dict, relations: list[Relation], *, language: str = 'en'
     lines.append('')
     if diagram:
         lines += [f'## {h["diagram"]}', diagram.strip('\n'), '']
-    lines.append(f'## {h["intuition"]}')
     intuition = fields.get('intuition')
     confusions = fields.get('confusions') or []
-    if intuition:
-        lines.append(f'- {h["intuition_label"]}{_one_line(intuition)}')
-    lines += [f'- {h["contrast_label"]}{_one_line(c)}' for c in confusions]
-    if not intuition and not confusions:
-        lines.append(h['none'])
-    lines.append('')
+    if intuition or confusions:  # an empty section is left out, as in hand-kept vaults
+        lines.append(f'## {h["intuition"]}')
+        if intuition:
+            lines.append(f'- {h["intuition_label"]}{_one_line(intuition)}')
+        lines += [f'- {h["contrast_label"]}{_one_line(c)}' for c in confusions]
+        lines.append('')
     lines += render_related(relations, language=language)
     lines.append(f'## {h["flashcards"]}')
     lines += [f'{_one_line(c["q"])}::{_one_line(c["a"])}' for c in fields['flashcards']]
@@ -104,8 +103,8 @@ def render_body(fields: dict, relations: list[Relation], *, language: str = 'en'
     return normalize_markdown(text)[0]
 
 
-def render_related(relations: list[Relation], *, language: str = 'en') -> list[str]:
-    h = HEADINGS[language]
+def _related_lines(relations: list[Relation], language: str) -> tuple[list[str], list[str]]:
+    """(core lines, extension lines) for ``relations``, one per (type, target)."""
     core, extension, seen = [], [], set()
     for rel in relations:
         key = (rel.type, rel.target)
@@ -113,19 +112,93 @@ def render_related(relations: list[Relation], *, language: str = 'en') -> list[s
             continue
         seen.add(key)
         note = _one_line(rel.note) if rel.note else ''
+        suffix = (f'（{note}）' if language == 'zh' else f' ({note})') if note else ''
         if rel.tier == 'extension':
-            suffix = (f'（{note}）' if language == 'zh' else f' ({note})') if note else ''
             extension.append(f'- [[{rel.target_title}]] — {rel.type}{suffix}')
         else:
-            suffix = (f'（{note}）' if language == 'zh' else f' ({note})') if note else ''
             core.append(f'- {rel.type}:: [[{rel.target_title}]]{suffix}')
-    lines = [f'## {h["related"]}']
-    lines += core or ([h['none']] if not extension else [])
+    return core, extension
+
+
+def _details(extension: list[str], language: str) -> list[str]:
+    summary = HEADINGS[language]['extension'].format(n=len(extension))
+    return [f'<details><summary>{summary}</summary>', '', *extension, '', '</details>']
+
+
+def render_related(relations: list[Relation], *, language: str = 'en') -> list[str]:
+    """The related section; none when there are no relations (an empty section is left out)."""
+    core, extension = _related_lines(relations, language)
+    if not core and not extension:
+        return []
+    lines = [f'## {HEADINGS[language]["related"]}', *core]
     if extension:
-        lines += ['', f'<details><summary>{h["extension"].format(n=len(extension))}</summary>', '',
-                  *extension, '', '</details>']
+        lines += [''] + _details(extension, language)
     lines.append('')
     return lines
+
+
+def add_related(body: str, relations: list[Relation], *, language: str = 'en',
+                all_relations: list[Relation] | None = None) -> str:
+    """``body`` with ``relations`` added to its related section; every byte outside that section stays.
+
+    New lines have the renderer's form. Lines already in the section, in any
+    form, are kept as they are, and a relation whose ``[[title]]`` and type are
+    already on one line there is not added again. A section that only says
+    there is nothing yet, or a missing one (inserted before the review-card
+    section, or at the end), is rendered from ``all_relations`` (the card's
+    whole relation list) when given.
+    """
+    lines = body.split('\n')
+    related = {f'## {h["related"]}': name for name, h in HEADINGS.items()}
+    start = next((i for i, line in enumerate(lines) if line.rstrip() in related), None)
+    # the card's own headings decide the language of what is added
+    known = {f'## {text}': name for name, h in HEADINGS.items() for key, text in h.items()
+             if key in {'essence', 'propositions', 'intuition', 'related', 'flashcards'}}
+    language = next((known[line.rstrip()] for line in lines if line.rstrip() in known), language)
+    end = len(lines) if start is None else next(
+        (i for i in range(start + 1, len(lines)) if lines[i].startswith('## ')), len(lines))
+    section = [] if start is None else lines[start + 1:end]
+    present = [line for line in section if line.strip()]
+    fresh = [r for r in relations if r.target_title and not any(
+        f'[[{r.target_title}]]' in line and r.type in line for line in present)]
+    core, extension = _related_lines(fresh, language)
+    if not core and not extension:
+        return body
+    core = normalize_markdown('\n'.join(core))[0].split('\n') if core else []
+    if start is None or all(x.strip() in {h['none'] for h in HEADINGS.values()} for x in present):
+        if all_relations is not None:
+            core, extension = _related_lines(list(all_relations) + list(relations), language)
+            core = normalize_markdown('\n'.join(core))[0].split('\n') if core else []
+        block = [f'## {HEADINGS[language]["related"]}', *core]
+        if extension:
+            block += [''] + _details(extension, language)
+        block.append('')
+        if start is None:
+            flash = {f'## {h["flashcards"]}' for h in HEADINGS.values()}
+            at = next((i for i, line in enumerate(lines) if line.rstrip() in flash), None)
+            if at is None:
+                gap = '' if not body or body.endswith('\n\n') else ('\n' if body.endswith('\n') else '\n\n')
+                return body + gap + '\n'.join(block)
+            return '\n'.join(lines[:at] + block + lines[at:])
+        return '\n'.join(lines[:start] + block + lines[end:])
+    opened = next((i for i, line in enumerate(section) if line.startswith('<details>')), None)
+    closed = next((i for i, line in enumerate(section) if line.strip() == '</details>'), None)
+    if extension and opened is not None and closed is not None:
+        at = closed
+        while at > opened and not section[at - 1].strip():
+            at -= 1
+        section[at:at] = extension
+        count = sum(1 for line in section[opened:closed + len(extension)] if line.startswith('- '))
+        summary = re.sub(r'\d+', str(count), section[opened], count=1)
+        section[opened] = summary
+        extension = []
+    limit = opened if opened is not None else len(section)
+    last = max((i for i in range(limit) if section[i].strip()), default=-1)
+    section[last + 1:last + 1] = core
+    if extension:
+        last = max((i for i in range(len(section)) if section[i].strip()), default=-1)
+        section[last + 1:last + 1] = [''] + _details(extension, language)
+    return '\n'.join(lines[:start + 1] + section + lines[end:])
 
 
 def render_frontmatter(meta: dict) -> str:

@@ -230,3 +230,17 @@ def test_an_empty_vault_offers_the_domains_whose_words_the_source_uses(tmp_path)
     assert route(root, snap, text, domains=3)['domains'] == ['networks', 'sorting', 'calculus']
     # no shared words: empty domains in catalog order, as before
     assert route(root, snap, 'Lorem ipsum dolor.', domains=3)['domains'] == names[:3]
+
+
+def test_every_passage_brings_its_own_nearest_cards(tmp_path):
+    from secondbrain.pipelines import routing
+    root = build(tmp_path / 'vault')
+    snap = read_snapshot(root)
+    text = ('Binary search keeps a sorted range lo to hi and halves it each step.\n\n'
+            'RSVP keeps reservation soft state that expires unless PATH and RESV messages refresh it.\n\n'
+            'Multicast routing builds a tree so one packet reaches every member of a group.')
+    routed = route(root, snap, text, domains=2, neighbors=1)  # one card for the whole chunk ...
+    titles = [n['title'] for n in routed['neighbors']]
+    # ... plus the best cards of each passage, so a long chunk is not left with the few cards of one part
+    assert {'Binary search', 'RSVP soft state', 'Multicast trees'} <= set(titles)
+    assert len(titles) == len(set(titles)) <= routing.MAX_NEIGHBORS

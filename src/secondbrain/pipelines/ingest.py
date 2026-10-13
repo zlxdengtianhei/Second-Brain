@@ -31,7 +31,7 @@ import yaml
 from .. import cards as cardfmt
 from .. import config, inbox, jobs, schemas
 from .. import layout as layouts
-from ..catalog import category_pairs, taxonomy_packet, validate_catalog
+from ..catalog import category_pairs, relation_meanings, taxonomy_packet, validate_catalog
 from ..classification import projection_changes, snapshot_checks, taxonomy_fingerprint, writable_snapshot
 from ..evidence import check_verbatim
 from ..executors.base import CHUNK_TOO_LARGE, INVALID_OUTPUT, ExecutorFailure
@@ -381,10 +381,8 @@ def _legal_listing(packet: dict, domain: str) -> str:
 
 
 def _relation_types(catalog: dict) -> list:
-    rels = list(catalog.get('relation_types') or [])
-    for words in (catalog.get('domain_relations') or {}).values():
-        rels += [w for w in words if isinstance(w, str) and w not in rels]
-    return rels
+    from ..catalog import relation_types
+    return relation_types(catalog)
 
 
 def _candidate_taxonomies(packet: dict, domains: list) -> dict:
@@ -437,7 +435,7 @@ def producer_packet(root: Path, state: dict, packet: dict, slot: str) -> dict:
                      'total': len(order), 'text': _chunk_text(packet, base)},
            'domains': domains,
            'candidate_taxonomies': _candidate_taxonomies(packet, chunk['candidate_domains']),
-           'relation_types': _relation_types(packet['catalog']),
+           'relation_types': relation_meanings(packet['catalog']),
            'neighbors': chunk['neighbors'],
            'other_chunks_cards': _other_cards(root, state, packet, base),
            'rules': {'new_topics_per_source': packet['settings']['new_topics_per_source'],
@@ -502,7 +500,7 @@ def review_packet(root: Path, state: dict, packet: dict, slot: str) -> dict:
            'taxonomies': _candidate_taxonomies(packet, domains),
            'domains': [{'slug': d, 'question': m.get('question')}
                        for d, m in sorted(packet['catalog']['domains'].items())],
-           'relation_types': _relation_types(packet['catalog']),
+           'relation_types': relation_meanings(packet['catalog']),
            'other_chunks_cards': _other_cards(root, state, packet, base)}
     if rnd:
         kept = _accepted_so_far(root, state, base, rnd)
@@ -687,6 +685,8 @@ def validate_candidate(packet: dict, payload: dict, *, slot: str, other_cards: l
                 errors.append(f'{where}.relations: tier must be null or "extension"')
             if r.get('note') is not None and not isinstance(r.get('note'), str):
                 errors.append(f'{where}.relations: note must be a string')
+        if any(isinstance(r, dict) and r.get('type') == 'contrasts_with' for r in rels) and not conf:
+            errors.append(f'{where}: a card with a contrasts_with relation states the contrast in confusions')
         if bare_id:
             for field_text in _text_fields(c):
                 if bare_id.search(field_text):
@@ -697,6 +697,7 @@ def validate_candidate(packet: dict, payload: dict, *, slot: str, other_cards: l
     unused = set(proposed) - used_topics
     for key in sorted(unused):
         errors.append(f'new topic {key[2]!r} is not used by any card')
+    errors += _reversed_relations(catalog, cards)
     covered = set()
     for i, row in enumerate(coverage):
         where = f'coverage[{i}]'
@@ -731,6 +732,34 @@ def validate_candidate(packet: dict, payload: dict, *, slot: str, other_cards: l
     if errors:
         raise IngestError('Candidate rejected by validation:\n- ' + '\n- '.join(errors))
     return payload
+
+
+def _reversed_relations(catalog: dict, cards: list) -> list[str]:
+    """Relations of one answer that contradict each other's direction.
+
+    With ``inverse_relations`` saying ``tool_for`` and ``used_by`` are inverses,
+    a card cannot hold both to one target, and two cards cannot each claim
+    ``tool_for`` of the other: one of the two is written the wrong way round.
+    """
+    inverse = catalog.get('inverse_relations') or {}
+    meanings = relation_meanings(catalog)
+    held = set()
+    for c in cards:
+        if isinstance(c, dict) and isinstance(c.get('slug'), str) and isinstance(c.get('relations'), list):
+            held |= {(c['slug'], r['type'], r['target']) for r in c['relations']
+                     if isinstance(r, dict) and isinstance(r.get('type'), str) and isinstance(r.get('target'), str)}
+    errors = []
+    for a, kind, b in sorted(held):
+        other = inverse.get(kind)
+        if not other or other == kind:
+            continue
+        if (a, other, b) in held and kind < other:
+            errors.append(f'cards[{a}].relations: {kind} and {other} to {b!r} say opposite things '
+                          f'({meanings.get(kind, kind)}); keep the one that matches the meaning')
+        if (b, kind, a) in held and a < b:
+            errors.append(f'cards[{a}] and cards[{b}]: "{a} {kind} {b}" and "{b} {kind} {a}" cannot both hold '
+                          f'({meanings.get(kind, kind)}); one of them points the wrong way')
+    return errors
 
 
 def validate_review(candidate: dict, review: dict, existing_ids: set, domains=()) -> dict:
@@ -1277,7 +1306,7 @@ def apply_job(root: Path, job_id: str, settled: list[dict] | None = None) -> dic
                          'chunk': chunk})
         notes.append({'id': cid, 'path': rel, 'title': title, 'domain': card['domain'],
                       'pillar': card['pillar'], 'topic': card['topic'], 'source_hash': source['sha256']})
-    # inverse edges into existing cards (frontmatter only)
+    # inverse edges into existing cards: frontmatter list and related section; other bytes stay
     to_add: dict = {}
     for slug in rels:
         for r in rels[slug]:
@@ -1301,6 +1330,13 @@ def apply_job(root: Path, job_id: str, settled: list[dict] | None = None) -> dic
         if body2 != existing.body:
             maintenance.append({'target': target, 'reason': 'patch would change the body; inverse edge not added'})
             continue
+        shown = [cardfmt.Relation(e['type'], e['target'], title_of.get(e['target'], ''), None, e.get('tier'))
+                 for e in added]
+        whole = [cardfmt.Relation(e['type'], e['target'], title_of.get(e['target'], ''), e.get('note'), e.get('tier'))
+                 for e in fm2.get('relations') or [] if isinstance(e, dict) and isinstance(e.get('target'), str)]
+        body3 = cardfmt.add_related(body2, shown, language=language, all_relations=whole)
+        raw2 = raw2[:len(raw2) - len(body2.encode('utf-8'))] + body3.encode('utf-8')
+        fm2, body2 = parse_note(raw2)
         changes.append(Change(existing.path, existing.sha256, raw2))
         updated[target] = replace(existing, raw=raw2, fm=fm2, body=body2, sha256=digest(raw2))
     # accepted new topics

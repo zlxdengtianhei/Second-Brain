@@ -48,5 +48,10 @@ def test_an_inverse_edge_only_adds_lines_to_an_existing_card(tmp_path):
     _, result, _ = run_default(root, __import__('secondbrain.layout', fromlist=['DEFAULT']).DEFAULT)
     assert result['status'] == 'applied'
     lines = added_only(seeded, path.read_bytes())
-    assert lines[0] == '  - type: similar_to' and all(line.startswith('  ') for line in lines)
+    head = [line for line in lines if line.startswith('  ')]
+    assert lines[:len(head)] == head and head[0] == '  - type: similar_to'
+    # the card had no related section: it is rendered from the whole relation list, in the card's language
+    assert lines[len(head):] == ['', '## 相关', '- part_of:: [[Pebble sizes]]', '- similar_to:: [[Lantern queue]]', '',
+                                 '<details><summary>拓展：可能存在关系（1 条）</summary>', '',
+                                 '- [[Lit marker memory cost]] — part_of', '', '</details>']
     assert (root / '00_Inbox').is_dir() and not (root / '00_Inbox' / SOURCE_NAME).exists()

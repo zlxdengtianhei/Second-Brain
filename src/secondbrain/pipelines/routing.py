@@ -21,6 +21,10 @@ from ..search import _tokenize
 from .chunking import _blocks
 
 HITS_PER_PASSAGE = 10
+#: Neighbour cards shown to the producer: the best ones for the whole chunk, then the
+#: best few of every passage, so each part of a long chunk gets its own nearby cards.
+NEIGHBORS_PER_PASSAGE = 3
+MAX_NEIGHBORS = 40
 #: Exponent and floor of the domain-size correction (votes / (share + floor) ** exponent).
 SIZE_EXPONENT = 0.5
 SIZE_FLOOR = 0.01
@@ -77,6 +81,10 @@ def route(root, snapshot, text: str, *, domains: int, neighbors: int = 8) -> dic
     order = sorted(votes, key=lambda d: (-votes[d], d))
     total = sum(votes.values()) or 1.0
     best = sorted(card_score, key=lambda c: (-card_score[c], c))[:neighbors]
+    for hits in results:
+        best += [h['id'] for h in hits[:NEIGHBORS_PER_PASSAGE]
+                 if h['domain'] in known and h.get('score', 0) > 0 and h['id'] not in best]
+    best = best[:MAX_NEIGHBORS]
     chosen = order[:domains]
     # Domains without votes (no cards yet, or no matching cards) still need a chance:
     # fill up to the limit, first those whose name or question shares words with the

@@ -35,7 +35,7 @@ def test_related_section_uses_inline_fields_without_ids_or_duplicates():
 
 
 def test_related_section_when_empty_or_only_extension():
-    assert cards.render_related([], language='en') == ['## Related', 'None yet.', '']
+    assert cards.render_related([], language='en') == []  # an empty section is left out
     only = cards.render_related([rel('part_of', 'kc_b', 'Card B', None, 'extension')], language='en')
     assert only[1] == '' and '- [[Card B]] — part_of' in only
 
@@ -43,7 +43,7 @@ def test_related_section_when_empty_or_only_extension():
 @pytest.mark.parametrize('language', ['en', 'zh'])
 def test_body_sections_in_order_and_diagram_slot(language):
     h = cards.HEADINGS[language]
-    body = cards.render_body(FIELDS, [], language=language)
+    body = cards.render_body(FIELDS, [rel('depends_on', 'kc_a', 'Card A')], language=language)
     order = [h['essence'], h['propositions'], h['intuition'], h['related'], h['flashcards']]
     positions = [body.index(f'## {name}\n') for name in order]
     assert positions == sorted(positions) and f'## {h["diagram"]}' not in body
@@ -84,3 +84,50 @@ def test_moc_domain_and_pillar_pages_carry_breadcrumbs_field(tmp_path):
     assert f'20_MOCs/{MOC}.md' in pages and any(p.startswith(f'20_MOCs/{MOC}/') for p in pages)
     for path, text in pages.items():
         assert text.startswith('---\nBC-list-note-field: down\n---\n# '), path
+
+
+@pytest.mark.parametrize('language', ['en', 'zh'])
+def test_empty_intuition_and_related_sections_are_left_out(language):
+    h = cards.HEADINGS[language]
+    bare = {**FIELDS, 'intuition': None, 'confusions': []}
+    body = cards.render_body(bare, [], language=language)
+    assert f'## {h["intuition"]}' not in body and f'## {h["related"]}' not in body and h['none'] not in body
+    assert f'## {h["propositions"]}' in body and f'## {h["flashcards"]}' in body
+    only_contrast = cards.render_body({**bare, 'confusions': ['Not a stack.']}, [], language=language)
+    assert f'## {h["intuition"]}\n- {h["contrast_label"]}Not a stack.\n' in only_contrast
+
+
+OLD_CARD = (  # a hand-kept card: other related-line forms, a fold of weak links, text after the section
+    '## 本质\nA sentence.\n\n## 相关\n'
+    '- [[Card A]] — depends_on（old note）\n- kc_raw — similar_to（kept as written）\n\n'
+    '<details><summary>拓展：可能存在关系（1 条）</summary>\n\n- [[Card W]] — part_of\n\n</details>\n\n'
+    '## 复习卡\nQ?::A.\n')
+
+
+def outside(body, heading):
+    start = body.index(heading)
+    end = body.index('\n## ', start + 1)
+    return body[:start], body[end:]
+
+
+def test_add_related_changes_only_the_related_section():
+    new = cards.add_related(OLD_CARD, [rel('tool_for', 'kc_n', 'New card'),
+                                       rel('similar_to', 'kc_w', 'Weak card', None, 'extension'),
+                                       rel('depends_on', 'kc_a', 'Card A')], language='en')
+    assert outside(new, '## 相关') == outside(OLD_CARD, '## 相关')
+    section = new[new.index('## 相关'):new.index('## 复习卡')]
+    assert section == ('## 相关\n'
+                       '- [[Card A]] — depends_on（old note）\n- kc_raw — similar_to（kept as written）\n'
+                       '- tool_for:: [[New card]]\n\n'
+                       '<details><summary>拓展：可能存在关系（2 条）</summary>\n\n- [[Card W]] — part_of\n'
+                       '- [[Weak card]] — similar_to\n\n</details>\n\n')  # Card A depends_on was there already
+    assert cards.add_related(new, [rel('tool_for', 'kc_n', 'New card')]) == new
+
+
+@pytest.mark.parametrize('body', [
+    '## 本质\nA sentence.\n\n## 相关\n暂无。\n\n## 复习卡\nQ?::A.\n',
+    '## 本质\nA sentence.\n\n## 复习卡\nQ?::A.\n',
+])
+def test_add_related_fills_an_empty_or_missing_section(body):
+    new = cards.add_related(body, [rel('used_by', 'kc_n', 'New card')], language='zh')
+    assert new == '## 本质\nA sentence.\n\n## 相关\n- used_by:: [[New card]]\n\n## 复习卡\nQ?::A.\n'

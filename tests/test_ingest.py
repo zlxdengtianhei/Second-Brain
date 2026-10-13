@@ -110,7 +110,10 @@ def test_ingest_acceptance_list(tmp_path, lay, language):
         assert digest(after[source_rel]) == fm['sources'][0]['sha256'] == digest(original)
         # 3. sections, 2-4 review lines, no bare ids, no duplicate related lines
         positions = [card.body.find(h + '\n') for h in HEADINGS[language]]
-        assert all(p >= 0 for p in positions) and positions == sorted(positions)
+        present = [p for p in positions if p >= 0]  # empty intuition and related sections are left out
+        assert positions[0] >= 0 and positions[1] >= 0 and positions[-1] >= 0 and present == sorted(present)
+        assert (positions[2] >= 0) == bool(fields.get('intuition') or fields.get('confusions'))
+        assert '暂无' not in card.body and 'None yet' not in card.body
         review = card.body.split(HEADINGS[language][-1] + '\n', 1)[1]
         qa = [line for line in review.splitlines() if '::' in line]
         assert 2 <= len(qa) <= 4 and len(qa) == len(fields['flashcards'])
@@ -124,7 +127,7 @@ def test_ingest_acceptance_list(tmp_path, lay, language):
     assert diagram_heading not in lantern.body and diagram_heading not in cost.body
     figure = dimming.body.split(diagram_heading + '\n', 1)[1].split('\n## ', 1)[0]
     assert figure.startswith('```mermaid\n%% diagram v1 props=E,P1,P2 sha=') and figure.rstrip().endswith('```')
-    assert dimming.body.index(diagram_heading) < dimming.body.index(HEADINGS[language][2])
+    assert dimming.body.index(diagram_heading) < dimming.body.index(HEADINGS[language][4])
     assert {d['ref']: d['status'] for d in result['diagrams']} == {
         'lantern-queue': 'skip', 'lit-marker-cost': 'skip', 'marker-dimming': 'draw'}
     [diagram_task] = seen['diagram']
@@ -136,10 +139,11 @@ def test_ingest_acceptance_list(tmp_path, lay, language):
     assert '<details>' in cost.body and '[[已有卡]] — part_of' in cost.body
     assert ('depends_on', cost.id, 'dimming acts on markers') in {
         (r['type'], r['target'], r.get('note')) for r in dimming.fm['relations']}
-    # inverse edges on the existing card (frontmatter only, body untouched)
+    # inverse edges on the existing card: frontmatter and its related section; the old body text stays first
     existing = snap.cards[EXISTING]
     assert ('similar_to', lantern.id) in {(r['type'], r['target']) for r in existing.fm['relations']}
-    assert existing.body == parse_note(before[existing.path])[1]
+    old_body = parse_note(before[existing.path])[1]
+    assert existing.body.startswith(old_body) and '- similar_to:: [[Lantern queue]]' in existing.body[len(old_body):]
     # accepted new topic in the taxonomy file
     taxonomy = yaml.safe_load(after[f'{lay.taxonomy}/{MOC}.yaml'])
     assert taxonomy['pillars'][0]['topics'] == [TOPIC, NEW_TOPIC]
