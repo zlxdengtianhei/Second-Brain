@@ -48,7 +48,12 @@ def passages(text: str) -> list[str]:
 
 
 def route(root, snapshot, text: str, *, domains: int, neighbors: int = 8) -> dict:
-    """``{"domains": [...], "neighbors": [...], "votes": {domain: share}, "passages": n}``."""
+    """``{"domains", "filled", "neighbors", "votes": {domain: share}, "passages"}``.
+
+    ``domains`` always has ``min(domains, catalog size)`` entries: voted domains
+    first, then ``filled`` ones without votes. A catalog no larger than the
+    limit is therefore sent whole, which a vault without cards depends on.
+    """
     from ..index import search_many
     known = set((snapshot.catalog or {}).get('domains', {}))
     parts = passages(text)
@@ -71,7 +76,14 @@ def route(root, snapshot, text: str, *, domains: int, neighbors: int = 8) -> dic
     order = sorted(votes, key=lambda d: (-votes[d], d))
     total = sum(votes.values()) or 1.0
     best = sorted(card_score, key=lambda c: (-card_score[c], c))[:neighbors]
-    return {'domains': order[:domains],
+    chosen = order[:domains]
+    # Domains without votes (no cards yet, or no matching cards) still need a chance:
+    # fill up to the limit, empty domains first, then in catalog order.
+    catalog_order = list((snapshot.catalog or {}).get('domains', {}))
+    unvoted = [d for d in catalog_order if d not in chosen]
+    unvoted.sort(key=lambda d: (sizes.get(d, 0) > 0, catalog_order.index(d)))
+    filled = unvoted[:max(0, domains - len(chosen))]
+    return {'domains': chosen + filled, 'filled': filled,
             'neighbors': [{'id': cid, 'title': snapshot.cards[cid].title, 'domain': snapshot.cards[cid].domain,
                            'essence': essence(snapshot.cards[cid])} for cid in best],
             'votes': {d: round(votes[d] / total, 3) for d in order[:6]},

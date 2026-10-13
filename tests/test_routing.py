@@ -7,6 +7,7 @@ from dataclasses import replace
 import pytest
 
 from secondbrain import config, index, jobs
+from secondbrain import layout as layouts
 from secondbrain.executors import FakeExecutor
 from secondbrain.pipelines import ingest
 from secondbrain.pipelines.routing import passages, route
@@ -93,3 +94,96 @@ def test_a_suggested_domain_must_exist():
     review['cards'][2]['suggested_domain'] = 'nowhere'
     with pytest.raises(ingest.IngestError, match='suggested_domain must be one of'):
         ingest.validate_review(candidate, review, {'card_exist'}, {'attention': {}, 'pebbles': {}})
+
+
+def empty_vault(root, domains):
+    """A vault with a curated taxonomy per domain and no cards at all."""
+    (root / '10_Knowledge').mkdir(parents=True)
+    (root / '20_MOCs/_pillars').mkdir(parents=True)
+    (root / '_data/secondbrain').mkdir(parents=True)
+    (root / '00_Inbox').mkdir()
+    catalog = {'schema': 'secondbrain-catalog/1', 'tracks': [{'id': 't', 'title': 'T', 'domains': list(domains)}],
+               'domains': {d: {'moc': f'{d.title()} Map', 'question': f'How does {d} work?'} for d in domains},
+               'relation_types': ['depends_on'], 'inverse_relations': {}, 'domain_relations': {}}
+    (root / layouts.DEFAULT.catalog).write_text(json.dumps(catalog), encoding='utf-8')
+    (root / '_data/notes_registry.json').write_text(json.dumps({'notes': []}), encoding='utf-8')
+    for d in domains:
+        (root / '20_MOCs/_pillars' / f'{d.title()} Map.yaml').write_text(json.dumps(
+            {'title': f'{d.title()} Map', 'narrative': 'n',
+             'pillars': [{'name': f'{d.title()} basics', 'order': 1, 'why': 'w', 'topics': ['Overview']}]}),
+            encoding='utf-8')
+    return root.resolve()
+
+
+def test_a_vault_without_cards_sends_every_domain_taxonomy(tmp_path):
+    root = empty_vault(tmp_path / 'vault', ['sorting', 'networks', 'cooking'])
+    (root / '00_Inbox' / 'notes.md').write_text(SOURCE, encoding='utf-8')
+    prepared = ingest.prepare(root, root / '00_Inbox' / 'notes.md')
+    [chunk] = jobs.read_input(root, prepared['job_id'])['chunks']
+    assert chunk['candidate_domains'] == ['sorting', 'networks', 'cooking']
+    assert chunk['routing']['filled'] == ['sorting', 'networks', 'cooking'] and chunk['neighbors'] == []
+    packet = ingest.producer_packet(root, jobs.load(root, prepared['job_id']),
+                                    jobs.read_input(root, prepared['job_id']), 'c01')
+    assert set(packet['candidate_taxonomies']) == {'sorting', 'networks', 'cooking'}
+    assert packet['candidate_taxonomies']['cooking']['pillars'][0]['name'] == 'Cooking basics'
+
+
+def test_empty_domains_fill_the_candidates_before_other_unvoted_ones(tmp_path):
+    root = build(tmp_path / 'vault')
+    catalog_path = root / layouts.DEFAULT.catalog
+    catalog = json.loads(catalog_path.read_text(encoding='utf-8'))
+    for extra in ('zz-empty', 'aa-empty'):
+        catalog['domains'][extra] = {'moc': f'{extra} Map', 'question': '?'}
+        catalog['tracks'][0]['domains'].append(extra)
+        (root / '20_MOCs/_pillars' / f'{extra} Map.yaml').write_text(json.dumps(
+            {'title': f'{extra} Map', 'narrative': 'n',
+             'pillars': [{'name': 'Basics', 'order': 1, 'why': 'w', 'topics': ['Overview']}]}), encoding='utf-8')
+    catalog_path.write_text(json.dumps(catalog), encoding='utf-8')
+    snap = read_snapshot(root)
+    only_algorithms = 'Binary search keeps a sorted range lo to hi and halves it each step.'
+    routed = route(root, snap, only_algorithms, domains=5)
+    assert routed['domains'][0] == 'algorithms' and len(routed['domains']) == 5
+    voted = [d for d in routed['domains'] if d not in routed['filled']]
+    assert routed['domains'] == voted + routed['filled']
+    # unvoted domains: the empty ones first, in catalog order (zz-empty was added before aa-empty)
+    unvoted_with_cards = [d for d in ['algorithms', 'agent-harness', 'networking'] if d not in voted]
+    assert routed['filled'] == (['zz-empty', 'aa-empty'] + unvoted_with_cards)[:5 - len(voted)]
+    assert routed['filled'][:2] == ['zz-empty', 'aa-empty']
+
+
+def test_the_pillar_error_names_what_exists_and_what_to_do(tmp_path):
+    root = build_ingest_vault(tmp_path / 'vault')
+    prepared = ingest.prepare(root, root / '00_Inbox' / SOURCE_NAME)
+    packet = jobs.read_input(root, prepared['job_id'])
+    candidate = json.loads(json.dumps(first_candidate()))
+    candidate['new_topics'][0]['pillar'] = 'Brand new pillar'
+    with pytest.raises(ingest.IngestError) as err:
+        ingest.validate_candidate(packet, candidate, slot='c01', other_cards=[], kept_slugs=set(),
+                                  existing_ids=set(read_snapshot(root).cards), existing_titles=set())
+    message = str(err.value)
+    assert 'pillars: Token routing' in message and 'needs_taxonomy' in message and 'sb taxonomy' not in message
+
+
+def test_the_first_ingest_into_an_empty_vault_writes_cards_and_maps(tmp_path):
+    root = empty_vault(tmp_path / 'vault', ['sorting', 'networks'])
+    (root / '00_Inbox' / 'notes.md').write_text(SOURCE, encoding='utf-8')
+    quote = 'Binary search needs a sorted range.'
+    card = {'slug': 'binary-search-range', 'title': 'Binary search needs a sorted range', 'kind': 'concept',
+            'domain': 'sorting', 'pillar': 'Sorting basics', 'topic': 'Overview',
+            'essence': 'Binary search only works on a sorted range.', 'propositions': ['The range must be sorted.'],
+            'flashcards': [{'q': 'What does binary search need?', 'a': 'A sorted range.'},
+                           {'q': 'What happens each step?', 'a': 'The range is halved.'}],
+            'relations': [], 'source_quotes': [quote], 'reason': 'one fact'}
+    candidate = {'cards': [card], 'new_topics': [],
+                 'coverage': [{'source_quote': quote, 'disposition': 'card', 'cards': [card['slug']], 'reason': 'r'},
+                              {'source_quote': 'Aside: the online judge harness', 'disposition': 'out_of_scope',
+                               'reason': 'aside'}]}
+    review = {'cards': [{'slug': card['slug'], 'decision': 'accept', 'reason': 'faithful'}], 'new_topics': [],
+              'coverage': {'decision': 'accept', 'reason': 'the rest is practice text'}}
+    produce, respond, _ = scripted([candidate], [review])
+    prepared = ingest.prepare(root, root / '00_Inbox' / 'notes.md')
+    result = ingest.advance(root, prepared['job_id'], producer=FakeExecutor('gpt-test', responder=produce),
+                            reviewer=FakeExecutor('claude-test', responder=respond))
+    assert result['status'] == 'applied' and result['new_card_count'] == 1
+    assert (root / '10_Knowledge/sorting/Binary search needs a sorted range.md').is_file()
+    assert (root / '20_MOCs/Sorting Map.md').is_file()

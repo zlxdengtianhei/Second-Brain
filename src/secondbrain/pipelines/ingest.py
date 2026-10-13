@@ -140,7 +140,8 @@ def prepare(root: Path, source: Path, *, settings: config.Settings | None = None
     for chunk in chunk_text(text, settings.ingest.chunk_chars):
         routed = route(root, snapshot, text[chunk['start']:chunk['end']], domains=settings.ingest.candidate_domains)
         chunks.append({**chunk, 'candidate_domains': routed['domains'], 'neighbors': routed['neighbors'],
-                       'routing': {'votes': routed['votes'], 'passages': routed['passages']}})
+                       'routing': {'votes': routed['votes'], 'filled': routed['filled'],
+                                   'passages': routed['passages']}})
     domains = sorted(snapshot.catalog['domains'])
     packet = {
         'kind': KIND, 'method_version': METHOD,
@@ -201,7 +202,8 @@ def retry(root: Path, job_id: str, *, settings: config.Settings | None = None) -
         routed = route(root, snapshot, old['source']['text'][chunk['start']:chunk['end']],
                        domains=settings.ingest.candidate_domains)
         chunks.append({**chunk, 'candidate_domains': routed['domains'], 'neighbors': routed['neighbors'],
-                       'routing': {'votes': routed['votes'], 'passages': routed['passages']}})
+                       'routing': {'votes': routed['votes'], 'filled': routed['filled'],
+                                   'passages': routed['passages']}})
     for card_list in written.values():
         for card in card_list:
             if card['id'] in snapshot.cards:
@@ -494,7 +496,11 @@ def validate_candidate(packet: dict, payload: dict, *, slot: str, other_cards: l
         tax = _taxonomy_of(packet, domain)
         pillars = {p['name']: p for p in tax.get('pillars', []) if isinstance(p, dict)}
         if pillar not in pillars:
-            errors.append(f'{where}.pillar {pillar!r} does not exist in {domain}; new pillars go through `sb taxonomy`')
+            errors.append(f'{where}.pillar {pillar!r} does not exist in {domain} (pillars: '
+                          f'{", ".join(sorted(pillars)) or "none yet"}); a new topic must sit under an existing '
+                          'pillar. For material that needs a new pillar or domain, write a coverage row with '
+                          'disposition needs_taxonomy instead; the vault owner adds pillars and domains '
+                          '(sb curate, sb domcreate)')
             continue
         if not isinstance(name, str) or not name.strip() or '\n' in name:
             errors.append(f'{where}.name must be a one-line string')
