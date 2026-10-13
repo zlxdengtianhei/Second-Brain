@@ -163,7 +163,7 @@ def build_ingest_vault(root: Path, lay: layouts.VaultLayout | None = None) -> Pa
 DIMMING_IR = {
     'decision': 'draw', 'form': 'flow', 'question': 'What happens to a marker when the queue is compacted?',
     'nodes': [{'key': 'c', 'label': 'Compaction', 'p': ['E'], 'role': 'start'},
-              {'key': 'q', 'label': 'Marker before the cut?', 'p': ['P1'], 'role': 'decision'},
+              {'key': 'q', 'label': 'Before the cut?', 'p': ['P1'], 'role': 'decision'},
               {'key': 'd', 'label': 'Dimmed, not deleted', 'p': ['P1']},
               {'key': 'k', 'label': 'Markers stay', 'p': ['P1']},
               {'key': 'r', 'label': 'Stay readable', 'p': ['P2'], 'role': 'end'}],

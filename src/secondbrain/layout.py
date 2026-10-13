@@ -76,6 +76,11 @@ class VaultLayout:
         return f'{self.data}/review_events.jsonl'
 
     @property
+    def review_log_dir(self) -> str:
+        """Append-only review event logs (docs/review-registry.md section 1)."""
+        return f'{self.data}/review'
+
+    @property
     def projections(self) -> str:
         return f'{self.data}/projections'
 

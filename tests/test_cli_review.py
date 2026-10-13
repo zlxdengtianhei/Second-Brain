@@ -1,0 +1,93 @@
+"""`sb review status|queue|log|import-sr` and the `sb diagrams` pass-through."""
+from __future__ import annotations
+
+import json
+
+import pytest
+
+pytest.importorskip('fsrs')
+
+from secondbrain import cli  # noqa: E402
+from secondbrain import layout as layouts  # noqa: E402
+from secondbrain.review_registry import question_id  # noqa: E402
+from secondbrain.vault import read_snapshot  # noqa: E402
+from tests.ingest_helpers import build_ingest_vault  # noqa: E402
+from tests.test_ingest import run_default  # noqa: E402
+
+NOW = '2026-10-13T09:00:00+02:00'
+
+
+def run(capsys, root, *argv):
+    code = cli.main(['--vault', str(root), *argv])
+    out, err = capsys.readouterr()
+    return code, (json.loads(out) if out.strip() else None), err
+
+
+@pytest.fixture
+def vault(tmp_path):
+    root = build_ingest_vault(tmp_path / 'vault')
+    run_default(root, layouts.DEFAULT)
+    return root
+
+
+def test_status_queue_and_an_agent_review(vault, capsys):
+    snap = read_snapshot(vault)
+    code, status, err = run(capsys, vault, 'review', 'status', '--now', NOW)
+    assert code == 0, err
+    assert status['totals']['total'] == len(snap.cards) == status['totals']['unlearned']
+    code, queue, _ = run(capsys, vault, 'review', 'queue', '--now', NOW, '--questions', '--new', '3')
+    assert code == 0 and queue['new_count'] == 3 and queue['due_count'] == 0 and len(queue['cards']) == 3
+    code, queue, _ = run(capsys, vault, 'review', 'queue', '--now', NOW, '--questions')
+    titles = [c['title'] for c in queue['cards']]
+    assert len(titles) == len(snap.cards)
+    assert titles.index('Lantern queue') < titles.index('Lit marker memory cost')  # depends_on order
+    lantern = queue['cards'][titles.index('Lantern queue')]
+    assert [q['question'] for q in lantern['questions']] == [
+        'What order does a lantern queue keep?', 'How does a reader skip ahead?']
+    card_id = lantern['id']
+    code, logged, err = run(capsys, vault, 'review', 'log', '--card', card_id, '--now', NOW, '--device', 'cli-test',
+                            '--item', 'What order does a lantern queue keep?=3:hit',
+                            '--item', f'{question_id("How does a reader skip ahead?")}=2:partial',
+                            '--grader', 'example-model')
+    assert code == 0, err
+    assert logged['event']['rating'] == 2 and logged['state']['state'] == 'learning'
+    log_file = vault / '_data/review/events-cli-test.jsonl'
+    assert logged['written'] == str(log_file)
+    [line] = log_file.read_text(encoding='utf-8').splitlines()
+    assert json.loads(line)['items'][0] == {'q': question_id('What order does a lantern queue keep?'),
+                                            'rating': 3, 'verdict': 'hit'}
+    code, status, _ = run(capsys, vault, 'review', 'status', '--now', NOW)
+    assert status['totals']['learning'] == 1 and status['reviews_today'] == 1
+    code, overview, _ = run(capsys, vault, 'status')
+    assert overview['review']['total'] == len(snap.cards) and overview['inbox'] == {}
+    code, _, err = run(capsys, vault, 'review', 'log', '--card', 'kc_missing', '--rating', '3', '--now', NOW)
+    assert code == 2 and 'No card' in err
+    code, _, err = run(capsys, vault, 'review', 'log', '--card', card_id, '--item', 'oops', '--now', NOW)
+    assert code == 2 and '--item must look like' in err
+
+
+def test_import_spaced_repetition_schedules(vault, capsys):
+    snap = read_snapshot(vault)
+    card = next(c for c in snap.cards.values() if c.title == 'Lantern queue')
+    path = vault / card.path
+    text = path.read_text(encoding='utf-8')
+    path.write_text(text.replace('Arrival order.', 'Arrival order.\n<!--SR:!2026-10-20,7,250-->', 1), encoding='utf-8')
+    code, plan, err = run(capsys, vault, 'review', 'import-sr', '--dry-run', '--now', NOW)
+    assert code == 0, err
+    assert plan['found'] == 1 and plan['imported'] == 0 and plan['written'] is None
+    code, done, _ = run(capsys, vault, 'review', 'import-sr', '--device', 'cli-test', '--now', NOW)
+    assert done['imported'] == 1
+    code, again, _ = run(capsys, vault, 'review', 'import-sr', '--device', 'cli-test', '--now', NOW)
+    assert again['found'] == 0 and again['skipped'] == 1
+    assert path.read_text(encoding='utf-8').count('<!--SR:') == 1  # card files are not changed
+
+
+def test_diagrams_pass_through(capsys):
+    assert cli.main(['diagrams', 'schema']) == 0
+    schema = json.loads(capsys.readouterr().out)
+    assert schema['title'] == 'Card diagram IR'
+    with pytest.raises(SystemExit) as stop:
+        cli.main(['diagrams', '--help'])
+    assert stop.value.code == 0 and 'audit-extract' in capsys.readouterr().out
+    with pytest.raises(SystemExit):
+        cli.main(['status', '--bogus'])

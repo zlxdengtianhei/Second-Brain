@@ -27,9 +27,16 @@ class Service:
         s = self.snapshot()
         missing = Counter(c.domain for c in s.cards.values()
                           if not c.fm.get('pillar') or not c.fm.get('topic'))
+        from . import inbox, reviews
+        inbox_counts = Counter(item['status'] for item in inbox.scan(self.root))
+        try:
+            review = reviews.status(self.root, reviews.now_local())['totals']
+        except (ValueError, OSError) as exc:
+            review = {'unavailable': str(exc)}
         return {'cards': len(s.cards), 'missing_classification': sum(missing.values()),
                 'missing_by_domain': dict(sorted(missing.items())), 'issues': s.issues,
-                'snapshot_fingerprint': s.fingerprint, 'jobs': jobs.list_jobs(self.root)}
+                'snapshot_fingerprint': s.fingerprint, 'inbox': dict(sorted(inbox_counts.items())),
+                'review': review, 'jobs': jobs.list_jobs(self.root)}
 
     def read_cards(self, ids: list[str]):
         if len(ids) > 50 or len(ids) != len(set(ids)):

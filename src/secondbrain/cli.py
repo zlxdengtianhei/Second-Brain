@@ -93,6 +93,32 @@ def parser():
     ingest.add_argument('--executor', choices=['api', 'host'], help='Override [executor].default')
     ingest.add_argument('--prepare-only', action='store_true', help='Freeze input and chunks; no model call')
     ingest.add_argument('--proposal-only', action='store_true', help='Produce and review, but do not write')
+    ingest.add_argument('--max-rounds', type=int, help='Override [review] max_repair_rounds for this run')
+    review = sub.add_parser('review', help='Review registry: status, daily queue, agent reviews')
+    review_sub = review.add_subparsers(dest='review_command', required=True)
+    rstatus = review_sub.add_parser('status', help='Study states and due counts, per domain')
+    rqueue = review_sub.add_parser('queue', help='Due cards first, then new cards in prerequisite order')
+    rqueue.add_argument('--new', type=int, dest='new_per_day', help='New cards per day (default 10)')
+    rqueue.add_argument('--domain', action='append', default=[], help='Only new cards of these domains')
+    rqueue.add_argument('--limit', type=int)
+    rqueue.add_argument('--questions', action='store_true', help='Include each card\'s review questions')
+    rqueue.add_argument('--section', help='Review section heading (default from [cards] language)')
+    rlog = review_sub.add_parser('log', help='Append one agent review of a card')
+    rlog.add_argument('--card', required=True)
+    rlog.add_argument('--rating', type=int, choices=[1, 2, 3, 4], help='1 again, 2 hard, 3 good, 4 easy')
+    rlog.add_argument('--item', action='append', default=[],
+                      help='Per question: "<question text or h:id>=<1-4>[:hit|partial|miss]" (repeatable)')
+    rlog.add_argument('--grader', help='Who graded the answers (model or person)')
+    rimport = review_sub.add_parser('import-sr', help='One-time import of Spaced Repetition plugin schedules')
+    rimport.add_argument('--dry-run', action='store_true')
+    for q in (rstatus, rqueue, rlog, rimport):
+        q.add_argument('--now', help='ISO 8601 time with offset (default: now)')
+    for q in (rlog, rimport):
+        q.add_argument('--device', help='Writer id for the log file name (default: cli-<host hash>)')
+        q.add_argument('--format', choices=['jsonl', 'md'], default='jsonl', dest='log_format')
+    diagrams = sub.add_parser('diagrams', help='Diagram batch tools (python -m secondbrain.diagrams)',
+                              add_help=False)
+    diagrams.add_argument('args', nargs=argparse.REMAINDER)
     job = sub.add_parser('job', help='Jobs, runs and host-mode hand-off')
     job_sub = job.add_subparsers(dest='job_command', required=True)
     job_sub.add_parser('list')
@@ -133,6 +159,10 @@ def _ingest(args, root: Path) -> list:
         paths += [root / i['path'] for i in lay_items]
     if not paths:
         raise ValueError('Give source paths or --all')
+    if args.max_rounds is not None:
+        if args.max_rounds < 0:
+            raise ValueError('--max-rounds must be 0 or more')
+        config.set_review_policy(replace(config.review_policy(), max_repair_rounds=args.max_rounds))
     results = []
     executors = None
     for path in paths:
@@ -181,6 +211,22 @@ def _job(args, root: Path):
         return run_batch(root, args.id, producer=producer, reviewer=reviewer, apply=not args.proposal_only)
     from .runner import run_job
     return run_job(root, args.id, producer=producer, reviewer=reviewer, apply=not args.proposal_only)
+
+
+def _review(args, root: Path):
+    from . import reviews
+    now = reviews.now_local(args.now)
+    command = args.review_command
+    if command == 'status':
+        return reviews.status(root, now)
+    if command == 'queue':
+        return reviews.queue(root, now, new_per_day=args.new_per_day, domains=args.domain, limit=args.limit,
+                             questions=args.questions, section=args.section)
+    if command == 'log':
+        items = [reviews.parse_item(text) for text in args.item]
+        return reviews.log(root, args.card, now, rating=args.rating, items=items, grader=args.grader,
+                           device=args.device, fmt=args.log_format)
+    return reviews.import_sr(root, now, device=args.device, fmt=args.log_format, dry_run=args.dry_run)
 
 
 def _inbox(args, root: Path):
@@ -309,7 +355,13 @@ def _activate(args) -> Path:
 
 
 def main(argv=None):
-    args = parser().parse_args(argv)
+    p = parser()
+    args, extra = p.parse_known_args(argv)
+    if args.command == 'diagrams':
+        from .diagrams.__main__ import main as diagrams_main
+        return diagrams_main(args.args + extra)
+    if extra:
+        p.error(f'unrecognized arguments: {" ".join(extra)}')
     try:
         root = _activate(args)
     except (ValueError, OSError) as exc:
@@ -359,6 +411,8 @@ def main(argv=None):
             result = _job(args, root)
         elif cmd == 'inbox':
             result = _inbox(args, root)
+        elif cmd == 'review':
+            result = _review(args, root)
         elif cmd == 'ingest':
             result = _ingest(args, root)
         elif cmd == 'doctor':
