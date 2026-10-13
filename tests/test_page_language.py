@@ -102,8 +102,12 @@ def test_home_points_daily_review_to_the_plugin_and_names_current_commands(tmp_p
     assert '\n```secondbrain-review\n```\n' in home
     assert '`sb review status`' in home and '`sb review queue`' in home
     for stale in ('Spaced Repetition', 'secondbrain today', 'secondbrain classify', 'secondbrain resume',
-                  '`secondbrain ', '`sb today'):
+                  '`secondbrain '):
         assert stale not in home, stale
+    # a plain link to the daily review page, for a vault where the plugin is not enabled yet
+    page = projections.review_page(ENTRY_DOCS_LAYOUT, DAY)[:-3]
+    block_end = home.index('```secondbrain-review\n```\n') + len('```secondbrain-review\n```\n')
+    assert home[block_end:].lstrip('\n').startswith(f'[[{page}|') and '`sb today --apply`' in home
     commands = sb_commands(home) + sb_commands(files['使用指南.md'])
     assert ['docs', '--apply'] in commands and ['review', 'queue'] in commands
     for argv in commands:
@@ -120,7 +124,8 @@ def test_entry_docs_are_empty_by_default(tmp_path):
     assert VaultLayout().entry_docs == ()
     files = home_and_docs(tmp_path, 'en')
     assert set(files) == {'HOME.md'}
-    assert '[[' not in files['HOME.md'].split('## Maps')[0]
+    head = files['HOME.md'].split('## Maps')[0]
+    assert re.findall(r'\[\[([^\]|]+)', head) == [projections.review_page(VaultLayout(), DAY)[:-3]]  # no doc links
 
 
 @pytest.mark.parametrize('language, name, title', [

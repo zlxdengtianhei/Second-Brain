@@ -121,6 +121,7 @@ PAGES = {
             '## 今日复习', '',
             '```secondbrain-review',
             '```', '',
+            '[[{review}|打开今日复习]]：不依赖插件的今日复习页；页面缺失时运行 `sb today --apply`。', '',
             '面板由 SecondBrain Review 插件显示；终端里用 `sb review status` 看进度，`sb review queue` 看今天的卡。', '',
             '## 现在做什么', '',
             '1. 复习：用上面的面板，或终端 `sb review queue`。',
@@ -176,6 +177,8 @@ PAGES = {
             "## Today's review", '',
             '```secondbrain-review',
             '```', '',
+            "[[{review}|Open today's review page]]: works without the plugin; if the page is missing, "
+            'run `sb today --apply`.', '',
             'The dashboard comes from the SecondBrain Review plugin; in a terminal use `sb review status` '
             "for progress and `sb review queue` for today's cards.", '',
             '## What to do now', '',

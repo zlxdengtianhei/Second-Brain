@@ -228,7 +228,7 @@ def entry_projection(snapshot, today: date, *, final_paths=(), removed_paths=(),
     rows += [f'| `{d}/` | {directory_counts[d]:,} |' for d in directory_counts]
     rows += ['', T['stats_note']]
     stats = '\n'.join(rows)
-    home = [line.format(inbox=lay.inbox) for line in T['home']] + ['']
+    home = [line.format(inbox=lay.inbox, review=review_page(lay, today)[:-3]) for line in T['home']] + ['']
     if lay.entry_docs:
         home += [' · '.join(f'[[{name[:-3]}]]' for name in lay.entry_docs), '']
     home += [T['domains_title'], '']
