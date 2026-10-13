@@ -5,7 +5,7 @@ import { AiProvidersClient } from "./llm/ai";
 import { DEFAULT_TEMPLATES, parseTemplate, type Template } from "./llm/prompts";
 import { type Lang, locale, setLocale, t } from "./i18n";
 import { ReviewService } from "./service";
-import { icsFile, mergeSettings, reviewDir, type ReviewSettings, sectionNames, type SectionNames } from "./settings";
+import { cardSectionNames, icsFile, mergeSettings, reviewDir, type ReviewSettings, sectionCandidates, sectionNames, type SectionNames } from "./settings";
 import { type LoadedCard, ReviewModal } from "./ui/review-modal";
 import { buildIcs, reviewUri } from "./ics";
 import { planSrImport } from "./sr-import";
@@ -116,8 +116,14 @@ export default class SecondBrainReviewPlugin extends Plugin {
 		return contentLanguage(this.vaultLanguage, locale());
 	}
 
+	/** The headings of the vault's language, or the ones set in the settings. */
 	sections(): SectionNames {
 		return sectionNames(this.settings, this.contentLanguage());
+	}
+
+	/** The headings to read in one card: like sections(), but an empty setting also accepts the other language's heading. */
+	cardSections(text: string): SectionNames {
+		return cardSectionNames(text, sectionCandidates(this.settings, this.contentLanguage()));
 	}
 
 	icsFile(): string {
@@ -184,7 +190,7 @@ export default class SecondBrainReviewPlugin extends Plugin {
 		const file = this.app.vault.getAbstractFileByPath(card.path);
 		if (!(file instanceof TFile)) throw new Error(`card file not found: ${card.path}`);
 		const text = await this.app.vault.cachedRead(file);
-		const names = this.sections();
+		const names = this.cardSections(text);
 		return {
 			card,
 			text,

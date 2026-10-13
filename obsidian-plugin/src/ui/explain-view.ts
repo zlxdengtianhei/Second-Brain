@@ -81,7 +81,6 @@ export class ExplainView extends ItemView {
 	private async buildMessages(card: IndexedCard): Promise<ChatMessage[] | null> {
 		const p = this.plugin;
 		const s = p.settings;
-		const essenceSection = p.sections().essence;
 		let text: string;
 		try {
 			text = (await p.loadCard(card)).text;
@@ -95,7 +94,10 @@ export class ExplainView extends ItemView {
 			let essence = "";
 			if (target) {
 				const file = p.app.vault.getAbstractFileByPath(target.path);
-				if (file instanceof TFile) essence = sectionText(await p.app.vault.cachedRead(file), essenceSection);
+				if (file instanceof TFile) {
+					const related = await p.app.vault.cachedRead(file);
+					essence = sectionText(related, p.cardSections(related).essence);
+				}
 			}
 			related.push({ title: target?.title ?? rel.target, type: rel.type, essence });
 		}

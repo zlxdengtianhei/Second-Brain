@@ -70,6 +70,21 @@ export function sectionText(markdown: string, name: string): string {
 	return out.join("\n").trim();
 }
 
+/** True when the card has a heading `name` outside code blocks (plugin only: picks which heading to read). */
+export function hasHeading(markdown: string, name: string): boolean {
+	let inFence = false;
+	for (const line of markdown.split(/\r?\n/)) {
+		const lead = line.trimStart();
+		if (lead.startsWith("```") || lead.startsWith("~~~")) {
+			inFence = !inFence;
+			continue;
+		}
+		const m = inFence ? null : HEADING_RE.exec(line.trimEnd());
+		if (m && m[2].trim() === name) return true;
+	}
+	return false;
+}
+
 /** Remove the YAML front matter block. */
 export function stripFrontmatter(markdown: string): string {
 	if (!markdown.startsWith("---")) return markdown;

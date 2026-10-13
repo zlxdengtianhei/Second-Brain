@@ -9,8 +9,48 @@ export class Component {
 	register(): void {}
 	registerEvent(): void {}
 }
-export class Plugin extends Component {}
+/** Records what the plugin registers, so tests can run the real onload. */
+export class Plugin extends Component {
+	commands: { id: string; name: string }[] = [];
+	ribbons: string[] = [];
+	statusBar: HTMLElement[] = [];
+	data: unknown = null;
+	constructor(
+		public app?: any,
+		public manifest?: unknown,
+	) {
+		super();
+	}
+	async loadData(): Promise<unknown> {
+		return this.data;
+	}
+	async saveData(data: unknown): Promise<void> {
+		this.data = data;
+	}
+	addCommand(c: { id: string; name: string }) {
+		this.commands.push({ id: c.id, name: c.name });
+		return c;
+	}
+	addRibbonIcon(_icon: string, title: string) {
+		this.ribbons.push(title);
+		return document.createElement("div");
+	}
+	addStatusBarItem(): HTMLElement {
+		const el = document.createElement("div");
+		this.statusBar.push(el);
+		return el;
+	}
+	addSettingTab(): void {}
+	registerView(): void {}
+	registerMarkdownCodeBlockProcessor(): void {}
+	registerObsidianProtocolHandler(): void {}
+}
 export class PluginSettingTab {}
+/** Obsidian 1.8.7+ API; undefined by default (an older Obsidian), set it with setAppLanguage. */
+export let getLanguage: (() => string) | undefined;
+export function setAppLanguage(code: string | undefined): void {
+	getLanguage = code === undefined ? undefined : () => code;
+}
 export class ItemView extends Component {
 	contentEl: HTMLElement;
 	constructor(public leaf: unknown) {

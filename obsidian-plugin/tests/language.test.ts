@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { LOCALES, locale, type MessageKey, setLocale, t } from "../src/i18n";
 import { extractReviewItems, sectionText } from "../src/registry";
-import { DEFAULT_SETTINGS, icsFile, LANGUAGE_DEFAULTS, mergeSettings, sectionNames } from "../src/settings";
+import { cardSectionNames, DEFAULT_SETTINGS, icsFile, LANGUAGE_DEFAULTS, mergeSettings, sectionCandidates, sectionNames } from "../src/settings";
 import {
 	appLanguage,
 	catalogPath,
@@ -101,6 +101,38 @@ describe("the vault's language", () => {
 		expect(await detectVaultLanguage(a, { data: "_data", taxonomy: "Maps/pillars" })).toBe("zh");
 		expect(await detectVaultLanguage(a, { data: "_data", taxonomy: "pillars" })).toBeNull();
 	});
+	it("a page with both markers counts as Chinese, as in Python", async () => {
+		const a = new MemoryAdapter();
+		a.files.set("20_MOCs/Both.md", "## Page index (every page)\n\n## 分页索引（全部可达）\n");
+		expect(await detectVaultLanguage(a, folders)).toBe("zh");
+	});
+	it("files that cannot be read or listed are skipped, not thrown", async () => {
+		class Failing extends MemoryAdapter {
+			unreadable = new Set<string>();
+			listFails = false;
+			async read(p: string) {
+				if (this.unreadable.has(p)) throw new Error("EACCES " + p);
+				return super.read(p);
+			}
+			async list(p: string) {
+				if (this.listFails) throw new Error("EACCES " + p);
+				return super.list(p);
+			}
+		}
+		const a = new Failing();
+		a.files.set("_data/secondbrain/catalog.json", catalog({ language: "en" }));
+		a.files.set("20_MOCs/A first.md", "## Page index (every page)");
+		a.files.set("20_MOCs/B second.md", "## 分页索引（全部可达）");
+		a.unreadable.add("_data/secondbrain/catalog.json");
+		a.unreadable.add("20_MOCs/A first.md");
+		expect(await detectVaultLanguage(a, folders)).toBe("zh");
+		a.unreadable.add("20_MOCs/B second.md");
+		expect(await detectVaultLanguage(a, folders)).toBeNull();
+		a.listFails = true;
+		a.unreadable.clear();
+		a.files.set("_data/secondbrain/catalog.json", catalog({}));
+		expect(await detectVaultLanguage(a, folders)).toBeNull();
+	});
 	it("is unknown in an empty vault", async () => {
 		expect(await detectVaultLanguage(new MemoryAdapter(), folders)).toBeNull();
 	});
@@ -153,6 +185,24 @@ describe("section headings and calendar file follow the vault's language", () =>
 		expect(resolved(custom, "zh")).toEqual(custom);
 		expect(resolved(custom, "en")).toEqual(custom);
 		expect(resolved({ essenceSection: "Gist" }, "zh")).toEqual({ ...OLD_DEFAULTS, essenceSection: "Gist" });
+	});
+	it("an empty setting also accepts the other language's heading, per card; a typed heading is the only one", () => {
+		const zhCard = "## 本质\nE.\n\n## 命题\n- P1.\n\n## 复习卡\nQ?::A.\n";
+		const enCard = "## Essence\nE.\n\n## Propositions\n- P1.\n\n## Review cards\nQ?::A.\n";
+		const both = "## Essence\nE.\n\n## 本质\nZ.\n";
+		const fenced = "```\n## 复习卡\n```\n";
+		const unset = mergeSettings(undefined);
+		expect(sectionCandidates(unset, "en").review).toEqual(["Review cards", "复习卡"]);
+		expect(sectionCandidates(unset, "zh").essence).toEqual(["本质", "Essence"]);
+		expect(cardSectionNames(zhCard, sectionCandidates(unset, "en"))).toEqual({ review: "复习卡", essence: "本质", propositions: "命题" });
+		expect(cardSectionNames(enCard, sectionCandidates(unset, "zh"))).toEqual({ review: "Review cards", essence: "Essence", propositions: "Propositions" });
+		expect(cardSectionNames(both, sectionCandidates(unset, "zh")).essence).toBe("本质");
+		expect(cardSectionNames(both, sectionCandidates(unset, "en")).essence).toBe("Essence");
+		expect(cardSectionNames(fenced, sectionCandidates(unset, "en")).review).toBe("Review cards");
+		expect(cardSectionNames("no headings", sectionCandidates(unset, "zh"))).toEqual(sectionNames(unset, "zh"));
+		const typed = mergeSettings({ reviewSection: "Flashcards" });
+		expect(sectionCandidates(typed, "en").review).toEqual(["Flashcards"]);
+		expect(cardSectionNames(zhCard, sectionCandidates(typed, "en")).review).toBe("Flashcards");
 	});
 	it("an empty or non-string saved heading means the vault's default", () => {
 		expect(resolved({ reviewSection: "", essenceSection: null, propositionsSection: 3, icsPath: undefined }, "zh")).toEqual(OLD_DEFAULTS);

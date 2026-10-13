@@ -1,5 +1,6 @@
 // Plugin settings: defaults follow the vault layout of the Second Brain tool (config [layout]).
 import type { Lang } from "./i18n";
+import { hasHeading } from "./registry";
 import type { LogFormat } from "./vault/event-store";
 
 export type LanguageSetting = "auto" | Lang;
@@ -93,6 +94,30 @@ export function sectionNames(s: ReviewSettings, lang: Lang): SectionNames {
 		essence: s.essenceSection || d.essenceSection,
 		propositions: s.propositionsSection || d.propositionsSection,
 	};
+}
+
+export type SectionCandidates = { [K in keyof SectionNames]: string[] };
+
+/**
+ * Headings to try for each section, in order. A heading set in the settings is the only one;
+ * an empty setting tries the heading of `lang`, then the other language's, so a wrong guess of
+ * the vault's language still finds the card's sections.
+ */
+export function sectionCandidates(s: ReviewSettings, lang: Lang): SectionCandidates {
+	const other: Lang = lang === "zh" ? "en" : "zh";
+	const pick = (set: string, key: "reviewSection" | "essenceSection" | "propositionsSection") =>
+		set ? [set] : [LANGUAGE_DEFAULTS[lang][key], LANGUAGE_DEFAULTS[other][key]];
+	return {
+		review: pick(s.reviewSection, "reviewSection"),
+		essence: pick(s.essenceSection, "essenceSection"),
+		propositions: pick(s.propositionsSection, "propositionsSection"),
+	};
+}
+
+/** The headings one card uses: per section, the first candidate the card has, else the first candidate. */
+export function cardSectionNames(markdown: string, c: SectionCandidates): SectionNames {
+	const first = (names: string[]) => names.find((n) => hasHeading(markdown, n)) ?? names[0];
+	return { review: first(c.review), essence: first(c.essence), propositions: first(c.propositions) };
 }
 
 export function icsFile(s: ReviewSettings, lang: Lang): string {

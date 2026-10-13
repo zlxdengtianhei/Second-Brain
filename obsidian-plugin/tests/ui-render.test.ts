@@ -7,7 +7,7 @@ import type { ChatMessage, LlmClient } from "../src/llm/ai";
 import { DEFAULT_TEMPLATES, parseTemplate } from "../src/llm/prompts";
 import { type Counts, emptyCounts, parseStamp } from "../src/registry";
 import { ReviewService } from "../src/service";
-import { DEFAULT_SETTINGS, type ReviewSettings, sectionNames } from "../src/settings";
+import { cardSectionNames, DEFAULT_SETTINGS, type ReviewSettings, sectionCandidates, sectionNames } from "../src/settings";
 import { dashboardModel, renderDashboard } from "../src/ui/dashboard";
 import { ExplainView } from "../src/ui/explain-view";
 import type { IndexedCard } from "../src/vault/card-index";
@@ -100,6 +100,7 @@ async function explainWith(settings: ReviewSettings, vaultLang: Lang, texts: Rec
 	const plugin = {
 		settings,
 		sections: () => sectionNames(settings, vaultLang),
+		cardSections: (text: string) => cardSectionNames(text, sectionCandidates(settings, vaultLang)),
 		service,
 		index: { get: (id: string) => cards.find((c) => c.id === id) },
 		app: { vault: { getAbstractFileByPath: (p: string) => files.get(p) ?? null, cachedRead: async (f: { path: string }) => texts[f.path] } },
@@ -130,6 +131,17 @@ describe("explain view", () => {
 		expect(user).toContain("Not reviewed yet.");
 		expect(user).not.toMatch(/[\u3000-\u9fff\uff00-\uffef]/);
 	});
+	it("with a wrong guess of the vault's language, reads a related card's essence under the other language's heading", async () => {
+		setLocale("en");
+		const { view, main, llm } = await explainWith({ ...DEFAULT_SETTINGS }, "en", {
+			"ex_main.md": "---\nid: ex_main\n---\n## 本质\nMain essence.\n",
+			"ex_rel.md": "---\nid: ex_rel\n---\n## 本质\n关联卡的本质。\n",
+		});
+		(view as any).plugin.explainTemplate = async () => parseTemplate(DEFAULT_TEMPLATES.en.explain);
+		await view.onOpen();
+		await view.explain(main);
+		expect(llm.calls[0].find((m) => m.role === "user")!.content).toContain("- Title ex_rel | depends_on | 关联卡的本质。");
+	});
 	it("reads related cards' essence under the configured section name", async () => {
 		const card = (id: string, extra: Partial<IndexedCard> = {}): IndexedCard => ({
 			id, title: `Title ${id}`, domain: "algo", kind: "concept", status: "", path: `${id}.md`, pillar: "", topic: "",
@@ -152,6 +164,7 @@ describe("explain view", () => {
 			settings: { ...DEFAULT_SETTINGS, essenceSection: "Essence", propositionsSection: "Propositions" },
 			// A Chinese vault whose essence heading is set in the settings: the setting wins.
 			sections: () => sectionNames({ ...DEFAULT_SETTINGS, essenceSection: "Essence", propositionsSection: "Propositions" }, "zh"),
+			cardSections: (text: string) => cardSectionNames(text, sectionCandidates({ ...DEFAULT_SETTINGS, essenceSection: "Essence", propositionsSection: "Propositions" }, "zh")),
 			service,
 			index: { get: (id: string) => cards.find((c) => c.id === id) },
 			app: { vault: { getAbstractFileByPath: (p: string) => files.get(p) ?? null, cachedRead: async (f: { path: string }) => texts[f.path] } },

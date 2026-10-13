@@ -47,6 +47,11 @@ To start a session at once: `obsidian://secondbrain-review?mode=flip` or
    provider there (type, key, model, test), then pick it in this plugin's settings.
    Without it, flip review and the dashboard work; Q&A answers are rated by you.
 
+Install the same version of the plugin on every device that syncs the vault. The plugin
+settings (`data.json`) sync with the vault. This version saves an empty section heading to
+mean "the heading of the vault's language"; an earlier build reads the empty heading as it is
+and finds no questions.
+
 ## Language
 
 The vault's language is the one `sb init` or `sb language --set` recorded in
@@ -62,7 +67,10 @@ Obsidian starts, when the catalog changes, and when you click Refresh on the das
 | Section headings the plugin reads, when the setting is empty | The vault's language; when the vault has no language, the interface language | `Review cards`, `Essence`, `Propositions` | `复习卡`, `本质`, `命题` |
 | Calendar file, when the setting is empty | Same as the section headings | `90_Meta/review-reminder.ics` | `90_Meta/复习提醒.ics` |
 
-A heading or calendar path that you type in the settings always wins. The section headings
+A heading or calendar path that you type in the settings always wins. When a section setting
+is empty and a card does not have the heading of the vault's language, the plugin reads that
+card's section under the other language's heading. So a wrong guess of the vault's language
+(for example, when the map pages have not synced yet) does not lose the questions. The section headings
 are the ones `sb` writes into cards (`src/secondbrain/cards.py`); a test checks that the two
 tables agree. Command names take the interface language when Obsidian starts, so after you
 change the setting, restart Obsidian to rename the commands.
