@@ -142,6 +142,7 @@ def apply(root_, job_id):
     """只有accept+assigned且无断链阻碍的卡成对移动；其余pending并给具体引用文件。"""
     from .moc import build_mocs
     from .projections import entry_projection, review_projection
+    from .reviews import available as reviews_available
     state = jobs.load(root_, job_id)
     if state['kind'] != 'relocation':
         raise ValueError('This job is not a move job')
@@ -177,8 +178,10 @@ def apply(root_, job_id):
         changes, projected, moved, affected = _stage_moves(root_, snapshot, packet, active)
         projection = build_mocs(projected, affected_domains=affected)
         entries = entry_projection(projected, date.today())
-        reviews = review_projection(projected, date.today(), extra_targets=entries.files)
-        replacements = {**projection.files, **entries.files, **reviews.files}
+        # the daily review page reads the review registry, which needs the review extra
+        reviews = (review_projection(projected, date.today(), extra_targets=entries.files)
+                   if reviews_available() else None)
+        replacements = {**projection.files, **entries.files, **(reviews.files if reviews else {})}
         obstacles = link_obstacles(root_, {c.id: c for c, _ in moved},
                                    documents=documents, replacements=replacements)
         if not obstacles:
@@ -195,7 +198,8 @@ def apply(root_, job_id):
     changes.append(_registry_change(root_, moved))
     changes.extend(projection_changes(root_, projection))
     changes.extend(projection_changes(root_, entries))
-    changes.extend(projection_changes(root_, reviews))
+    if reviews is not None:
+        changes.extend(projection_changes(root_, reviews))
     observed = dict(snapshot.read_hashes)
     for rel, raw in documents.items():
         sha = digest(raw)

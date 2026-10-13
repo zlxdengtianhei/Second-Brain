@@ -134,8 +134,15 @@ def test_review_page_name_and_text_follow_the_language(tmp_path, language, name,
     assert name in files
     text = files[name].decode('utf-8')
     assert title in text and 'Spaced Repetition' not in text
+    T = labels.pages(language)
+    for key in ('due_cards', 'new_today'):
+        assert f'## {T[key]}\n' in text, key
+    assert T['new_left'].format(available=1, n=1) in text and '`sb review queue`' in text
+    # the one card of the fixture is new (no registry events); its title is content, not page text
+    [card] = read_snapshot(root).cards.values()
+    assert f'[[{card.path[:-3]}|{card.title}]]' in text
     if language == 'en':
-        assert not CJK.search(text)
+        assert not CJK.search(text.replace(card.title, ''))
 
 
 def test_sb_docs_apply_rewrites_only_home(tmp_path, capsys):

@@ -17,16 +17,28 @@ from . import layout as layouts
 from .store import state_root
 from .vault import read_snapshot
 
-__all__ = ['cache_dir', 'card_metas', 'import_sr', 'log', 'now_local', 'parse_item', 'queue', 'review_dir',
-           'status', 'taxonomy']
+__all__ = ['ReviewExtraMissing', 'available', 'cache_dir', 'card_metas', 'import_sr', 'local_day', 'log',
+           'now_local', 'parse_item', 'queue', 'review_dir', 'status', 'taxonomy']
+
+
+class ReviewExtraMissing(ValueError):
+    """The optional review dependency (fsrs) is not installed."""
 
 
 def _registry():
     try:
         from . import review_registry
     except ImportError as exc:  # fsrs is an optional dependency
-        raise ValueError('Review commands need the review extra: pip install "secondbrain[review]"') from exc
+        raise ReviewExtraMissing('Review commands need the review extra: pip install "secondbrain[review]"') from exc
     return review_registry
+
+
+def available() -> bool:
+    try:
+        _registry()
+    except ReviewExtraMissing:
+        return False
+    return True
 
 
 def review_dir(root: Path) -> Path:
@@ -82,9 +94,10 @@ def status(root: Path, now: datetime) -> dict:
 
 
 def queue(root: Path, now: datetime, *, new_per_day: int | None = None, domains=(), limit: int | None = None,
-          questions: bool = False, section: str | None = None) -> dict:
+          questions: bool = False, section: str | None = None, snapshot=None) -> dict:
+    """`sb review queue`; the daily review page passes the snapshot it already read."""
     rr = _registry()
-    snapshot = read_snapshot(root)
+    snapshot = snapshot or read_snapshot(root)
 
     def read_card(meta):
         return snapshot.cards[meta.id].body
@@ -93,6 +106,11 @@ def queue(root: Path, now: datetime, *, new_per_day: int | None = None, domains=
                            domains=tuple(domains or ()), read_card=read_card if questions else None,
                            limit=limit, section=section or default_section(), taxonomy=taxonomy(snapshot),
                            cache_dir=cache_dir(root))
+
+
+def local_day(timestamp: str, tz) -> str:
+    """The local calendar date (ISO) of a registry timestamp."""
+    return _registry().parse_ts(timestamp).astimezone(tz).date().isoformat()
 
 
 def parse_item(text: str) -> dict:

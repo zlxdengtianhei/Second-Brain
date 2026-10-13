@@ -1,24 +1,17 @@
-"""Local user-entry and spaced-repetition projections; no model calls."""
+"""HOME, entry-document blocks and the daily review page; no model calls."""
 from __future__ import annotations
 
 import json
 import re
 from collections import Counter
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
 from pathlib import Path
 
 from . import jobs, labels
 from .classification import projection_changes, writable_snapshot, snapshot_checks
-from .moc import Projection, build_mocs, learning_order
+from .moc import Projection, build_mocs
 from .store import Conflict, digest, read_bytes
 from .vault import read_snapshot
-
-
-def parsed_date(value):
-    try:
-        return date.fromisoformat(str(value)[:10])
-    except (ValueError, TypeError):
-        return None
 
 
 def _read(root, rel, reads):
@@ -140,45 +133,35 @@ def _directory_counts(root, final_paths):
     return counts
 
 
+def review_time(today: date) -> datetime:
+    """The moment the daily review page is computed for: noon of ``today``, local time."""
+    return datetime.combine(today, time(12), tzinfo=datetime.now().astimezone().tzinfo)
+
+
 def review_projection(snapshot, today: date, *, extra_targets=(), generated_at=None,
                       reads=None) -> Projection:
+    """Today's review page from the review registry: the same due and new cards as `sb review queue`."""
+    from . import reviews
     reads = {} if reads is None else reads
     lay = _layout(snapshot)
-    whole, inline, new, unparsed = [], [], [], []
-    for c in snapshot.cards.values():
-        row = {'id': c.id, 'title': c.title, 'path': c.path[:-3], 'domain': c.domain}
-        due = parsed_date(c.fm.get('sr-due'))
-        if due is not None and due <= today:
-            whole.append({**row, 'due': due.isoformat()})
-        comments = re.findall(r'<!--SR:([^>]*)-->', c.body)
-        dates = []
-        for content in comments:
-            value = parsed_date(content.lstrip('!').split(',')[0])
-            if value is None:
-                unparsed.append({'id': c.id, 'value': content})
-            elif value <= today:
-                dates.append(value)
-        if dates:
-            inline.append({**row, 'due_count': len(dates), 'earliest': min(dates).isoformat()})
-        tags = c.fm.get('tags') or []
-        if isinstance(tags, str):
-            tags = [tags]
-        if not comments and not any(k.startswith('sr-') for k in c.fm) and 'review' in tags and c.fm.get('kind') != 'record':
-            new.append(c)
-    whole.sort(key=lambda x: (x['due'], x['id']))
-    inline.sort(key=lambda x: (x['earliest'], x['id']))
-    ordered, cycles = learning_order(new)
-    new_rows = [{'id': c.id, 'title': c.title, 'path': c.path[:-3], 'domain': c.domain} for c in ordered]
-    counts = {'scanned': len(snapshot.cards), 'due_notes': len(whole), 'due_inline': len(inline),
-              'inline_due_total': sum(r['due_count'] for r in inline), 'new_notes': len(new), 'sr_unparsed': len(unparsed)}
-    state = {'date': today.isoformat(), 'due_notes': whole, 'due_inline': inline, 'new_notes': new_rows,
-             'counts': counts, 'issues': cycles + unparsed, 'generated_by': 'secondbrain'}
+    now = review_time(today)
+    queue = reviews.queue(snapshot.root, now, snapshot=snapshot)
+    due = [{'id': r['id'], 'title': r['title'], 'path': r['path'][:-3], 'domain': r['domain'],
+            'due': reviews.local_day(r['due'], now.tzinfo)} for r in queue['cards'] if r['kind'] == 'due']
+    new = [{'id': r['id'], 'title': r['title'], 'path': r['path'][:-3], 'domain': r['domain']}
+           for r in queue['cards'] if r['kind'] == 'new']
+    issues = ([{'code': 'learning_order_cycle', 'count': queue['cycle_breaks'],
+                'detail': 'Prerequisite edges among new cards form a cycle; the queue breaks it in card id order'}]
+              if queue['cycle_breaks'] else [])
+    counts = {'scanned': len(snapshot.cards), 'due': len(due), 'new': len(new),
+              'new_available': queue['new_available'], 'new_quota': queue['new_quota']}
+    state = {'date': today.isoformat(), 'source': 'review registry', 'due': due, 'new': new,
+             'counts': counts, 'issues': issues, 'generated_by': 'secondbrain'}
     T = labels.pages()
     lines = ['---', f'date: {today.isoformat()}', 'generated_by: secondbrain', '---', '',
              T['review_title'].format(date=today.isoformat()), '',
              T['review_intro'], '', f'[[{lay.home[:-3]}|{T["back_home"]}]]', '']
-    for title, rows, label in [(T['due_cards'], whole, 'due'), (T['due_inline'], inline, 'earliest'),
-                               (T['new_today'], new_rows[:5], None)]:
+    for title, rows, label in [(T['due_cards'], due, 'due'), (T['new_today'], new, None)]:
         lines.extend([f'## {title}', ''])
         for r in rows:
             detail = f' · {r[label]}' if label else ''
@@ -186,15 +169,16 @@ def review_projection(snapshot, today: date, *, extra_targets=(), generated_at=N
         if not rows:
             lines.append(T['none'])
         lines.append('')
-    lines.extend([T['new_left'].format(n=len(new_rows)), T['unparsed'].format(n=len(unparsed)), ''])
+    lines.extend([T['new_left'].format(available=queue['new_available'], n=len(new)), ''])
     trend = []
     for i in range(6, -1, -1):
         rel = f'{lay.projections}/review_state_{(today - timedelta(days=i)).isoformat()}.json'
         old = _read(snapshot.root, rel, reads)
         value = state if i == 0 else json.loads(old) if old else None
         if value:
-            trend.append({'date': (today - timedelta(days=i)).isoformat(),
-                          'due_count': len(value.get('due_notes', [])) + len(value.get('due_inline', []))})
+            # older pages stored Spaced Repetition counts as due_notes / due_inline
+            count = len(value.get('due', value.get('due_notes', []))) + len(value.get('due_inline', []))
+            trend.append({'date': (today - timedelta(days=i)).isoformat(), 'due_count': count})
     known = {c.path.removesuffix('.md') for c in snapshot.cards.values()}
     known.update(str(p).removesuffix('.md') for p in extra_targets)
     stems = {Path(p).name for p in known}
@@ -209,11 +193,11 @@ def review_projection(snapshot, today: date, *, extra_targets=(), generated_at=N
     site = {'date': today.isoformat(),
             'generated_at': generated_at or datetime.now().astimezone().isoformat(timespec='seconds'),
             'broken_links': len(broken), 'broken_links_measured': True, 'broken_links_scope': 'review_page',
-            'due_count': len(whole) + len(inline), 'new_count': len(new_rows),
-            'due_top': [{'title': x['title'], 'due': x['due']} for x in whole[:10]], 'trend_7d': trend}
+            'due_count': len(due), 'new_count': len(new),
+            'due_top': [{'title': x['title'], 'due': x['due']} for x in due[:10]], 'trend_7d': trend}
     return Projection({review_page(lay, today): '\n'.join(lines).encode(),
                        f'{lay.projections}/review_state_{today}.json': jobs.encoded(state),
-                       f'{lay.projections}/kb_review.json': jobs.encoded(site)}, counts, cycles + unparsed)
+                       f'{lay.projections}/kb_review.json': jobs.encoded(site)}, counts, issues)
 
 
 def entry_projection(snapshot, today: date, *, final_paths=(), reads=None) -> Projection:
@@ -310,8 +294,15 @@ def _merge_projections(projections):
 
 
 def _projection_files(snapshot, today, *, reviews, entries, refresh_mocs=False, generated_at=None):
+    from .reviews import available as reviews_available
     reads = {}
     lay = _layout(snapshot)
+    skipped = []
+    if reviews and entries and not reviews_available():
+        # `sb daily` without the review extra: write HOME and the docs, say why the review page is missing.
+        reviews = False
+        skipped.append({'code': 'review_extra_missing',
+                        'detail': 'The daily review page needs the review extra: pip install "secondbrain[review]"'})
     moc = build_mocs(snapshot) if refresh_mocs else None
     review_targets = ({review_page(lay, today),
                        f'{lay.projections}/review_state_{today}.json',
@@ -328,7 +319,7 @@ def _projection_files(snapshot, today, *, reviews, entries, refresh_mocs=False, 
                                generated_at=generated_at, reads=reads) if reviews else None
     projections = [p for p in (moc, entry, review) if p is not None]
     files, issues, metrics = _merge_projections(projections)
-    return files, issues, reads, metrics
+    return files, skipped + issues, reads, metrics
 
 
 def _projection_changes(root, files, reads):

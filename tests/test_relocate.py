@@ -125,6 +125,24 @@ def test_real_relocation_across_existing_domains(tmp_path):
     assert not any(f'10_Knowledge/{SRC}/{CARD}' in p.read_text() for p in old_pages)
     assert any(f'10_Knowledge/{DST}/{CARD}' in p.read_text() for p in new_pages)
     assert (root / 'HOME.md').exists() and tuple(result['applied_paths']) != ()
+    [page] = [p for p in result['applied_paths'] if p.startswith('50_Reviews/') and p.endswith('.md')]
+    assert f'[[10_Knowledge/{DST}/{CARD}|' in (root / page).read_text()  # the review page follows the move
+
+
+def test_relocation_without_the_review_extra_skips_the_review_page(tmp_path, monkeypatch):
+    from secondbrain import reviews
+
+    def missing():
+        raise reviews.ReviewExtraMissing('needs the review extra')
+    monkeypatch.setattr(reviews, '_registry', missing)
+    root = build_vault(tmp_path)
+    source_job(root)
+    r.prepare(root, source_jobs=['src-cls'], job_id='relo')
+    relocation_proposal(root)
+    result = r.apply(root, 'relo')
+    assert result['status'] == 'applied' and result['moved_count'] == 1
+    assert (root / f'10_Knowledge/{DST}/{CARD}.md').exists() and 'HOME.md' in result['applied_paths']
+    assert not any(p.startswith('50_Reviews/') for p in result['applied_paths'])
 
 
 def test_missing_independent_review_writes_nothing(tmp_path):

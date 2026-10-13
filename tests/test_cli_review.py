@@ -85,6 +85,42 @@ def test_queue_order_matches_the_registry_with_taxonomy(vault, capsys):
     assert not any('review-state' in p.name for p in vault.rglob('*'))
 
 
+def test_the_daily_review_page_shows_the_review_queue(vault, capsys):
+    import re
+    from datetime import date, timedelta
+    from secondbrain.projections import review_time
+    day = date(2026, 10, 13)
+    noon = review_time(day)
+    code, queue, err = run(capsys, vault, 'review', 'queue', '--now', noon.isoformat())
+    assert code == 0, err
+    studied = queue['cards'][1]['id']
+    code, _, err = run(capsys, vault, 'review', 'log', '--card', studied, '--rating', '1', '--device', 'cli-test',
+                       '--now', (noon - timedelta(days=2)).isoformat())
+    assert code == 0, err
+    code, queue, _ = run(capsys, vault, 'review', 'queue', '--now', noon.isoformat())
+    assert queue['due_count'] == 1 and queue['cards'][0]['id'] == studied and queue['new_count'] >= 2
+    code, result, err = run(capsys, vault, 'daily', '--date', day.isoformat(), '--apply')
+    assert code == 0 and result['status'] == 'applied', err
+    page = (vault / '50_Reviews/Daily review 2026-10-13.md').read_text(encoding='utf-8')
+    listed = re.findall(r'^- \[\[([^|\]]+)\|', page, re.M)
+    assert listed == [c['path'][:-3] for c in queue['cards']]  # same cards, same order
+    assert f"New cards not started yet: {queue['new_available']}; {queue['new_count']} of them" in page
+
+
+def test_without_the_review_extra_daily_writes_home_and_today_explains(vault, capsys, monkeypatch):
+    from secondbrain import reviews
+
+    def missing():
+        raise reviews.ReviewExtraMissing('Review commands need the review extra: pip install "secondbrain[review]"')
+    monkeypatch.setattr(reviews, '_registry', missing)
+    code, _, err = run(capsys, vault, 'today', '--apply')
+    assert code == 2 and 'secondbrain[review]' in err
+    code, result, err = run(capsys, vault, 'daily', '--apply')
+    assert code == 0, err
+    assert 'HOME.md' in result['applied_paths'] and not any('50_Reviews' in p for p in result['applied_paths'])
+    assert [i['code'] for i in result['issues']] == ['review_extra_missing']
+
+
 def test_import_spaced_repetition_schedules(vault, capsys):
     snap = read_snapshot(vault)
     card = next(c for c in snap.cards.values() if c.title == 'Lantern queue')

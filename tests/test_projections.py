@@ -1,5 +1,5 @@
 from dataclasses import replace
-from datetime import date
+from datetime import date, timedelta
 import json
 
 from secondbrain import config
@@ -8,22 +8,30 @@ from secondbrain.projections import review_projection, entry_projection
 from tests.helpers import ENTRY_DOCS_LAYOUT, build_vault, DOMAIN, EXISTING
 
 
-def test_due_inline_new_and_record_use_distinct_plugin_signals(tmp_path):
+def test_review_page_takes_due_and_new_cards_from_the_review_registry(tmp_path):
+    from secondbrain import reviews
+    from secondbrain.projections import review_time
+    day = date(2026, 9, 7)
     root = build_vault(tmp_path)
     path = root / f"10_Knowledge/{DOMAIN}/{EXISTING}.md"
     raw = path.read_text()
-    path.write_text(raw.replace("---\nid:", "---\nsr-due: 2026-09-01\ntags: [review]\nid:") + "<!--SR:!2026-09-02,10,250-->\n<!--SR:bad-date-->\n")
+    # Spaced Repetition plugin fields are not read: without registry events the card is new, not due
+    path.write_text(raw.replace("---\nid:", "---\nsr-due: 2026-09-01\ntags: [review]\nid:") + "<!--SR:!2026-09-02,10,250-->\n")
     before = path.read_bytes()
-    p = review_projection(read_snapshot(root), date(2026, 9, 7))
-    assert p.metrics['due_notes'] == 1
-    assert p.metrics['due_inline'] == 1
-    assert p.metrics['new_notes'] == 0
-    assert p.metrics['sr_unparsed'] == 1
+    p = review_projection(read_snapshot(root), day)
+    assert (p.metrics['due'], p.metrics['new'], p.metrics['new_available']) == (0, 1, 1)
     assert path.read_bytes() == before
-    path.write_text(raw.replace("---\nid:", "---\ntags: [review]\nkind: record\nid:"))
-    assert review_projection(read_snapshot(root), date(2026, 9, 7)).metrics['new_notes'] == 0
-    path.write_text(raw.replace("---\nid:", "---\ntags: [review]\nid:"))
-    assert review_projection(read_snapshot(root), date(2026, 9, 7)).metrics['new_notes'] == 1
+    path.write_text(raw.replace("---\nid:", "---\nkind: record\nid:"))
+    assert review_projection(read_snapshot(root), day).metrics['new_available'] == 0  # records are not studied
+    path.write_text(raw)
+    # a review logged two days earlier with rating 1 (again) makes the card due on the page's day
+    reviews.log(root, EXISTING, review_time(day) - timedelta(days=2), rating=1, device='cli-test')
+    p = review_projection(read_snapshot(root), day)
+    state = json.loads(p.files['_data/projections/review_state_2026-09-07.json'])
+    queue = reviews.queue(root, review_time(day))
+    assert [r['id'] for r in state['due']] == [r['id'] for r in queue['cards'] if r['kind'] == 'due'] == [EXISTING]
+    assert state['new'] == [] and state['source'] == 'review registry'
+    assert state['due'][0]['due'] == '2026-09-05'
 
 
 def test_doc_marker_update_preserves_other_user_prose(tmp_path):

@@ -38,7 +38,8 @@ def test_f1_snapshot_card_reread_cannot_overwrite_frozen_hash(tmp_path, monkeypa
         return snapshot
 
     monkeypatch.setattr(p, 'read_snapshot', race)
-    with pytest.raises(store.Conflict, match='changed after (it|the plan) was prepared'):
+    # the review page links the card, so the link check rereads it; either check may see the race
+    with pytest.raises(store.Conflict, match='changed (after (it|the plan) was prepared|while it was read)'):
         generate(root, job_id='f1', apply=True, today=DAY)
     assert card.read_bytes() == changed
 
