@@ -107,3 +107,22 @@ def test_the_producer_is_asked_for_intuition_contrasts_and_links_to_neighbours()
     produce = task_text('produce_cards.md')
     assert 'write them whenever the chunk or the `neighbors` support them' in produce
     assert 'Link a card to every neighbour it is closely related to' in produce
+
+
+@pytest.mark.parametrize('marked', [True, False])
+def test_a_type_marked_as_its_own_inverse_is_written_back_the_same_way(tmp_path, marked):
+    from secondbrain import layout
+    from secondbrain.vault import parse_note
+    from tests.helpers import EXISTING
+    from tests.test_ingest import run_default
+    root = build_ingest_vault(tmp_path / 'vault')
+    path = root / layout.DEFAULT.catalog
+    catalog = json.loads(path.read_text(encoding='utf-8'))
+    if not marked:  # a hand-kept catalog may list similar_to without marking it symmetric
+        del catalog['inverse_relations']['similar_to']
+    path.write_text(json.dumps(catalog), encoding='utf-8')
+    _, result, _ = run_default(root, layout.DEFAULT)
+    assert result['status'] == 'applied'
+    fm, body = parse_note(read_snapshot(root).cards[EXISTING].raw)
+    back = [r for r in fm.get('relations') or [] if r['type'] == 'similar_to']
+    assert bool(back) == marked and ('similar_to:: [[Lantern queue]]' in body) == marked
