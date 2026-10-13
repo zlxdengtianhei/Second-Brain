@@ -364,7 +364,7 @@ def generate(root: Path, *, job_id: str, apply: bool = False, today: date | None
                     (today is not None and frozen.get('date') != today.isoformat()) or
                     bool(frozen_options.get('refresh_mocs', False)) != requested_refresh or
                     (generated_at is not None and frozen.get('generated_at') != generated_at)):
-                raise Conflict('任务ID已绑定其他输入')
+                raise Conflict('This job id is already bound to other input')
             return jobs.resume_transaction(root, job_id) or existing
         if existing and existing.get('status') == 'prepared' and not existing.get('commit_intent'):
             # Read the durable packet before making a fresh clock value or calling

@@ -316,7 +316,7 @@ def _process_child(root: Path, child: dict, producer, reviewer) -> dict:
             last_exc = None
             break
         except Conflict as exc:
-            if '另一个SecondBrain写入正在进行' not in str(exc):
+            if 'Another SecondBrain write is in progress' not in str(exc):
                 raise
             last_exc = exc
             import time

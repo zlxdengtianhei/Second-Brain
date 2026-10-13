@@ -70,7 +70,7 @@ def location(job_id: str, *parts: str) -> str:
     parts = parts or ('state.json',)
     for part in parts:
         if not part or '/' in part or part.startswith('.'):
-            raise ValueError('非法任务文件名')
+            raise ValueError('invalid job file name')
     return '/'.join(['jobs', job_name(job_id), *parts])
 
 
@@ -80,7 +80,7 @@ def run_location(job_id: str, run_id: str) -> str:
 
 def _run_name(run_id: str) -> str:
     if not isinstance(run_id, str) or not _RUN_ID_RE.fullmatch(run_id):
-        raise ValueError(f'非法run_id：{run_id!r}')
+        raise ValueError(f'invalid run id: {run_id!r}')
     return run_id
 
 
@@ -91,12 +91,12 @@ def new_run_id() -> str:
 def load(root: Path, job_id: str) -> dict:
     raw = read_state(root, location(job_id))
     if raw is None:
-        raise ValueError(f'任务不存在：{job_id}')
+        raise ValueError(f'No such job: {job_id}')
     state = json.loads(raw)
     if state.get('job_id') != job_id:
-        raise ValueError('任务身份不匹配')
+        raise ValueError('job state does not belong to this job id')
     if state.get('schema') != SCHEMA:
-        raise ValueError(f'任务格式不是{SCHEMA}（{state.get("schema")!r}）')
+        raise ValueError(f'job state is not {SCHEMA} ({state.get("schema")!r})')
     return state
 
 
@@ -104,7 +104,7 @@ def read_input(root: Path, job_id: str) -> dict:
     state = load(root, job_id)
     raw = read_state(root, location(job_id, 'input.json'))
     if raw is None or digest(raw) != state['input_sha256']:
-        raise Conflict('任务输入被修改，请重新准备任务')
+        raise Conflict('The frozen job input was modified; prepare the job again')
     return json.loads(raw)
 
 
@@ -116,9 +116,9 @@ def create(root: Path, job_id: str, kind: str, packet: dict, **extra) -> dict:
         if old is not None:
             state = json.loads(old)
             if state.get('schema') != SCHEMA:
-                raise ValueError(f'任务{job_id}为旧格式（{state.get("schema")!r}）')
+                raise ValueError(f'Job {job_id} has an old state format ({state.get("schema")!r})')
             if state.get('input_sha256') != digest(raw) or state.get('kind') != kind:
-                raise Conflict('任务ID已绑定其他输入')
+                raise Conflict('This job id is already bound to other input')
             return state
         write_json(root, location(job_id, 'input.json'), packet)
         saved = read_state(root, location(job_id, 'input.json'))
@@ -137,7 +137,7 @@ _PROTECTED = {'schema', 'job_id', 'input_sha256', 'kind', 'created_at', 'runs',
 def update(root: Path, job_id: str, **fields) -> dict:
     forbidden = _PROTECTED & fields.keys()
     if forbidden:
-        raise ValueError(f'不能改任务身份或结果绑定：{sorted(forbidden)}')
+        raise ValueError(f'cannot change job identity or result bindings: {sorted(forbidden)}')
     return _internal_update(root, job_id, **fields)
 
 
@@ -168,7 +168,7 @@ def _slot(state: dict, chunk: str | None, *, create: bool = False) -> dict:
     chunks = state.setdefault('chunks', {}) if create else (state.get('chunks') or {})
     if chunk not in chunks:
         if not create:
-            raise ValueError(f'任务没有该块：{chunk}')
+            raise ValueError(f'The job has no chunk {chunk}')
         chunks[chunk] = {'candidate': None, 'review': None, 'status': 'prepared', 'round': 0}
     return chunks[chunk]
 
@@ -179,10 +179,10 @@ def _slot(state: dict, chunk: str | None, *, create: bool = False) -> dict:
 def load_run(root: Path, job_id: str, run_id: str) -> dict:
     raw = read_state(root, run_location(job_id, run_id))
     if raw is None:
-        raise ValueError(f'run不存在：{run_id}')
+        raise ValueError(f'No such run: {run_id}')
     run = json.loads(raw)
     if run.get('job_id') != job_id or run.get('run_id') != run_id or run.get('schema') != RUN_SCHEMA:
-        raise ValueError('run记录身份不匹配')
+        raise ValueError('run record does not belong to this job and run id')
     return run
 
 
@@ -196,9 +196,9 @@ def start_run(root: Path, job_id: str, *, role: str, step: str, executor: str,
               chunk: str | None = None, run_id: str | None = None) -> dict:
     """Record a run before its executor is called; returns the run record."""
     if role not in {'producer', 'reviewer'}:
-        raise ValueError(f'未知角色：{role}')
+        raise ValueError(f'unknown role: {role}')
     if step not in {'produce', 'review', 'repair'}:
-        raise ValueError(f'未知步骤：{step}')
+        raise ValueError(f'unknown step: {step}')
     run_id = _run_name(run_id or new_run_id())
     with vault_lock(root):
         state = load(root, job_id)
@@ -216,7 +216,7 @@ def start_run(root: Path, job_id: str, *, role: str, step: str, executor: str,
                 raise Conflict('REVIEW_BEFORE_CANDIDATE')
             _verified_bytes(root, job_id, candidate)
         elif candidate and step != 'repair':
-            raise Conflict('REPAIR_REQUIRED: 已有候选，只能以repair步骤重产')
+            raise Conflict('REPAIR_REQUIRED: a candidate exists; produce again only as a repair step')
         run = {'schema': RUN_SCHEMA, 'run_id': run_id, 'job_id': job_id, 'role': role,
                'step': step, 'chunk': chunk, 'executor': executor,
                'endpoint_host': endpoint_host, 'model_requested': model_requested,
@@ -238,7 +238,7 @@ def _close_run(root: Path, job_id: str, run_id: str, status: str, **fields) -> d
     with vault_lock(root):
         run = load_run(root, job_id, run_id)
         if run['status'] != 'started':
-            raise Conflict(f'run已结束（{run["status"]}），不能改为{status}')
+            raise Conflict(f'run already ended ({run["status"]}); cannot change it to {status}')
         run.update(fields, status=status, ended_at=now())
         write_json(root, run_location(job_id, run_id), run)
         return run
@@ -252,7 +252,7 @@ def fail_run(root: Path, job_id: str, run_id: str, *, error: dict) -> dict:
 def abandon_run(root: Path, job_id: str, run_id: str, *, reason: str) -> dict:
     """Give up a run that never submitted (e.g. a host sub-agent that vanished)."""
     if not isinstance(reason, str) or not reason.strip():
-        raise ValueError('abandon需要具体原因')
+        raise ValueError('abandon needs a concrete reason')
     return _close_run(root, job_id, run_id, 'abandoned',
                       error={'code': 'ABANDONED', 'message': reason, 'retryable': True})
 
@@ -270,9 +270,9 @@ def submit(root: Path, job_id: str, payload: dict, *, role: str, run_id: str,
            usage: dict | None = None) -> dict:
     """Validate and persist one run's output; never writes knowledge."""
     if not isinstance(payload, dict):
-        raise ValueError('提交内容必须是JSON对象')
+        raise ValueError('a submission must be a JSON object')
     if attestation not in {'provider_response', 'self_reported', 'test'}:
-        raise ValueError(f'未知attestation：{attestation}')
+        raise ValueError(f'unknown attestation: {attestation}')
     with vault_lock(root):
         state = load(root, job_id)
         input_raw = read_state(root, location(job_id, 'input.json'))
@@ -302,7 +302,7 @@ def submit(root: Path, job_id: str, payload: dict, *, role: str, run_id: str,
             payload = checked if isinstance(checked, dict) else payload
         raw = encoded(payload)
         if len(raw) > 8_000_000:
-            raise ValueError('结果超过8MB，请拆成独立处理批次')
+            raise ValueError('the result is larger than 8 MB; split the work into smaller batches')
         path = location(job_id, 'out', f'{role}-{run_id}.json')
         existing = read_state(root, path)
         if run['status'] == 'submitted':
@@ -356,17 +356,17 @@ def submit(root: Path, job_id: str, payload: dict, *, role: str, run_id: str,
 def _verified_bytes(root: Path, job_id: str, ref: dict) -> bytes:
     prefix = f'jobs/{job_name(job_id)}/'
     if not isinstance(ref, dict) or not str(ref.get('path', '')).startswith(prefix):
-        raise ValueError('任务结果路径越界')
+        raise ValueError('job result path is outside the job folder')
     raw = read_state(root, ref['path'])
     if raw is None or digest(raw) != ref.get('sha256'):
-        raise Conflict('任务结果在记录后被修改')
+        raise Conflict('A job result was modified after it was recorded')
     return raw
 
 
 def artifact(root: Path, state: dict, kind: str, chunk: str | None = None) -> dict:
     ref = _slot(state, chunk).get(kind)
     if not ref:
-        raise ValueError(f'任务尚无{kind}结果')
+        raise ValueError(f'The job has no {kind} yet')
     return json.loads(_verified_bytes(root, state['job_id'], ref))
 
 
@@ -378,7 +378,7 @@ def require_independent_review(root: Path, state: dict, chunk: str | None = None
     slot = _slot(state, chunk)
     candidate_ref, review_ref = slot.get('candidate'), slot.get('review')
     if not candidate_ref or not review_ref:
-        raise Conflict('缺少候选或复核结果')
+        raise Conflict('Missing candidate or review')
     _verified_bytes(root, state['job_id'], candidate_ref)
     review_raw = _verified_bytes(root, state['job_id'], review_ref)
     producer = load_run(root, state['job_id'], candidate_ref['run_id'])
@@ -423,10 +423,10 @@ def finish_transaction(root: Path, job_id: str, result: dict, changes: list[Chan
     with vault_lock(root):
         state = load(root, job_id)
         if state.get('commit_intent'):
-            raise Conflict('任务已经有冻结写入计划，请恢复它')
+            raise Conflict('The job already has a frozen write plan; resume it')
         intent['bindings'] = _bindings(state)
         if not intent['bindings']:
-            raise Conflict('没有已复核的候选，不能写入')
+            raise Conflict('No reviewed candidate: nothing can be written')
         write_json(root, location(job_id, 'commit-intent.json'), intent)
         state.update(status='applying', updated_at=now(),
                      commit_intent=digest(read_state(root, location(job_id, 'commit-intent.json'))))
@@ -472,7 +472,7 @@ def release_intent(root: Path, job_id: str, *, reason: str) -> dict:
     """
     with vault_lock(root):
         if read_state(root, location(job_id, 'transaction.json')) is not None:
-            raise Conflict('写入已经开始，只能用 recover 恢复或回滚')
+            raise Conflict('The write already started; use sb recover to resume or roll it back')
         state = load(root, job_id)
         state.pop('commit_intent', None)
         state.update(status='needs_attention', attention=reason, updated_at=now())
@@ -497,12 +497,12 @@ def freeze_projection(root: Path, job_id: str, changes: list[Change], *, checks:
     with vault_lock(root):
         state = load(root, job_id)
         if state.get('kind') != PROJECTION_KIND:
-            raise ValueError('只有确定性投影任务能冻结投影计划')
+            raise ValueError('only deterministic projection jobs can freeze a projection plan')
         if state.get('commit_intent'):
-            raise Conflict('任务已经有冻结写入计划，请恢复它')
+            raise Conflict('The job already has a frozen write plan; resume it')
         for change in changes:
             if not _projection_allowed(root, change.relative_path):
-                raise ValueError(f'确定性投影不能写该路径：{change.relative_path}')
+                raise ValueError(f'a deterministic projection cannot write this path: {change.relative_path}')
         if not changes:
             state.update(**plan, applied_paths=[], updated_at=now())
             write_json(root, location(job_id), state)
@@ -521,21 +521,21 @@ def resume_transaction(root: Path, job_id: str) -> dict | None:
         return None
     raw = read_state(root, location(job_id, 'commit-intent.json'))
     if raw is None or digest(raw) != state['commit_intent']:
-        raise Conflict('冻结写入计划已改变')
+        raise Conflict('The frozen write plan was modified')
     intent = json.loads(raw)
     if state['status'] in {'applied', 'published', 'partial', 'rolled_back'}:
         return state
     if intent.get('projection') is True:
         if state.get('kind') != PROJECTION_KIND:
-            raise Conflict('冻结计划类型与任务类型不一致')
+            raise Conflict('The frozen plan type does not match the job kind')
         read_input(root, job_id)
         changes = _decode_changes(intent['changes'])
         for change in changes:
             if not _projection_allowed(root, change.relative_path):
-                raise ValueError(f'确定性投影不能写该路径：{change.relative_path}')
+                raise ValueError(f'a deterministic projection cannot write this path: {change.relative_path}')
     else:
         if intent.get('bindings') != _bindings(state):
-            raise Conflict('冻结写入计划与当前候选或复核不一致')
+            raise Conflict('The frozen write plan does not match the current candidate or review')
         for slot in intent['bindings']:
             require_independent_review(root, state, None if slot == '-' else slot)
         changes = _decode_changes(intent['changes'])
@@ -565,7 +565,7 @@ def list_jobs(root: Path) -> list[dict]:
                         if raw is not None:
                             transaction = json.loads(raw)
                             if transaction.get('schema') not in {'secondbrain-transaction/1', 'secondbrain-transaction/2'} or transaction.get('job_id') != job_id:
-                                raise ValueError('事务身份或格式不匹配')
+                                raise ValueError('transaction record has the wrong identity or format')
                             out.append({'job_id': job_id, 'kind': 'transaction',
                                         'status': transaction['status'],
                                         'paths': [x['path'] for x in transaction['changes']]})

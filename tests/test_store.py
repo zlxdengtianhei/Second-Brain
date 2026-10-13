@@ -62,7 +62,7 @@ def test_foreign_edit_after_interruption_blocks_resume_and_rollback(tmp_path):
 def test_lock_is_held_by_process_not_a_stale_marker(tmp_path):
     root = vault(tmp_path)
     with vault_lock(root):
-        with pytest.raises(Conflict, match='另一个'):
+        with pytest.raises(Conflict, match='Another SecondBrain write'):
             apply_changes(root, 'locked', changes())
     assert apply_changes(root, 'locked', changes())['status'] == 'applied'
 
@@ -158,7 +158,7 @@ def test_source_is_immutable_and_new_file_can_be_rolled_back(tmp_path):
     root = vault(tmp_path)
     change = Change('40_Sources/inbox/source.md', None, b'source original')
     apply_changes(root, 'new-source', [change])
-    with pytest.raises(Conflict, match='不可覆盖'):
+    with pytest.raises(Conflict, match='cannot be overwritten'):
         apply_changes(root, 'overwrite-source', [Change(change.relative_path, digest(change.after), b'bad')])
     recover(root, 'new-source', 'rollback')
     assert not (root / change.relative_path).exists()
@@ -167,7 +167,7 @@ def test_source_is_immutable_and_new_file_can_be_rolled_back(tmp_path):
 def test_reused_job_id_cannot_replace_transaction(tmp_path):
     root = vault(tmp_path)
     apply_changes(root, 'fixed-id', changes())
-    with pytest.raises(Conflict, match='另一个变更集'):
+    with pytest.raises(Conflict, match='another change set'):
         apply_changes(root, 'fixed-id', [Change('10_Knowledge/test/a.md', digest(b'new a\n'), b'different')])
 
 
@@ -178,7 +178,7 @@ def test_corrupt_journal_is_detected_before_replay(tmp_path):
     journal = json.loads(p.read_text())
     journal['changes'][0]['after'] = 'b3RoZXI='
     p.write_text(json.dumps(journal))
-    with pytest.raises(ValueError, match='哈希'):
+    with pytest.raises(ValueError, match='hash'):
         recover(root, 'corrupt')
 
 
@@ -236,7 +236,7 @@ def test_read_dependency_change_blocks_apply_and_resume_without_overwrite(tmp_pa
     with pytest.raises(RuntimeError):
         apply_changes(root, 'guarded', changes(), checks=guards, _crash_after=1)
     dependency.write_bytes(b'new incoming reference')
-    with pytest.raises(Conflict, match='只读依赖'):
+    with pytest.raises(Conflict, match='read changed after'):
         recover(root, 'guarded')
     assert (root / '10_Knowledge/test/b.md').read_bytes() == b'original b\n'
     # Rollback restores our files without modifying a read-only dependency.

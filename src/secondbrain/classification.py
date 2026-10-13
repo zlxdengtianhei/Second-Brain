@@ -17,7 +17,16 @@ def writable_snapshot(snapshot: Snapshot) -> None:
     # is not safe to write through, even when a different card was requested.
     fatal = [x for x in snapshot.issues if x.get('code') not in {'missing_taxonomy'}]
     if fatal:
-        raise ValueError(f'全库结构有未解决问题：{fatal[:5]}')
+        shown = '; '.join(_describe_issue(x) for x in fatal[:5])
+        more = f' (and {len(fatal) - 5} more)' if len(fatal) > 5 else ''
+        raise ValueError(f'The vault has {len(fatal)} unresolved problem(s); nothing is written until they are '
+                         f'fixed: {shown}{more}. Run `sb status` for the full list.')
+
+
+def _describe_issue(issue: dict) -> str:
+    where = issue.get('path') or issue.get('id') or issue.get('card') or ''
+    detail = issue.get('message') or issue.get('detail') or ''
+    return ' '.join(str(x) for x in (issue.get('code'), where, detail) if x)
 
 
 def prepare(root: Path, *, ids: list[str] | None = None, domain: str | None = None,
@@ -25,7 +34,7 @@ def prepare(root: Path, *, ids: list[str] | None = None, domain: str | None = No
             repair_invalid: bool = False, _snapshot: Snapshot | None = None) -> dict:
     snapshot = _snapshot or read_snapshot(root)
     if snapshot.root.resolve() != root.resolve():
-        raise ValueError('批次快照不属于该知识库')
+        raise ValueError('the snapshot belongs to another vault')
     writable_snapshot(snapshot)
     if ids is not None:
         if len(ids) != len(set(ids)) or any(i not in snapshot.cards for i in ids):

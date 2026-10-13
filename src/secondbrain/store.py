@@ -51,20 +51,20 @@ def digest(data: bytes) -> str:
 
 def job_name(value: str) -> str:
     if not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9_.-]{0,119}", value):
-        raise ValueError("任务ID只能用字母、数字、下划线、短横线或点，长度1–120")
+        raise ValueError("a job id uses letters, digits, underscore, hyphen or dot, 1-120 characters")
     return value
 
 
 def relative(value: str) -> PurePosixPath:
     path = PurePosixPath(value)
     if not value or path.is_absolute() or str(path) != value or any(x in {".", ".."} for x in path.parts):
-        raise ValueError(f"不是规范的库内相对路径：{value!r}")
+        raise ValueError(f"not a normalized vault-relative path: {value!r}")
     # POSIX vault titles contain literal LaTeX backslashes (e.g. \varepsilon).
     # Directory walking below splits only on '/', never interprets '\\'.
     if "\x00" in value:
-        raise ValueError("路径含空字节")
+        raise ValueError("path contains a NUL byte")
     if any(part == '.git' for part in path.parts):
-        raise ValueError("不能读写版本库内部路径")
+        raise ValueError("paths inside the version-control folder are not allowed")
     return path
 
 
@@ -82,7 +82,7 @@ def _allowed(root: Path, value: str) -> bool:
 def _root(root: Path) -> Path:
     root = Path(root).absolute()
     if root.is_symlink() or not root.is_dir() or root.resolve() != root:
-        raise ValueError("vault必须是存在的真实目录，不能含符号链接")
+        raise ValueError("the vault must be an existing real folder without symlinks")
     return root
 
 
@@ -121,7 +121,7 @@ def _chain_fd(parts: list[str], *, create: bool) -> int:
     try:
         for part in parts:
             if not part or part in {".", ".."}:
-                raise ValueError(f"状态路径含非法分量：{part!r}")
+                raise ValueError(f"state path has an invalid component: {part!r}")
             try:
                 new = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
             except FileNotFoundError:
@@ -181,7 +181,7 @@ def read_state(root: Path, rel: str) -> bytes | None:
             with os.fdopen(child, "rb") as stream:
                 st = os.fstat(stream.fileno())
                 if not stat.S_ISREG(st.st_mode) or st.st_nlink != 1:
-                    raise ValueError(f"拒绝非常规或硬链接文件：{rel}")
+                    raise ValueError(f"refusing a non-regular or hard-linked file: {rel}")
                 return stream.read()
     except FileNotFoundError:
         return None
@@ -217,7 +217,7 @@ def read_bytes(root: Path, rel: str) -> bytes | None:
     :func:`read_state` instead.
     """
     if rel.startswith("jobs/"):
-        raise ValueError(f"任务状态在库外状态根，请用 read_state 或 jobs.* 接口：{rel}")
+        raise ValueError(f"job state lives in the external state root; use read_state or jobs.*: {rel}")
     try:
         with _parent(root, rel) as (fd, name):
             try:
@@ -227,7 +227,7 @@ def read_bytes(root: Path, rel: str) -> bytes | None:
             with os.fdopen(child, "rb") as stream:
                 st = os.fstat(stream.fileno())
                 if not stat.S_ISREG(st.st_mode) or st.st_nlink != 1:
-                    raise ValueError(f"拒绝非常规或硬链接文件：{rel}")
+                    raise ValueError(f"refusing a non-regular or hard-linked file: {rel}")
                 return stream.read()
     except FileNotFoundError:
         return None
@@ -309,12 +309,12 @@ def vault_lock(root: Path) -> Iterator[None]:
     if held is None:
         held = _LOCAL.held = set()
     if key in held:
-        raise Conflict("另一个SecondBrain写入正在进行（同一线程重复加锁），请稍后恢复当前任务")
+        raise Conflict("Another SecondBrain write is in progress (the same thread asked for the lock again); resume this job later")
     with _state_parent(root, "write.lock", create=True) as (fd, name):
         lock_fd = os.open(name, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600, dir_fd=fd)
         try:
             if not stat.S_ISREG(os.fstat(lock_fd).st_mode) or os.fstat(lock_fd).st_nlink != 1:
-                raise ValueError("写锁不是独立常规文件")
+                raise ValueError("the write lock is not a regular file")
             deadline = time.monotonic() + _lock_wait()
             delay = 0.01
             while True:
@@ -323,7 +323,7 @@ def vault_lock(root: Path) -> Iterator[None]:
                     break
                 except BlockingIOError as exc:
                     if time.monotonic() >= deadline:
-                        raise Conflict("另一个SecondBrain写入正在进行，请稍后恢复当前任务") from exc
+                        raise Conflict("Another SecondBrain write is in progress; resume this job later") from exc
                     time.sleep(delay)
                     delay = min(delay * 2, 0.25)
             held.add(key)
@@ -358,18 +358,18 @@ def _load_journal(root: Path, job_id: str) -> dict | None:
         return None
     journal = json.loads(raw)
     if journal.get("schema") not in {"secondbrain-transaction/1", "secondbrain-transaction/2"} or journal.get("job_id") != job_id:
-        raise ValueError("事务格式或任务身份不匹配")
+        raise ValueError("transaction record has the wrong format or job id")
     seen = set()
     for row in journal["changes"]:
         rel = row["path"]
         if rel in seen or not _allowed(root, rel):
-            raise ValueError("事务路径重复或越界")
+            raise ValueError("transaction path repeated or outside the allowed set")
         seen.add(rel)
         for field in ["before", "after"]:
             content = _unb64(row[field])
             actual = None if content is None else digest(content)
             if actual != row[f"{field}_sha256"]:
-                raise ValueError("事务内容哈希不匹配")
+                raise ValueError("transaction content hash mismatch")
     _validate_checks(journal.get("checks", {}), {r["path"] for r in journal["changes"]})
     _validate_moves(journal["changes"], layouts.of(root))
     return journal
@@ -378,22 +378,22 @@ def _load_journal(root: Path, job_id: str) -> dict | None:
 def _resume_locked(root: Path, journal: dict, *, crash_after: int | None = None) -> dict:
     path = _journal_path(journal["job_id"])
     if journal["status"] in {"rolled_back", "rolling_back"}:
-        raise Conflict("该事务已开始回滚，请继续rollback；重新处理请使用新任务ID")
+        raise Conflict("This transaction is being or was rolled back; continue with --rollback. To process the source again, ingest it again (rolled-back ingest jobs are set aside) or use sb job reset")
     for rel, sha in journal.get("checks", {}).items():
         if _hash_current(root, rel) != sha:
-            raise Conflict(f"只读依赖在准备后变化：{rel}")
+            raise Conflict(f"A file this plan read changed after it was prepared: {rel}")
     # Validate the entire remaining set before changing a single file.
     for row in journal["changes"]:
         actual = _hash_current(root, row["path"])
         if actual not in {row["before_sha256"], row["after_sha256"]}:
             journal.update(status="conflict", conflict_path=row["path"])
             write_json(root, path, journal)
-            raise Conflict(f"文件在准备后被修改：{row['path']}；未覆盖，请重新准备该任务")
+            raise Conflict(f"File changed after the plan was prepared: {row['path']}; nothing was overwritten, prepare the job again")
     if journal["status"] == "applied":
         # A completed transaction is idempotent only while its outputs survive.
         stale = [r["path"] for r in journal["changes"] if _hash_current(root, r["path"]) != r["after_sha256"]]
         if stale:
-            raise Conflict(f"已完成事务输出已改变：{stale[0]}")
+            raise Conflict(f"Output of the finished transaction changed: {stale[0]}")
         return {"status": "applied", "job_id": journal["job_id"], "paths": [r["path"] for r in journal["changes"]], "replayed": True}
     journal.update(status="applying", conflict_path=None)
     write_json(root, path, journal)
@@ -405,7 +405,7 @@ def _resume_locked(root: Path, journal: dict, *, crash_after: int | None = None)
         if actual != row["before_sha256"]:
             journal.update(status="conflict", conflict_path=row["path"])
             write_json(root, path, journal)
-            raise Conflict(f"写入时发现外部修改：{row['path']}")
+            raise Conflict(f"Found an outside change while writing: {row['path']}")
         _atomic(root, row["path"], _unb64(row["after"]))
         changed += 1
         if crash_after is not None and changed == crash_after:
@@ -421,9 +421,9 @@ def apply_changes(root: Path, job_id: str, changes: list[Change], *, checks: dic
     seen = set()
     for change in changes:
         if not _allowed(root, change.relative_path) or change.relative_path in seen:
-            raise ValueError(f"写入路径越界或重复：{change.relative_path}")
+            raise ValueError(f"write path outside the allowed set or repeated: {change.relative_path}")
         if change.after is not None and not isinstance(change.after, bytes):
-            raise ValueError("写入内容必须是bytes，迁移源可为None")
+            raise ValueError("written content must be bytes (None only for a move source)")
         seen.add(change.relative_path)
     checks = dict(checks or {})
     _validate_checks(checks, seen)
@@ -435,18 +435,18 @@ def apply_changes(root: Path, job_id: str, changes: list[Change], *, checks: dic
             supplied = [(c.relative_path, c.before_sha256, (None if c.after is None else digest(c.after))) for c in changes]
             saved = [(r["path"], r["before_sha256"], r["after_sha256"]) for r in journal["changes"]]
             if supplied != saved or checks != journal.get("checks", {}):
-                raise Conflict("任务ID已绑定另一个变更集；不得覆盖其恢复记录")
+                raise Conflict("This job id is bound to another change set; its recovery record is not overwritten")
             if operation is not None and journal.get('operation') != operation:
-                raise Conflict('任务ID已绑定另一typed operation')
+                raise Conflict('This job id is bound to another typed operation')
             return _resume_locked(root, journal, crash_after=_crash_after)
         rows = []
         for change in changes:
             before = read_bytes(root, change.relative_path)
             actual = None if before is None else digest(before)
             if actual != change.before_sha256:
-                raise Conflict(f"准备后文件发生变化：{change.relative_path}")
+                raise Conflict(f"File changed after the plan was prepared: {change.relative_path}")
             if layouts.of(root).is_source(change.relative_path) and before is not None and before != change.after:
-                raise Conflict("来源原文不可覆盖")
+                raise Conflict("A stored source cannot be overwritten")
             rows.append({"path": change.relative_path, "before_sha256": actual,
                          "after_sha256": None if change.after is None else digest(change.after), "before": _b64(before), "after": _b64(change.after)})
         _validate_moves(rows, layouts.of(root))
@@ -476,16 +476,16 @@ def _missing_dirs(root: Path, paths: list[str]) -> list[str]:
 def recover(root: Path, job_id: str, action: str = "resume") -> dict:
     root = _root(root)
     if action not in {"resume", "rollback"}:
-        raise ValueError("恢复动作必须是resume或rollback")
+        raise ValueError("the recovery action must be resume or rollback")
     with vault_lock(root):
         journal = _load_journal(root, job_id)
         if journal is None:
-            raise ValueError("该任务没有待恢复事务")
+            raise ValueError("this job has no transaction to recover")
         if action == "resume":
             return _resume_locked(root, journal)
         for row in journal["changes"]:
             if _hash_current(root, row["path"]) not in {row["before_sha256"], row["after_sha256"]}:
-                raise Conflict(f"回滚会覆盖外部修改，已拒绝：{row['path']}")
+                raise Conflict(f"Rollback refused: it would overwrite an outside change: {row['path']}")
         journal["status"] = "rolling_back"
         write_json(root, _journal_path(job_id), journal)
         for row in reversed(journal["changes"]):
@@ -493,7 +493,7 @@ def recover(root: Path, job_id: str, action: str = "resume") -> dict:
             if actual == row["before_sha256"]:
                 continue
             if actual != row["after_sha256"]:
-                raise Conflict(f"回滚途中发现外部修改，已拒绝：{row['path']}")
+                raise Conflict(f"Rollback stopped: found an outside change: {row['path']}")
             before = _unb64(row["before"])
             if before is None:
                 with _parent(root, row["path"]) as (fd, name):
@@ -532,18 +532,18 @@ def _validate_moves(rows: list[dict], lay) -> None:
     for old in removed:
         if old['before'] is not None and lay.is_inbox_file(old['path']):
             if not any(lay.is_source(r['path']) and r['after'] == old['before'] for r in rows):
-                raise ValueError('Inbox原件只能在同一事务把相同字节存入来源目录后移走')
+                raise ValueError('an inbox file can be removed only when the same transaction stores identical bytes in the sources folder')
             continue
         path = relative(old['path'])
         if not lay.is_card(old['path']) or old['before'] is None:
-            raise ValueError('只能迁移已有知识卡，不能直接删除文件')
+            raise ValueError('only existing cards can be moved; files are never deleted directly')
         old_fm, old_body = parse_note(_unb64(old['before']))
         if not isinstance(old_fm.get('id'), str) or not old_fm['id']:
-            raise ValueError('迁移卡缺少稳定ID')
+            raise ValueError('a moved card needs a stable id')
         matches = [r for r in destinations if lay.is_card(r['path'])
                    and relative(r['path']).name == path.name and r['path'] != old['path']]
         if len(matches) != 1 or matches[0]['path'] in consumed:
-            raise ValueError('迁移必须有唯一未占用的新路径，不能只删除旧卡')
+            raise ValueError('a move needs one new, unused path; it cannot only delete the old card')
         new = matches[0]
         old_domain, new_domain = lay.card_domain(old['path']), lay.card_domain(new['path'])
         new_fm, new_body = parse_note(_unb64(new['after']))
@@ -556,14 +556,14 @@ def _validate_moves(rows: list[dict], lay) -> None:
                 or old_fm.get('domain') != old_domain
                 or new_fm.get('domain') != new_domain
                 or preserved != {k: v for k, v in new_fm.items() if k not in {'domain', 'pillar', 'topic'}}):
-            raise ValueError('迁移必须保留ID、正文、复习字段和其他元数据')
+            raise ValueError('a move must keep the id, body, review fields and other metadata')
         consumed.add(new['path'])
 
 
 def _validate_checks(checks: dict, written: set[str]) -> None:
     if not isinstance(checks, dict):
-        raise ValueError('只读依赖必须是路径到hash的映射')
+        raise ValueError('read dependencies must map paths to hashes')
     for rel, sha in checks.items():
         relative(rel)
         if rel in written or (sha is not None and (not isinstance(sha, str) or not re.fullmatch(r'[a-f0-9]{64}', sha))):
-            raise ValueError('只读依赖重复写路径或hash非法')
+            raise ValueError('a read dependency is also written, or its hash is invalid')

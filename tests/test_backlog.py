@@ -348,7 +348,7 @@ def test_tampered_child_input_kept_retryable_without_model_run(tmp_path, monkeyp
     result = backlog.run(root, "ic", **EX, apply=True)
     assert result["status"] == "partial"
     errored = next(o for o in result["outcomes"] if o["job_id"] == target["job_id"])
-    assert "任务输入被修改" in errored["error"]
+    assert "frozen job input was modified" in errored["error"]
     assert errored["reviewed"] is False
     assert not any(c["job_id"] == target["job_id"] for c in calls)
     # Restoring the exact bytes lets the same plan resume without re-preparing.

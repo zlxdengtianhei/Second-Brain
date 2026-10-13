@@ -150,7 +150,7 @@ def test_interrupted_projection_resumes_frozen_date_and_stays_in_bounds(tmp_path
     assert (root / "HOME.md").read_bytes() == home_before
 
     # The same task id cannot be re-run on another day pretending to be a resume.
-    with pytest.raises(store.Conflict, match="已绑定其他输入"):
+    with pytest.raises(store.Conflict, match="already bound to other input"):
         generate(root, job_id=job_id, apply=True, today=date(2026, 9, 8))
 
     # A projection job cannot write cards, the registry or the catalog …
@@ -160,7 +160,7 @@ def test_interrupted_projection_resumes_frozen_date_and_stays_in_bounds(tmp_path
     for rel in ["10_Knowledge/attention/card_exist.md",
                 "_data/notes_registry.json", "_data/secondbrain/catalog.json"]:
         raw = (root / rel).read_bytes()
-        with pytest.raises(ValueError, match="不能写该路径"):
+        with pytest.raises(ValueError, match="cannot write this path"):
             jobs.freeze_projection(root, "proj-bad",
                                    [store.Change(rel, store.digest(raw), b"tampered")], checks={})
     assert card.read_bytes() == card_before
@@ -175,7 +175,7 @@ def test_interrupted_projection_resumes_frozen_date_and_stays_in_bounds(tmp_path
     store.write_json(root, jobs.location("proj-bad", "commit-intent.json"), forged_card)
     jobs.update(root, "proj-bad", status="applying",
                 commit_intent=store.digest(store.read_state(root, jobs.location("proj-bad", "commit-intent.json"))))
-    with pytest.raises(ValueError, match="不能写该路径"):
+    with pytest.raises(ValueError, match="cannot write this path"):
         jobs.resume_transaction(root, "proj-bad")
     assert card.read_bytes() == card_before
 
@@ -184,7 +184,7 @@ def test_interrupted_projection_resumes_frozen_date_and_stays_in_bounds(tmp_path
     pillar = root / "20_MOCs/_pillars/Example Attention Map.yaml"
     pillar_before = pillar.read_bytes()
     jobs.create(root, "proj-pillar", jobs.PROJECTION_KIND, {"date": "2026-09-07"})
-    with pytest.raises(ValueError, match="不能写该路径"):
+    with pytest.raises(ValueError, match="cannot write this path"):
         jobs.freeze_projection(root, "proj-pillar", [store.Change(
             "20_MOCs/_pillars/Example Attention Map.yaml", store.digest(pillar_before), b"tampered")], checks={})
     assert pillar.read_bytes() == pillar_before
@@ -198,13 +198,13 @@ def test_interrupted_projection_resumes_frozen_date_and_stays_in_bounds(tmp_path
     store.write_json(root, jobs.location("proj-pillar", "commit-intent.json"), forged_pillar)
     jobs.update(root, "proj-pillar", status="applying",
                 commit_intent=store.digest(store.read_state(root, jobs.location("proj-pillar", "commit-intent.json"))))
-    with pytest.raises(ValueError, match="不能写该路径"):
+    with pytest.raises(ValueError, match="cannot write this path"):
         jobs.resume_transaction(root, "proj-pillar")
     assert pillar.read_bytes() == pillar_before
 
     # substitutes for the independent model review of ingest/classification.
     jobs.create(root, "semantic-job", "classification", {"cards": []})
-    with pytest.raises(ValueError, match="只有确定性投影"):
+    with pytest.raises(ValueError, match="only deterministic projection"):
         jobs.freeze_projection(root, "semantic-job",
                                [store.Change("50_Reviews/out.md", None, b"x")], checks={})
     # A forged projection-shaped frozen plan cannot hijack a semantic job's resume.
@@ -212,5 +212,5 @@ def test_interrupted_projection_resumes_frozen_date_and_stays_in_bounds(tmp_path
                      {"projection": True, "result": {"status": "applied"}, "checks": {}, "changes": []})
     jobs.update(root, "semantic-job", status="applying",
                 commit_intent=store.digest(store.read_state(root, jobs.location("semantic-job", "commit-intent.json"))))
-    with pytest.raises(store.Conflict, match="类型与任务类型不一致"):
+    with pytest.raises(store.Conflict, match="does not match the job kind"):
         jobs.resume_transaction(root, "semantic-job")

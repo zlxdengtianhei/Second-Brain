@@ -166,7 +166,7 @@ def test_stale_projection_cannot_overwrite_another_completed_batch(tmp_path, mon
             c.apply(root, 'other')
         return real(snapshot, today)
     monkeypatch.setattr(projections, 'entry_projection', interleave)
-    with pytest.raises(Conflict, match='依赖|读取后'):
+    with pytest.raises(Conflict, match='read changed after|依赖|读取后'):
         c.apply(root, 'first')
     assert b'pillar: null' in path.read_bytes()
     assert b'pillar: null' not in other.read_bytes()

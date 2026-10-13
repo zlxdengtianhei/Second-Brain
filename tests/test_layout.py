@@ -75,15 +75,15 @@ def test_daily_projection_writes_only_configured_folders(tmp_path):
 
 def test_store_follows_the_layout(tmp_path):
     root = build_vault(tmp_path, lay=L)
-    with pytest.raises(ValueError, match='越界'):
+    with pytest.raises(ValueError, match='outside the allowed set'):
         store.apply_changes(root, 'wrong', [store.Change('10_Knowledge/attention/x.md', None, b'x')])
     raw = b'# note\n'
     (root / 'Inbox').mkdir()
     (root / 'Inbox/n.md').write_bytes(raw)
     sha = store.digest(raw)
-    with pytest.raises(ValueError, match='Inbox'):
+    with pytest.raises(ValueError, match='inbox file'):
         store.apply_changes(root, 'lose', [store.Change('Inbox/n.md', sha, None)])
-    with pytest.raises(ValueError, match='Inbox'):
+    with pytest.raises(ValueError, match='inbox file'):
         store.apply_changes(root, 'alter', [store.Change('Inbox/n.md', sha, None),
                                             store.Change(L.source_path(sha, 'n.md'), None, b'other')])
     done = store.apply_changes(root, 'archive', [store.Change(L.source_path(sha, 'n.md'), None, raw),

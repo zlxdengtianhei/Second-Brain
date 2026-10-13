@@ -644,3 +644,14 @@ def test_optional_git_commit_takes_only_the_written_paths(tmp_path, monkeypatch)
     assert f'00_Inbox/{SOURCE_NAME}' in committed  # the archive move is part of the commit
     assert git('status', '--porcelain').strip() == '?? scratch.md'
     assert git('log', '-1', '--format=%s').startswith('secondbrain: ingest ingest-')
+
+
+def test_an_unregistered_card_is_named_when_writing_is_refused(tmp_path):
+    root = build_ingest_vault(tmp_path / 'vault')
+    stray = root / '10_Knowledge' / DOMAIN / 'Stray note.md'
+    stray.write_text(f'---\nid: card_stray\ntitle: Stray note\ndomain: {DOMAIN}\n---\nbody\n', encoding='utf-8')
+    with pytest.raises(ValueError) as err:
+        ingest.prepare(root, root / '00_Inbox' / SOURCE_NAME)
+    message = str(err.value)
+    assert 'unresolved problem' in message and ('Stray note.md' in message or 'card_stray' in message)
+    assert not any('一' <= ch <= '鿿' for ch in message)

@@ -30,7 +30,7 @@ def test_new_candidate_invalidates_the_old_review(tmp_path):
     submit_as(tmp_path, 'case', {'items': [], 'changed': True}, 'producer')
     state = jobs.load(tmp_path, 'case')
     assert state['review'] is None
-    with pytest.raises(store.Conflict, match='缺少候选或复核'):
+    with pytest.raises(store.Conflict, match='Missing candidate or review'):
         jobs.require_independent_review(tmp_path, state)
 
 
@@ -124,10 +124,10 @@ def test_input_and_artifact_tamper_rejected(tmp_path):
     reviewed(tmp_path)
     state = jobs.load(tmp_path, 'case')
     (store.state_root(tmp_path) / state['review']['path']).write_text('{"items": ["forged"]}')
-    with pytest.raises(store.Conflict, match='修改'):
+    with pytest.raises(store.Conflict, match='modified'):
         jobs.require_independent_review(tmp_path, state)
     (store.state_root(tmp_path) / jobs.location('case', 'input.json')).write_text('{}')
-    with pytest.raises(store.Conflict, match='输入'):
+    with pytest.raises(store.Conflict, match='input'):
         jobs.read_input(tmp_path, 'case')
 
 
@@ -189,7 +189,7 @@ def test_resume_reads_original_intent_and_rechecks_the_gate(tmp_path, monkeypatc
 
 def test_finish_requires_a_reviewed_candidate(tmp_path):
     jobs.create(tmp_path, 'bare', 'test-kind', {'cards': []})
-    with pytest.raises(store.Conflict, match='没有已复核'):
+    with pytest.raises(store.Conflict, match='No reviewed candidate'):
         jobs.finish_transaction(tmp_path, 'bare', {'status': 'applied'}, [])
 
 
@@ -201,7 +201,7 @@ def test_list_jobs_reports_transaction_only_records(tmp_path):
     assert entries['refresh-job']['kind'] == 'transaction'
     assert entries['refresh-job']['status'] == 'applied'
     assert entries['refresh-job']['paths'] == ['10_Knowledge/test/a.md']
-    with pytest.raises(ValueError, match='任务不存在'):
+    with pytest.raises(ValueError, match='No such job'):
         jobs.load(root, 'refresh-job')
     bad = store.state_root(root) / 'jobs' / 'broken-job'
     bad.mkdir(parents=True)

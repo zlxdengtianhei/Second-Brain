@@ -38,7 +38,7 @@ def test_f1_snapshot_card_reread_cannot_overwrite_frozen_hash(tmp_path, monkeypa
         return snapshot
 
     monkeypatch.setattr(p, 'read_snapshot', race)
-    with pytest.raises(store.Conflict, match='准备后变化'):
+    with pytest.raises(store.Conflict, match='changed after (it|the plan) was prepared'):
         generate(root, job_id='f1', apply=True, today=DAY)
     assert card.read_bytes() == changed
 

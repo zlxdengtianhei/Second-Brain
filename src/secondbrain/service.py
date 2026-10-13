@@ -72,16 +72,16 @@ class Service:
 
     def read_cards(self, ids: list[str]):
         if len(ids) > 50 or len(ids) != len(set(ids)):
-            raise ValueError('每次读取1–50个唯一卡ID')
+            raise ValueError('read 1-50 distinct card ids at a time')
         s = self.snapshot()
         if any(i not in s.cards for i in ids):
-            raise ValueError('卡ID不存在')
+            raise ValueError('unknown card id')
         return [card_packet(s.cards[i]) for i in ids]
 
     def read_task(self, job_id: str, part: str = 'overview', offset: int = 0, limit: int = 20):
         packet = jobs.read_input(self.root, job_id)
         if offset < 0 or not 1 <= limit <= 100:
-            raise ValueError('offset>=0，limit须为1–100')
+            raise ValueError('offset must be >= 0 and limit 1-100')
         if part == 'overview':
             return {k: v for k, v in packet.items() if k not in {'cards', 'taxonomy', 'catalog', 'source', 'neighbors', 'repair_feedback'}} | {
                 'card_count': len(packet.get('cards', []))}
@@ -90,16 +90,16 @@ class Service:
             return {'total': len(cards), 'offset': offset, 'cards': cards[offset:offset + limit]}
         if part in {'taxonomy', 'catalog', 'neighbors'}:
             if part not in packet:
-                raise ValueError(f'此{packet["kind"]}任务没有{part}部分')
+                raise ValueError(f'this {packet["kind"]} job has no {part} part')
             return packet[part]
         if part in {'candidate', 'review'}:
             return jobs.artifact(self.root, jobs.load(self.root, job_id), part)
-        raise ValueError('part须为overview/cards/taxonomy/catalog/neighbors/candidate/review')
+        raise ValueError('part must be overview, cards, taxonomy, catalog, neighbors, candidate or review')
 
     def search(self, query: str, limit: int = 12):
         from .index import search
         if not query.strip() or not 1 <= limit <= 50:
-            raise ValueError('query不能为空，limit须为1–50')
+            raise ValueError('query must not be empty and limit must be 1-50')
         return search(self.root, self.snapshot(), query, limit=limit)
 
     def submit(self, job_id: str, payload: dict, *, role: str, run_id: str,
@@ -118,7 +118,7 @@ def initialize(root: Path, catalog: dict, job_id: str = 'initialize-catalog'):
     if existing is not None:
         if existing == raw:
             return {'status': 'unchanged'}
-        raise ValueError('catalog已存在；修改领域体系须走提案与复核')
+        raise ValueError('a catalog exists already; change domains through a reviewed proposal')
     return apply_changes(root, job_id, [Change(catalog_rel, None, raw)])
 
 
@@ -159,7 +159,7 @@ def refresh(root: Path, *, job_id: str, domains: list[str] | None = None, apply:
     s = read_snapshot(root)
     classification.writable_snapshot(s)
     if domains and not set(domains) <= s.catalog['domains'].keys():
-        raise ValueError('未知领域')
+        raise ValueError('unknown domain')
     if not apply:
         p = build_mocs(s, affected_domains=set(domains) if domains else None)
         changes = classification.projection_changes(root, p)

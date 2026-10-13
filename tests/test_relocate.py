@@ -287,7 +287,7 @@ def test_title_filename_and_late_link_edit_are_checked(tmp_path, monkeypatch):
         p.write_text('[现在引用](<10_Knowledge/attention/带空格的 标题.md>)')
         return real(*a, **kw)
     monkeypatch.setattr(jobs, 'finish_transaction', changed_after_scan)
-    with pytest.raises(Conflict, match='只读依赖'):
+    with pytest.raises(Conflict, match='read changed after'):
         r.apply(root, 'relo')
     assert title_path.exists()
     assert not (root / f'10_Knowledge/{DST}' / title_path.name).exists()
