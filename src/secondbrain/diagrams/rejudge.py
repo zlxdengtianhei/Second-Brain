@@ -38,7 +38,7 @@ Two more after the third pilot:
 - an old flowchart that stays and renders wider than the reading width with
   direction LR or RL is turned upright as prune does for the keep tier
   (action direction_tb, rule ...+tb); one that stays wide but cannot be
-  turned is marked ...+wide.
+  turned is marked ...+wide (state diagrams never are: Obsidian scales them).
 
 Only the diagram section changes, byte for byte. Every write is guarded by the
 file hash recorded at audit time, and nothing is written without write=True.
@@ -76,7 +76,8 @@ def select_pool(tiers: dict[str, dict[str, Any]], policy: PrunePolicy = PrunePol
         rows.append({"ref": ref, "pool_reason": reason, "domain": t.get("domain"), "tier_why": t.get("why"),
                      "n_props": t.get("n_props", 0), "has_essence": t.get("has_essence", True),
                      "old_parses": bool(t["ok"]), "sha256": t["sha256"],
-                     "old_direction": t.get("direction"), "old_width": t.get("width"), "old_graph": t.get("graph")})
+                     "old_type": t.get("type"), "old_direction": t.get("direction"), "old_width": t.get("width"),
+                     "old_graph": t.get("graph")})
     return rows
 
 
@@ -264,7 +265,9 @@ def plan(pool: list[dict[str, Any]], outcomes: Iterable[dict[str, Any]],
                 rule = f"audit:{category}"
                 if v.get("verdict") == "remove" and category in REMOVE_CATEGORIES:
                     action = "remove"
-            if action == "keep_old" and (p.get("old_width") or 0) > policy.width_limit:
+            # Obsidian scales state diagrams to fit (width.GATED_FORMS), so only the others can be too wide
+            if action == "keep_old" and (p.get("old_width") or 0) > policy.width_limit \
+                    and p.get("old_type") not in ("stateDiagram", "state"):
                 if p.get("old_direction") in ("LR", "RL"):
                     action, rule = "direction_tb", rule + "+tb"
                 else:

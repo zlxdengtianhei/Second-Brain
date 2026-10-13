@@ -382,11 +382,14 @@ def test_kept_wide_lr_diagram_is_turned_upright(tmp_path):
     assert (narrow["rule"], narrow["action"]) == ("skip:old_parses", "keep_old")
     upright = rejudge.plan([{**row, "old_direction": "TB"}], skip)[0]
     assert (upright["rule"], upright["action"]) == ("skip:old_parses+wide", "keep_old")
+    state = rejudge.plan([{**row, "old_type": "stateDiagram", "old_direction": None}], skip)[0]
+    assert (state["rule"], state["action"]) == ("skip:old_parses", "keep_old")  # Obsidian scales it to fit
     removed = rejudge.plan([row], skip, audits=[{"ref": TCP, "verdict": "remove", "category": "restates"}])[0]
     assert removed["action"] == "remove"
 
 
 def test_pool_carries_the_old_diagrams_direction_width_and_graph():
-    tiers = {"a.md": {**TIERS["a.md"], "direction": "LR", "width": 900, "graph": OLD_EVOL}}
+    tiers = {"a.md": {**TIERS["a.md"], "type": "flowchart-v2", "direction": "LR", "width": 900, "graph": OLD_EVOL}}
     [row] = rejudge.select_pool(tiers)
-    assert (row["old_direction"], row["old_width"], row["old_graph"]) == ("LR", 900, OLD_EVOL)
+    assert (row["old_type"], row["old_direction"], row["old_width"], row["old_graph"]) == (
+        "flowchart-v2", "LR", 900, OLD_EVOL)
