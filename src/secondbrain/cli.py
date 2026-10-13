@@ -411,6 +411,8 @@ def main(argv=None):
             if not job_id:
                 raise ValueError('recover needs a job id')
             if args.action == 'rollback':
+                from .pipelines.ingest import check_rollback
+                check_rollback(root, job_id)
                 result = recover(root, job_id, 'rollback')
                 if _has_state(root, job_id):
                     jobs._internal_update(root, job_id, status='rolled_back')

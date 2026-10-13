@@ -60,7 +60,7 @@ def done_index(root: Path) -> dict:
         if isinstance(row.get('sha256'), str):
             done[row['sha256']] = {'status': row.get('status'), 'via': 'inbox_registry',
                                    'job_id': row.get('job_id'), 'reason': row.get('reason'),
-                                   'pending': row.get('pending')}
+                                   'pending': row.get('pending'), 'path': row.get('path')}
     return done
 
 
@@ -71,8 +71,17 @@ def _job_status(root: Path, job_id: str) -> str | None:
         return None
 
 
+def _partial_note(job_id: str) -> str:
+    return f'some cards are pending; sb ingest --retry {job_id}'
+
+
 def scan(root: Path) -> list[dict]:
-    """Every top-level inbox file with its status (read only)."""
+    """Every top-level inbox file with its status (read only).
+
+    A ``partial`` source whose file already left the inbox (``after_ingest =
+    "move"``) is listed too, after the inbox files, with ``in_inbox: false``
+    and the path of its copy in the sources folder.
+    """
     lay = layouts.of(root)
     folder = Path(root) / lay.inbox
     if not folder.is_dir():
@@ -100,8 +109,7 @@ def scan(root: Path) -> list[dict]:
             item.update(status='skipped', reason=record.get('reason'))
         elif record and record['status'] == 'partial':
             item.update(status='partial', via=record['via'], job_id=record.get('job_id') or item['job_id'],
-                        pending=record.get('pending'),
-                        note=f'some cards are pending; sb ingest --retry {record.get("job_id") or item["job_id"]}')
+                        pending=record.get('pending'), note=_partial_note(record.get('job_id') or item['job_id']))
         elif record:
             item.update(status='done', via=record['via'], result=record['status'])
         elif status in TERMINAL_DONE:
@@ -113,7 +121,22 @@ def scan(root: Path) -> list[dict]:
         elif status is not None:
             item.update(status='in_progress', job_status=status)
         items.append(item)
-    return items
+    listed = {i['sha256'] for i in items}
+    moved = []
+    for sha, record in done.items():
+        if record['status'] != 'partial' or sha in listed or not record.get('path'):
+            continue
+        name = Path(record['path']).name
+        rel = lay.source_path(sha, name)
+        job = record.get('job_id') or job_id_for(sha)
+        try:
+            size = os.stat(Path(root) / rel).st_size
+        except OSError:
+            size = None
+        moved.append({'path': rel, 'name': name, 'size': size, 'sha256': sha, 'status': 'partial',
+                      'job_id': job, 'via': record['via'], 'pending': record.get('pending'),
+                      'in_inbox': False, 'note': _partial_note(job)})
+    return items + sorted(moved, key=lambda i: (i['name'], i['sha256']))
 
 
 def find(root: Path, ref: str) -> dict:

@@ -206,9 +206,12 @@ def retry(root: Path, job_id: str, *, settings: config.Settings | None = None) -
         chunk = {k: v for k, v in _chunk(old, cid).items() if k not in {'candidate_domains', 'neighbors', 'routing'}}
         routed = route(root, snapshot, old['source']['text'][chunk['start']:chunk['end']],
                        domains=settings.ingest.candidate_domains)
-        chunks.append({**chunk, 'candidate_domains': routed['domains'], 'neighbors': routed['neighbors'],
+        # the domains the parent's reviewers pointed to, and where the open cards last were
+        named = [d for d in _reviewed_domains(root, parent, old, cid, open_items[cid])
+                 if d in snapshot.catalog['domains'] and d not in routed['domains']]
+        chunks.append({**chunk, 'candidate_domains': routed['domains'] + named, 'neighbors': routed['neighbors'],
                        'routing': {'votes': routed['votes'], 'filled': routed['filled'],
-                                   'passages': routed['passages']}})
+                                   'passages': routed['passages'], 'named_by_review': named}})
     for card_list in written.values():
         for card in card_list:
             if card['id'] in snapshot.cards:
@@ -250,6 +253,39 @@ def _live_child(root: Path, parent_id: str, parent: dict, child_id: str) -> dict
         return state
     jobs.archive(root, child_id, reason=f'made for an earlier run of {parent_id}, which was rolled back')
     return None
+
+
+def _reviewed_domains(root: Path, state: dict, packet: dict, base: str, items: list) -> list:
+    """Domains the reviews of chunk ``base`` named, then the last domain of each of its open cards."""
+    open_slugs = {i.get('slug') for i in items if i.get('slug')}
+    named, last = [], {}
+    for slot, info in _slots(state, base):
+        if info.get('review'):
+            named += _domains_named(packet, _findings(jobs.artifact(root, state, 'review', slot)))
+        if info.get('candidate'):
+            for card in jobs.artifact(root, state, 'candidate', slot).get('cards', []):
+                if isinstance(card, dict) and card.get('slug') in open_slugs:
+                    last[card['slug']] = card.get('domain')
+    return [d for d in dict.fromkeys(named + list(last.values())) if isinstance(d, str)]
+
+
+def check_rollback(root: Path, job_id: str) -> None:
+    """Refuse to roll back a job whose retry child still has its writes in the vault.
+
+    The child appended to the same registries after the parent, so the
+    parent's rollback would meet the child's bytes; roll back the child first.
+    """
+    try:
+        child = jobs.load(root, job_id).get('retried_by')
+    except ValueError:
+        return
+    if not child:
+        return
+    raw = jobs.read_state(root, jobs.location(child, 'transaction.json'))
+    journal = json.loads(raw) if raw is not None else None
+    if journal is not None and journal.get('status') != 'rolled_back':
+        raise Conflict(f'{job_id} was retried by {child}, which wrote to the vault after it. '
+                       f'Roll back the retry child first: sb recover {child} --rollback')
 
 
 def _resumed_child(state: dict) -> dict:
@@ -1298,8 +1334,11 @@ def apply_job(root: Path, job_id: str, settled: list[dict] | None = None) -> dic
              'collected_at': now, 'job_id': job_id}, ensure_ascii=False) + '\n').encode('utf-8')))
     needs_taxonomy = [x for o in settled for x in o['needs_taxonomy']]
     status = 'partial' if (pending or needs_taxonomy) else 'applied'
+    # a retry child runs after the parent may have moved the file: name where the source is now
+    row_path = source['inbox_path'] if inbox_now == source_raw else (
+        source_rel if packet.get('retry') else source['inbox_path'] or source['filename'])
     changes.append(inbox.appended(root, lay.inbox_registry, inbox.registry_line(
-        {'sha256': source['sha256'], 'path': source['inbox_path'] or source['filename'], 'status': status,
+        {'sha256': source['sha256'], 'path': row_path, 'status': status,
          'job_id': job_id, 'cards': [p['id'] for p in produced], 'pending': len(pending) + len(needs_taxonomy),
          'at': now})))
     reg_raw = read_bytes(root, lay.registry)

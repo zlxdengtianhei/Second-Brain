@@ -164,3 +164,52 @@ def test_a_retry_child_made_before_an_interruption_is_reused(tmp_path, monkeypat
     again = ingest.retry(root, parent)
     assert again['resumed'] and again['created_at'] == made['created_at'] and archived(root, made['job_id']) == []
     assert jobs.load(root, parent)['retried_by'] == made['job_id']
+
+
+def test_a_moved_partial_source_stays_in_the_inbox_list(tmp_path, capsys):
+    root = build_ingest_vault(tmp_path / 'vault')  # default after_ingest = move
+    parent = partial_job(root)
+    assert not (root / '00_Inbox' / SOURCE_NAME).exists()
+    [item] = inbox.scan(root)
+    assert item['status'] == 'partial' and item['in_inbox'] is False and item['job_id'] == parent
+    assert item['path'].startswith('40_Sources/') and (root / item['path']).is_file() and item['pending'] == 1
+    assert f'--retry {parent}' in item['note']
+    assert cli.main(['--vault', str(root), 'status']) == 0
+    assert json.loads(capsys.readouterr().out)['inbox'] == {'partial': 1}
+    child = apply_retry(root, parent)
+    assert inbox.scan(root) == []  # done now
+    # the child's registry row names where the source is, not the inbox path it left
+    rows = [r for r in inbox.registry_rows(root) if r['job_id'] == child['job_id']]
+    assert [r['path'] for r in rows] == [item['path']]
+
+
+def test_rolling_back_a_parent_before_its_retry_child_says_which_to_roll_back_first(tmp_path, capsys):
+    root = build_ingest_vault(tmp_path / 'vault')
+    parent = partial_job(root)
+    child = apply_retry(root, parent)
+    capsys.readouterr()
+    assert cli.main(['--vault', str(root), 'recover', parent, '--rollback']) == 3
+    error = json.loads(capsys.readouterr().err)['error']
+    assert f'sb recover {child["job_id"]} --rollback' in error and 'retry child first' in error
+    assert jobs.load(root, parent)['status'] == 'partial'
+    rollback(root, child['job_id'])
+    rollback(root, parent)
+
+
+def test_a_retry_packet_offers_the_domain_the_reviewer_named(tmp_path):
+    root = build_ingest_vault(tmp_path / 'vault')
+    config.activate(replace(config.current(), ingest=replace(config.current().ingest, candidate_domains=1)))
+    review = repair_review('revise')
+    review['cards'][0].update(suggested_domain='transformer', reason='belongs with the decoder cards')
+    produce, respond, _ = scripted([first_candidate(), repair_candidate()], [first_review(), review])
+    prepared = ingest.prepare(root, root / '00_Inbox' / SOURCE_NAME)
+    routed = jobs.read_input(root, prepared['job_id'])['chunks'][0]['candidate_domains']
+    assert 'transformer' not in routed
+    assert ingest.advance(root, prepared['job_id'], producer=FakeExecutor('gpt-test', responder=produce),
+                          reviewer=FakeExecutor('claude-test', responder=respond))['status'] == 'partial'
+    child = ingest.retry(root, prepared['job_id'])
+    [chunk] = jobs.read_input(root, child['job_id'])['chunks']
+    assert 'transformer' in chunk['candidate_domains'] and 'transformer' in chunk['routing']['named_by_review']
+    packet = ingest.producer_packet(root, jobs.load(root, child['job_id']),
+                                    jobs.read_input(root, child['job_id']), 'c01')
+    assert 'transformer' in packet['candidate_taxonomies']

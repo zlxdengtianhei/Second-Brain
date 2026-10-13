@@ -266,7 +266,9 @@ def test_rejected_card_stays_pending_and_the_rest_is_written(tmp_path):
     assert 'Marker dimming' not in {c.title for c in snap.cards.values()}
     rows = [json.loads(line) for line in (root / '_data/secondbrain/inbox_registry.jsonl').read_text().splitlines()]
     assert rows[-1]['status'] == 'partial' and rows[-1]['pending'] == 1
-    assert inbox.scan(root) == []  # moved to sources even though partial
+    assert not (root / '00_Inbox' / SOURCE_NAME).exists()  # moved to sources even though partial
+    assert [(i['status'], i['in_inbox'], i['path']) for i in inbox.scan(root)] == [
+        ('partial', False, layouts.DEFAULT.source_path(rows[-1]['sha256'], SOURCE_NAME))]  # still listed
     again = ingest.prepare(root, root / layouts.DEFAULT.source_path(rows[-1]['sha256'], SOURCE_NAME))
     assert (again['status'], again['result'], again['pending']) == ('unchanged', 'partial', 1)
     assert again['hint'] == f'sb ingest --retry {prepared["job_id"]}'
