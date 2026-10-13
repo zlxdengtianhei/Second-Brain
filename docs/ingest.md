@@ -102,5 +102,5 @@ These commands use the same produce, review and gate pattern on cards that are a
 | `sb domcreate --domain <slug> ...` | proposes a new domain from cards that already exist |
 | `sb resume --job <job>` | continues one of these jobs |
 | `sb docs --apply` | regenerates the entry page `HOME.md` (and the generated blocks of `[layout] entry_docs`) |
-| `sb today --apply` | writes today's review page under `50_Reviews/`: the due and new cards of the review registry, the same queue as `sb review queue`. Needs the `review` extra |
-| `sb daily --apply` | does both; without the `review` extra it writes `HOME.md` only and reports `review_extra_missing` |
+| `sb today --apply` | writes the review page of the current review day under `50_Reviews/`: the due and new cards of the review registry, the same queue that `sb review queue` gives during that day. A review day starts at 04:00, so a page made at 01:00 is still for the day before. It does not change `HOME.md`. Needs the `review` extra |
+| `sb daily --apply` | does both, and `HOME.md` links the new page; this is the command HOME names when the page is missing. Without the `review` extra it writes `HOME.md` only and reports `review_extra_missing` |

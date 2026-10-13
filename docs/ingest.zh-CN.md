@@ -102,5 +102,5 @@ sb job reset <job_id> --reason "<why>"   # 搁置一个卡住且从未写入的�
 | `sb domcreate --domain <slug> ...` | 根据已有卡片提议一个新领域 |
 | `sb resume --job <job>` | 继续上述命令的某个任务 |
 | `sb docs --apply` | 重新生成首页 `HOME.md`（以及 `[layout] entry_docs` 的生成块） |
-| `sb today --apply` | 在 `50_Reviews/` 下写今天的复习页：复习登记表里的到期卡和新卡，与 `sb review queue` 是同一个队列。需要 `review` 可选依赖（extra） |
-| `sb daily --apply` | 两件事都做；没装 `review` 可选依赖时只写 `HOME.md`，并报告 `review_extra_missing` |
+| `sb today --apply` | 在 `50_Reviews/` 下写当前复习日的复习页：复习登记表里的到期卡和新卡，与这个复习日里 `sb review queue` 给出的队列相同。复习日从 04:00 开始，所以 01:00 生成的页仍属于前一天。它不改 `HOME.md`。需要 `review` 可选依赖（extra） |
+| `sb daily --apply` | 两件事都做，`HOME.md` 会链接新生成的复习页；复习页缺失时，HOME 提示的就是这条命令。没装 `review` 可选依赖时只写 `HOME.md`，并报告 `review_extra_missing` |

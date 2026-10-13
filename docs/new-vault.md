@@ -80,7 +80,7 @@ pillars:
       - Fats
 ```
 
-Write one file for every MOC in the catalog; in this example also `Gardening.yaml`. Until a domain has its file, `sb status` reports `missing_taxonomy` for it and an ingest makes no cards in that domain.
+Write one file for every MOC in the catalog; in this example also `Gardening.yaml`. Until a domain has its file, `sb status` reports `missing_taxonomy` for it and an ingest makes no cards in that domain. While no domain has a topic yet, `sb ingest` stops before any model call and names the taxonomy files to write.
 
 Start small. A producer can propose new topics under an existing pillar (two per source by default), and a reviewer must accept them. Material that needs a new pillar or a new domain gets no card and is reported as `needs_taxonomy` in the job result. Add the pillar to the file before you ingest more material of that kind.
 

@@ -14,7 +14,7 @@ First public version.
 - Review registry: append-only review log per device, FSRS replay in Python and TypeScript with shared test vectors, `sb review status|queue|log|import-sr`; the daily review page (`sb today`) shows the same queue.
 - Obsidian plugin SecondBrain Review: English and Chinese interface that follows the vault's language; today view and dashboard, flip review, Q&A review with LLM grading through AI Providers, card explanations with map context, reminders, one-time import of Spaced Repetition schedules.
 - Configuration in TOML, configurable folder layout, keys only from environment variables or commands.
-- `sb init --catalog <file>` puts a hand-written catalog into a vault, adds the empty card registry and folders, and lists the taxonomy files still to write.
+- `sb init --catalog <file>` puts a hand-written catalog into a vault, adds the empty card registry and folders, and lists the taxonomy files still to write; until one domain has a topic, `sb ingest` stops before any model call.
 - Two example vaults built with the Agent Skill and the tool's own ingest chain: English (42 cards) and Chinese (52 cards).
 - README and guides in English and Chinese (`*.zh-CN.md`).
 - MIT License for the whole repository, example vaults included.
