@@ -21,10 +21,14 @@ names the rule that applied):
 Two refinements after the second pilot:
 - a new diagram replaces an old one that renders only if it carries the
   card's key relation: it cites E and, on a card with 2+ propositions, at
-  least 2 of them (read from its marker); otherwise the old one stays
-  (rule draw:weak);
-- an old diagram that stays can be audited (see oldcheck): a verdict of
-  restates or misleading removes it (rules audit:restates, audit:misleading).
+  least 2 of them (read from its marker; the validator's V12 asks for the
+  same, so the model gets its rewrite first). A weaker one is not written and
+  the card follows the skip rules above, under a rule name that keeps the
+  draw:weak prefix (draw:weak/skip:old_parses, draw:weak/skip:delete_review...);
+- an old diagram that stays can be audited (see oldcheck): only remove +
+  restates or remove + misleading removes it (rules audit:restates,
+  audit:misleading, draw:weak/audit:...); any other row, including one
+  without a category, keeps it (audit:unsure).
 
 Only the diagram section changes, byte for byte. Every write is guarded by the
 file hash recorded at audit time, and nothing is written without write=True.
@@ -38,8 +42,10 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from .audit import DEFAULT_FORMAT, CardFormat
+from .oldcheck import REMOVE_CATEGORIES
 from .prune import PrunePolicy, _diffstat, delete_section
 from .staleness import read_marker
+from .validate import strong_enough as _strong_refs
 
 
 def select_pool(tiers: dict[str, dict[str, Any]], policy: PrunePolicy = PrunePolicy()) -> list[dict[str, Any]]:
@@ -137,13 +143,11 @@ def strong_enough(mermaid: str, n_props: int, has_essence: bool = True) -> bool:
     """Whether a new diagram may replace an old one that renders.
 
     It must cite E (when the card has an essence) and at least 2 propositions
-    (or all of them, if the card has fewer), read from its marker line.
+    (or all of them, if the card has fewer), read from its marker line; the
+    rule is validate.strong_enough, which V12 applies before this.
     """
     m = read_marker(mermaid)
-    if m is None:
-        return False
-    props = [r for r in m.props if r != "E"]
-    return ("E" in m.props or not has_essence) and len(props) >= min(2, n_props)
+    return m is not None and _strong_refs(m.props, n_props, has_essence)
 
 
 def audit_candidates(pool: list[dict[str, Any]], outcomes: Iterable[dict[str, Any]] | None = None,
@@ -184,16 +188,15 @@ def plan(pool: list[dict[str, Any]], outcomes: Iterable[dict[str, Any]],
                 not p["old_parses"] or strong_enough(o["mermaid"], p.get("n_props", 0), p.get("has_essence", True))):
             actions.append({**row, "action": "replace", "rule": "draw", "mermaid": o["mermaid"]})
         else:
-            if o["status"] == "draw":
-                action, rule = "keep_old", "draw:weak"
-            else:
-                action, rule = _skip_rule(p, policy)
+            action, rule = _skip_rule(p, policy)
+            weak = "draw:weak/" if o["status"] == "draw" else ""
             v = verdicts.get(p["ref"])
             if action == "keep_old" and v:
-                rule = f"audit:{v['category']}"
-                if v["verdict"] == "remove":
+                category = v.get("category") if v.get("category") in REMOVE_CATEGORIES + ("useful",) else "unsure"
+                rule = f"audit:{category}"
+                if v.get("verdict") == "remove" and category in REMOVE_CATEGORIES:
                     action = "remove"
-            actions.append({**row, "action": action, "rule": rule, "reason": (v or o).get("reason", "")})
+            actions.append({**row, "action": action, "rule": weak + rule, "reason": (v or o).get("reason", "")})
     for ref in sorted(set(final) - in_pool):
         actions.append({"ref": ref, "action": "not_in_pool", "rule": "not_in_pool",
                         "status_in": final[ref].get("status")})

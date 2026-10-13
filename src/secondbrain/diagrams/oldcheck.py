@@ -21,6 +21,7 @@ from typing import Any, Iterable, Sequence
 
 PROMPT_FILE = "diagram_audit.md"
 CATEGORIES = ("restates", "misleading", "useful")
+REMOVE_CATEGORIES = ("restates", "misleading")  # the only categories that remove, with verdict remove
 
 
 def load_prompt() -> str:
@@ -67,7 +68,7 @@ def judge(ref: str, answer: Any) -> dict[str, Any]:
         return {**out, "verdict": "keep", "category": "unsure", "reason": "no readable answer"}
     verdict, category = answer.get("verdict"), answer.get("category")
     reason = answer.get("reason") if isinstance(answer.get("reason"), str) else ""
-    if verdict == "remove" and category in ("restates", "misleading"):
+    if verdict == "remove" and category in REMOVE_CATEGORIES:
         return {**out, "verdict": "remove", "category": category, "reason": reason}
     if verdict == "keep" and category == "useful":
         return {**out, "verdict": "keep", "category": "useful", "reason": reason}

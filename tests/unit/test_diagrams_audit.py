@@ -177,3 +177,12 @@ def test_merge_counts_as_gain_only_from_five_nodes():
     assert audit.tier_one(_card(), five) == ("keep", "merge")
     four = _check(nodes[:4], [("a", "c", "1"), ("b", "c", "2"), ("c", "d", "3")])
     assert audit.tier_one(_card(), four) == ("review", "no_gain")
+
+
+def test_tier_rows_carry_what_the_writeback_guard_reads():
+    """has_essence and n_props go from the tiers to the pool; without them a weak E+P1 draw would look strong."""
+    cards = [_card(), {**_card(), "ref": "y.md", "essence": "二分查找每轮把区间减半。"}]
+    checks = [{**_check(GROUNDED, BRANCH), "id": f"{c['ref']}#0"} for c in cards]
+    rows = audit.tier(cards, checks).cards
+    assert (rows["x.md"]["has_essence"], rows["x.md"]["n_props"]) == (False, 2)
+    assert (rows["y.md"]["has_essence"], rows["y.md"]["n_props"]) == (True, 2)

@@ -192,7 +192,52 @@ def test_new_diagram_must_carry_e_to_replace_a_renderable_old_one():
         {"ref": "a.md", "status": "draw", "mermaid": _marked("P1")},   # old renders: weak draw keeps it
         {"ref": "b.md", "status": "draw", "mermaid": _marked("P1")},   # old broken: any valid draw replaces
     ])}
-    assert acts["a.md"] == ("draw:weak", "keep_old") and acts["b.md"] == ("draw", "replace")
+    assert acts["a.md"] == ("draw:weak/skip:old_parses", "keep_old") and acts["b.md"] == ("draw", "replace")
+
+
+def test_weak_draw_follows_the_skip_rules():
+    """V3 K2: a weak draw writes nothing, so it is a skip for the old diagram, under a draw:weak rule name."""
+    pool = rejudge.select_pool(TIERS)
+    weak = [{"ref": r, "status": "draw", "mermaid": _marked("E,P1")} for r in ("a.md", "c.md", "g.md", "h.md")]
+    acts = {a["ref"]: (a["rule"], a["action"]) for a in rejudge.plan(pool, weak)}
+    assert acts == {"a.md": ("draw", "replace"),                       # one proposition: E and P1 are enough
+                    "b.md": ("pending", "pending"),
+                    "c.md": ("draw:weak/skip:delete_review", "remove"),
+                    "g.md": ("draw:weak/skip:domain", "remove"),
+                    "h.md": ("draw:weak/skip:old_parses", "keep_old")}
+    keep = rejudge.WritebackPolicy(delete_review_on_skip="keep", remove_domains=("vocab",))
+    acts = {a["ref"]: (a["rule"], a["action"]) for a in rejudge.plan(pool, weak, keep)}
+    assert acts["c.md"] == ("draw:weak/skip:old_parses", "keep_old")
+    assert acts["h.md"] == ("draw:weak/skip:domain", "remove")
+    counts = rejudge.summary(rejudge.plan(pool, weak))
+    assert sum(n for c in counts.values() for k, n in c.items() if k.startswith("draw:weak")) == 3
+
+
+def test_plan_removes_only_on_restates_or_misleading_and_reads_any_audit_row():
+    """V3 K6: the rule holds in plan() itself, not only in oldcheck.judge()."""
+    pool = rejudge.select_pool(TIERS)
+    skip = [{"ref": "a.md", "status": "skip"}, {"ref": "h.md", "status": "draw", "mermaid": _marked("E,P1")}]
+    def acts(audits):
+        return {a["ref"]: (a["rule"], a["action"]) for a in rejudge.plan(pool, skip, audits=audits)}
+    assert acts([{"ref": "a.md", "verdict": "remove", "category": "useful"}])["a.md"] == ("audit:useful", "keep_old")
+    assert acts([{"ref": "a.md", "verdict": "remove"}])["a.md"] == ("audit:unsure", "keep_old")
+    assert acts([{"ref": "a.md", "status": "draw", "mermaid": NEW}])["a.md"] == ("audit:unsure", "keep_old")
+    assert acts([{"ref": "a.md", "verdict": "remove", "category": "misleading"}])["a.md"] == ("audit:misleading", "remove")
+    weak = acts([{"ref": "h.md", "verdict": "remove", "category": "restates"}])
+    assert weak["h.md"] == ("draw:weak/audit:restates", "remove")  # the audit acts on weak draws too
+
+
+def test_pool_carries_what_the_guard_and_the_packet_need():
+    tiers = {**TIERS, "a.md": {**TIERS["a.md"], "has_essence": False, "n_props": 3}}
+    rows = {p["ref"]: p for p in rejudge.select_pool(tiers)}
+    assert (rows["a.md"]["n_props"], rows["a.md"]["has_essence"]) == (3, False)
+    assert rows["h.md"]["has_essence"] is True
+    cards = [{"ref": r, "title": r, "kind": "mechanism", "domain": None, "essence": "e", "propositions": ["p"],
+              "related_titles": [], "blocks": ["flowchart TB\n  a --> b"]} for r in rows]
+    by_ref = {c["ref"]: c for c in rejudge.pool_cards(list(rows.values()), cards)}
+    assert by_ref["a.md"]["old_diagram"] == "renders" and by_ref["b.md"]["old_diagram"] == "broken"
+    weak = [{"ref": "a.md", "status": "draw", "mermaid": _marked("P1,P2")}]  # no E needed: the card has none
+    assert rejudge.plan([rows["a.md"]], weak)[0]["action"] == "replace"
 
 
 def test_old_audit_removes_only_old_diagrams_that_would_stay():
@@ -266,3 +311,19 @@ def test_cli_holdout_list_with_old_audit(tmp_path, capsys):
     assert done["by_pool_reason"] == {"review": {"audit:restates→remove": 1}}
     assert "## 图" not in (tmp_path / "v" / TCP).read_text(encoding="utf-8")
     assert "## 图" in (tmp_path / "v" / BUBBLE).read_text(encoding="utf-8")  # outside the holdout list
+
+
+def test_old_audit_packets_take_the_writeback_policy_flags(tmp_path, capsys):
+    rows = rejudge.pool_cards(rejudge.select_pool(TIERS), [
+        {"ref": r, "title": r, "kind": "mechanism", "domain": TIERS[r].get("domain"), "essence": "e",
+         "propositions": ["p"], "related_titles": [], "blocks": ["flowchart TB\n  a --> b"]} for r in TIERS])
+    pool = tmp_path / "pool.jsonl"
+    pool.write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
+
+    def audited(*flags):
+        capsys.readouterr()
+        assert main(["old-audit-packets", str(pool), str(tmp_path / "old"), *flags]) == 0
+        return json.loads(capsys.readouterr().out.strip().splitlines()[-1])["audited"]
+    assert audited() == 2                                          # a.md, h.md
+    assert audited("--delete-review-on-skip", "keep") == 3          # and c.md
+    assert audited("--remove-domain", "vocab") == 1                 # h.md's domain is removed on skip
