@@ -58,5 +58,6 @@
     "similar_to": "same idea or mechanism in another setting",
     "contrasts_with": "easily confused with the target; the difference matters"
   },
-  "domain_relations": {}
+  "domain_relations": {},
+  "language": "en"
 }

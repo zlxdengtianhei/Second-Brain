@@ -53,6 +53,8 @@ def test_status_is_clean_and_two_notes_wait_in_the_inbox(vault, capsys):
     assert status['inbox'] == {'new': 2}
     inbox = run(capsys, vault, 'inbox', 'list')
     assert sorted(i['name'] for i in inbox) == ['Correlation and causation.md', 'Sleep and memory.md']
+    language = run(capsys, vault, 'language')
+    assert language['recorded'] == language['detected'] == 'en' and language['writes_allowed']
 
 
 def test_maps_and_home_match_the_cards(vault, capsys):
