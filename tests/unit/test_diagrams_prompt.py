@@ -20,7 +20,7 @@ from secondbrain.diagrams.emit import emit
 from secondbrain.diagrams.ir import Card
 from secondbrain.diagrams.pipeline import load_prompt
 from secondbrain.diagrams.staleness import marker
-from secondbrain.diagrams.validate import validate
+from secondbrain.diagrams.validate import LOOP_WORDS, Limits, validate
 
 ROOT = Path(__file__).resolve().parents[2]
 FIX = ROOT / "tests" / "fixtures" / "diagrams"
@@ -46,21 +46,39 @@ def _prompt_examples() -> list[tuple[Card, dict]]:
 # two examples. The pilots grew the prompt to 2,233 and then 2,196 o200k tokens
 # (4 draw and 2 skip examples). It was then cut back with every rule kept to
 # 1,497 o200k and 2 flow examples; the cheapest structure example went back in
-# because missed structure diagrams were pilot 1's main recall loss and an
-# example fixed them: 1,677 o200k (1,738 cl100k) when written. New rules have
-# to replace old text.
-TOKEN_CAP = 1700
-BYTE_CAP = 6000  # dependency-free proxy for the same budget (5,860 bytes when written)
+# because missed structure diagrams were pilot 1's main recall loss (1,677).
+# The fourth round (V3's K1-K8 and the third pilot's questions) states every
+# rule the validator enforces as it enforces it, and adds one skip example; the
+# cap rose to 2,000 (2,000 o200k, 2,079 cl100k when written). New rules have to
+# replace old text.
+TOKEN_CAP = 2000
+BYTE_CAP = 7200  # dependency-free proxy for the same budget (7,118 bytes when written)
 
 
 def test_prompt_states_the_core_rules():
-    for phrase in ("in its language", "Plain text, no TeX", "Diagrams are not only for decisions",
-                   "Start from E", "cite E", "2+ stated outcomes", "draw the back edge", "Parallel options are not a decision",
-                   "fans out to at most 3", "connected only to the nodes that use it", "a final `store`",
-                   "must fit 700 px", "a one-character label counts that character", "`old_diagram`",
-                   "unordered checks are a list", "an \"otherwise\" exit counts only if the card states",
-                   '{"from","to","text","p"}'):
+    for phrase in ("in its language", "Plain text, no TeX", "Start from E", "cite E", "2+ stated outcomes",
+                   "draw the back edge", "Parallel options are not a decision", "fans out to at most 3",
+                   "to nodes whose cited text mentions it", "a final `store`", "at most 700 px",
+                   "a one-character label counts that character", "`old_diagram`", "unordered checks are a list",
+                   "an \"otherwise\" exit counts only if the card states", '{"from","to","text","p"}',
+                   # fourth round: V3's K3-K5 and the third pilot's questions
+                   "citing E and 2+ propositions (all, if fewer)", "a decision whose 3+ exits all end at once",
+                   "3+ named states and 3+ labelled transitions", "a chain of 3+ links citing 3+ different sources",
+                   "structure 3+ links unless paths merge", "no edge labels overlapping", "state diagrams scale to fit",
+                   "On skip, code handles the old diagram", "an overlapping pair of CJK characters",
+                   "even when the text lists them in order", "unless E names one result both sides lead to",
+                   "steps whose order the card does not state", "at any length", "accumulator",
+                   "Over the whole diagram", "paths that split and never meet are a list",
+                   "any `output` has incoming edges only"):
         assert phrase in PROMPT, phrase
+
+
+def test_prompt_lists_the_validators_words():
+    """One word list for the prompt and the validator: loop words (V5) and exempt labels (V4)."""
+    loop = re.search(r"says the work repeats \(([^)]*)\)", PROMPT).group(1).split()
+    assert loop == list(LOOP_WORDS)
+    exempt = re.search(r"Exempt, still cited: ([^.]*)\.", PROMPT).group(1).split()
+    assert sorted(exempt) == sorted(Limits().exempt_labels)
 
 
 def test_prompt_size_budget():
@@ -79,7 +97,8 @@ def test_prompt_token_budget():
 def test_prompt_examples_pass_the_validator():
     examples = _prompt_examples()
     assert [(c.ref, ir["decision"], ir.get("form")) for c, ir in examples] == [
-        ("nn/residual", "draw", "flow"), ("algo/rpn", "draw", "flow"), ("econ/inflation", "draw", "structure")]
+        ("nn/residual", "draw", "flow"), ("algo/rpn", "draw", "flow"), ("econ/inflation", "draw", "structure"),
+        ("rag/router", "skip", None)]
     for card, ir in examples:
         report = validate(ir, card)
         assert report.ok, (card.ref, [str(e) for e in report.errors])
@@ -98,8 +117,22 @@ def _example_mermaid() -> list[dict]:
     out = []
     for card, ir in _prompt_examples():
         parsed = validate(ir, card).ir
-        out.append({"id": card.ref, "text": emit(parsed, marker(card, parsed))})
+        if parsed.decision == "draw":
+            out.append({"id": card.ref, "text": emit(parsed, marker(card, parsed))})
     return out
+
+
+def test_skip_example_is_what_the_validator_rejects_as_a_draw():
+    """The router card's skip: drawn, its 3 exits that all end at once are V13 (a list), not a decision."""
+    card = next(c for c, ir in _prompt_examples() if c.ref == "rag/router")
+    drawn = {"decision": "draw", "form": "flow", "question": "选哪种检索？",
+             "nodes": [{"key": "d", "label": "问题类型？", "role": "decision", "p": ["E"]},
+                       {"key": "a", "label": "关键词检索", "p": ["P1"]}, {"key": "b", "label": "向量检索", "p": ["P1"]},
+                       {"key": "c", "label": "图检索", "p": ["P1"]}],
+             "edges": [{"from": "d", "to": "a", "label": "事实问题", "p": ["P1"]},
+                       {"from": "d", "to": "b", "label": "语义问题", "p": ["P1"]},
+                       {"from": "d", "to": "c", "label": "多跳问题", "p": ["P1"]}]}
+    assert [e.code for e in validate(drawn, card).errors] == ["V13"]
 
 
 def test_prompt_examples_emit_with_marker():

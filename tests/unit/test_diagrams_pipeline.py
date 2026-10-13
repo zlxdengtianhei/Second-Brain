@@ -11,6 +11,7 @@ from secondbrain.diagrams.ir import Card, Issue
 from secondbrain.diagrams.pipeline import (
     Policy, Rewrite, Skip, build_packet, fallback, pregate, process, read_results,
 )
+from secondbrain.diagrams.validate import Limits
 
 FIX = Path(__file__).resolve().parents[1] / "fixtures" / "diagrams"
 CARDS = {c["ref"]: Card.from_dict(c) for c in json.loads((FIX / "cards.json").read_text(encoding="utf-8"))}
@@ -169,3 +170,37 @@ def test_payload_tells_the_model_about_the_old_diagram():
     with_old = Card.from_dict({**SEARCH.to_dict(), "old_diagram": "broken"})
     assert card_payload(with_old)["old_diagram"] == "broken"
     assert Card.from_dict({**SEARCH.to_dict(), "old_diagram": "maybe"}).old_diagram is None
+
+
+def test_state_diagrams_are_not_width_gated_on_either_path():
+    """V3 K8: Obsidian scales state diagrams to fit, so neither the estimate nor the rendered width gates them."""
+    from secondbrain.diagrams.pipeline import render_feedback
+    from secondbrain.diagrams.width import GATED_FORMS
+    card = Card(title="t", essence="连接在三个状态间转换。", propositions=("建立后进入已连接。", "关闭后进入已关闭。"))
+    state = {"decision": "draw", "form": "state", "question": "q",
+             "nodes": [{"key": "a", "label": "建立", "p": ["P1", "E"]}, {"key": "b", "label": "已连接", "p": ["P1"]},
+                       {"key": "c", "label": "已关闭", "p": ["P2"]}],
+             "edges": [{"from": "a", "to": "b", "label": "建立后", "p": ["P1"]},
+                       {"from": "b", "to": "c", "label": "关闭后", "p": ["P2"]},
+                       {"from": "c", "to": "a", "label": "建立", "p": ["P1"]}]}
+    drawn = process(card, state)
+    assert drawn.status == "draw" and "state" not in GATED_FORMS
+    assert render_feedback(drawn, {"ok": True, "width": 760, "label_overlaps": 0}, card, state) is drawn
+    assert render_feedback(drawn, {"ok": True, "width": 760, "label_overlaps": 1}, card, state).status == "rewrite"
+
+
+def test_weak_replacement_of_a_renderable_old_diagram_gets_its_rewrite():
+    """V3 K3: the write-back guard's bar is a V12 error in process(), so the model can fix it once."""
+    entry = ENTRIES["algorithms/binary-search"]["ir"]
+    old = Card.from_dict({**SEARCH.to_dict(), "old_diagram": "renders"})
+    assert process(old, entry).status == "draw"  # the fixture cites E and 2+ propositions
+    weak = copy.deepcopy(entry)
+    for item in weak["nodes"] + weak["edges"]:
+        if item.get("p"):
+            item["p"] = ["E"]
+    policy = Policy(limits=Limits(grounding_min=0.0, require_back_edge=False))  # isolate V12
+    first = process(old, weak, policy=policy)
+    assert first.status == "rewrite" and first.errors[0].startswith("V12 this card's old diagram renders")
+    assert process(old, weak, attempt=1, policy=policy).status == "skip"
+    broken = process(Card.from_dict({**old.to_dict(), "old_diagram": "broken"}), weak, policy=policy)
+    assert not any(e.startswith("V12") for e in broken.errors)  # a broken old diagram sets no bar

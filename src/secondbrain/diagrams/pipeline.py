@@ -18,6 +18,7 @@ from .emit import emit
 from .ir import Card, Issue
 from .staleness import marker
 from .validate import DEFAULT_LIMITS, Limits, validate
+from .width import GATED_FORMS
 
 PROMPT_FILE = "diagram.md"
 _KIND_REASONS = {
@@ -206,7 +207,9 @@ def render_feedback(outcome: Outcome, check: dict[str, Any] | None, card: Card |
     A diagram that fails to render (V9), renders wider than max_width (V14) or
     has edge labels lying on top of each other (V15) goes back for its one
     rewrite like any other failed check, or is skipped when that is used up.
-    Outcomes that are not draws, or have no check result, pass unchanged.
+    The width gate covers the same forms as the estimate (width.GATED_FORMS):
+    Obsidian scales state diagrams to fit. Outcomes that are not draws, or
+    have no check result, pass unchanged.
     """
     if outcome.status != "draw" or check is None:
         return outcome
@@ -216,7 +219,8 @@ def render_feedback(outcome: Outcome, check: dict[str, Any] | None, card: Card |
         errors.append(Issue("V9", f"the generated diagram did not render: {check.get('error') or check.get('render_error')}"))
     else:
         width = check.get("width") or 0
-        if width > max_width:
+        form = ir_data.get("form") if isinstance(ir_data, dict) else None
+        if width > max_width and form in GATED_FORMS:
             errors.append(Issue("V14", f"renders {width} px wide, limit {max_width:.0f}: fewer nodes side by side, "
                                        f"shorter labels, or fewer participants"))
         if check.get("label_overlaps"):

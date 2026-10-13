@@ -6,16 +6,16 @@ corpus run through tools/mermaid_check.
 
 | Code | Check |
 |---|---|
-| V2 | size: flow and structure 4-9 nodes (3 when two paths merge), state 3-8, sequence 2-5 |
+| V2 | size: flow and structure 4-9 nodes (3 when two paths merge), state 3-8, sequence 2-3 (a fourth participant does not fit 700 px) |
 | V3 | every node, labelled edge and message cites existing sources (P1..Pn or E) |
 | V4 | label wording is at least half found in the cited text (formula names and symbols count) |
-| V5 | structural gain: branch, merge or loop in flow; merge, loop or 3+ links in structure (a plain chain of links cites 3+ sources); a flow on a card that says the work repeats has its back edge |
+| V5 | structural gain: branch, merge or loop in flow; merge, loop or 3+ links in structure (a plain chain of links cites 3+ sources); 3+ transitions in state; 3+ messages in sequence; a flow whose cited text says the work repeats has its back edge |
 | V6 | label widths |
 | V7 | structure, state and sequence links are labelled; a decision has 2+ labelled exits |
 | V8 | a card with 2+ propositions gets a diagram citing 2+ sources (E counts) |
 | V10 | labels are plain text, not TeX |
-| V11 | a data diagram shows its inputs (outgoing edges only, into nodes whose text mentions them) and outputs or a final store (incoming edges only) |
-| V12 | the diagram cites E: it carries the key relation the essence states |
+| V11 | a data diagram (arrows data) starts at inputs and ends at outputs or a final store; in any diagram an input has outgoing edges only, into nodes whose cited text mentions it, and an output incoming edges only |
+| V12 | the diagram cites E: it carries the key relation the essence states; replacing an old diagram that renders, it also cites 2 propositions (all, if the card has fewer) |
 | V13 | no fan-out into more than 3 leaves, and no decision whose 3+ exits are all leaves (that is a list) |
 | V14 | estimated rendered width at most 700 px (the batch path measures the real width instead) |
 
@@ -24,22 +24,37 @@ diagrams and a 50-card pilot; they are not calibrated.
 """
 from __future__ import annotations
 
+import re
 from collections import defaultdict
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Iterable
 
 from .ir import DEFAULT_ARROWS, Card, DiagramIR, Issue, is_ref, parse_ir
-import re
-
+from .staleness import cited_refs
 from .text import display_width, grounding_tokens, has_tex, overlap, source_tokens, title_match
 from .width import estimate_width
 
-# Words that say the work repeats; compounds that only name a thing are cut out first.
-LOOP_WORDS = re.compile(r"重复|循环|直到|迭代|反复|每一轮|每轮|逐位|逐个|\b(?:repeat\w*|loops?|until|iterat\w*|each round)\b", re.I)
-_NOT_LOOPS = re.compile(r"循环神经网络|循环队列|循环冗余|循环移位|循环卷积|循环小数|不循环")
+# Words that say the work repeats. The prompt lists exactly these (a test compares them);
+# the English ones match their inflections (repeats, looping, iteration).
+LOOP_WORDS = ("重复", "循环", "反复", "迭代", "直到", "每轮", "逐个", "逐位", "repeat", "loop", "until", "iterate")
+_LOOP_FORMS = {"每轮": "每一?轮", "repeat": r"\brepeat\w*", "loop": r"\bloop(?:s|ed|ing)?\b",
+               "until": r"\buntil\b", "iterate": r"\biterat\w*"}
+_LOOP = re.compile("|".join(_LOOP_FORMS.get(w, re.escape(w)) for w in LOOP_WORDS), re.I)
+# Uses of those words that do not say this work repeats, cut out first: names of things
+# (循环队列, Automatic Repeat reQuest, human-in-the-loop), a loop as a failure or its guard
+# (陷入循环, 循环检测), negations and questions (不会重复, 避免重复, 是否重复, without
+# repeating) and duplicates (重复项, 重复的, 去重复, 造成重复).
+_NOT_LOOPS = re.compile(
+    r"循环(?:神经网络|队列|冗余|移位|[左右]移|卷积|小数|层|链表|依赖|引用|赛|检测|上限)|陷入死?循环"
+    r"|(?:不|没有?|未|无(?!限)|勿|别|避免|防止|禁止|是否)(?:会|要|必|再|需|用|能|可|应|该|必要)?(?:重复|循环|反复|迭代)"
+    r"|重复(?:的|项|值|元素|数据|记录|内容|条目|样本)|(?:去|去除|删除|丢弃|过滤|消除|剔除|造成|完全)重复"
+    r"|\brepeat\s+request|\bin[- ]the[- ]loop\b"
+    r"|\b(?:not|no|never|without|avoid\w*|don't|doesn't|won't)\s+(?:\w+\s+)?(?:repeat\w*|loop\w*|iterat\w*)",
+    re.I)
 
 # Words that name the role, not the data; they do not show where an input is used.
-_GENERIC_IO = frozenset({"输入", "输出", "数据", "input", "output", "data", "signal", "信号"})
+_GENERIC_IO = ("输入", "输出", "数据", "信号", "input", "output", "data", "signal")
+_GENERIC_IO_RE = re.compile("|".join(rf"\b{w}s?\b" if w.isascii() else w for w in _GENERIC_IO), re.I)
 
 RELATION_WORDS = frozenset({
     "part_of", "has_part", "depends_on", "required_by", "similar_to", "contrasts_with",
@@ -53,7 +68,7 @@ class Limits:
     """Validator thresholds. Widths are in full-width character units (Latin counts half)."""
 
     size: dict[str, tuple[int, int]] = field(default_factory=lambda: {
-        "flow": (4, 9), "structure": (4, 9), "state": (3, 8), "sequence": (2, 5)})
+        "flow": (4, 9), "structure": (4, 9), "state": (3, 8), "sequence": (2, 3)})
     merge_min_nodes: int = 3
     grounding_min: float = 0.5
     node_label_max: float = 20
@@ -149,11 +164,36 @@ def _branches(ir: DiagramIR) -> bool:
                and all(e.label for e in exits[n.key]) for n in ir.nodes)
 
 
-def says_repeat(card: Card) -> str | None:
-    """The first word in the card that says the work repeats, if any."""
-    text = _NOT_LOOPS.sub(" ", " ".join([card.essence, *card.propositions]))
-    m = LOOP_WORDS.search(text)
-    return m.group(0) if m else None
+def says_repeat(card: Card, refs: Iterable[str] | None = None) -> tuple[str, str] | None:
+    """(ref, quoted context) for the first cited text that says the work repeats, if any.
+
+    refs are the sources the diagram cites; None reads the whole card. Each
+    source is read on its own, after cutting out names, negations and
+    duplicates (_NOT_LOOPS).
+    """
+    order = ["E", *(f"P{i}" for i in range(1, len(card.propositions) + 1))]
+    wanted = set(order) if refs is None else set(refs)
+    for ref in order:
+        if ref not in wanted:
+            continue
+        src = card.source(ref)
+        m = _LOOP.search(_NOT_LOOPS.sub(lambda x: " " * len(x.group()), src))
+        if m:
+            a, b = max(0, m.start() - 12), min(len(src), m.end() + 12)
+            return ref, ("…" if a else "") + src[a:b].strip() + ("…" if b < len(src) else "")
+    return None
+
+
+def strong_enough(refs: Iterable[str], n_props: int, has_essence: bool = True) -> bool:
+    """Whether a diagram citing refs may replace an old diagram that renders.
+
+    It must cite E (when the card has an essence) and at least 2 propositions
+    (all of them, if the card has fewer). The validator (V12) and the
+    write-back guard use this one rule.
+    """
+    refs = set(refs)
+    props = [r for r in refs if r != "E"]
+    return ("E" in refs or not has_essence) and len(props) >= min(2, n_props)
 
 
 def _gain(ir: DiagramIR, shape: _Shape, limits: Limits, n_cited: int = 0) -> str | None:
@@ -161,7 +201,8 @@ def _gain(ir: DiagramIR, shape: _Shape, limits: Limits, n_cited: int = 0) -> str
     if ir.form == "flow":
         if _branches(ir) or shape.merge or shape.loop:
             return None
-        return "flow is a plain chain: no decision with 2 labelled exits, no merge, no loop; the text already says it"
+        return ("flow has no decision with 2 labelled exits, no merge and no loop: a chain of steps, or paths that "
+                "split and never meet again, reads as well as a list")
     if ir.form == "sequence":
         real = [m for m in ir.messages if not m.note]
         if len(real) < limits.min_messages:
@@ -229,10 +270,11 @@ def check(ir: DiagramIR, card: Card, limits: Limits = DEFAULT_LIMITS) -> tuple[l
     gain = _gain(ir, shape, limits, len(cited))
     if gain:
         errors.append(Issue("V5", gain + "; consider skip"))
-    word = says_repeat(card) if form == "flow" and limits.require_back_edge else None
-    if word and not shape.loop:
-        errors.append(Issue("V5", f"the card says the work repeats («{word}»); draw the back edge to where "
-                                  f"the repeated work starts"))
+    all_cited = [r for r in cited_refs(ir) if r in valid]
+    repeat = says_repeat(card, all_cited) if form == "flow" and limits.require_back_edge else None
+    if repeat and not shape.loop:
+        errors.append(Issue("V5", f"{repeat[0]}, which the diagram cites, says the work repeats («{repeat[1]}»); "
+                                  f"draw that back edge, from where one round ends to the step that repeats"))
 
     if form in limits.labeled_links:
         for i, e in enumerate(ir.links):
@@ -253,6 +295,12 @@ def check(ir: DiagramIR, card: Card, limits: Limits = DEFAULT_LIMITS) -> tuple[l
     if limits.require_essence and card.essence.strip() and "E" not in cited:
         errors.append(Issue("V12", "the diagram does not cite E; find the relation the essence states, draw it, "
                                    "and cite E on the nodes or edges that carry it"))
+    elif card.old_diagram == "renders" and not strong_enough(all_cited, len(card.propositions),
+                                                             bool(card.essence.strip())):
+        need = min(2, len(card.propositions))
+        errors.append(Issue("V12", f"this card's old diagram renders; a diagram that replaces it cites E and "
+                                   f"{need} proposition(s), and this one cites {all_cited}: draw E's relation "
+                                   f"with the propositions that state it, or skip"))
 
     for i, n in enumerate(ir.nodes):
         children = shape.outs.get(n.key, set()) - {n.key}
@@ -279,32 +327,33 @@ def check(ir: DiagramIR, card: Card, limits: Limits = DEFAULT_LIMITS) -> tuple[l
         outputs = [n for n in ir.nodes if n.role == "output"]
         sinks = outputs or [n for n in ir.nodes if n.role == "store" and shape.indeg.get(n.key)
                             and not (shape.outs.get(n.key, set()) - {n.key})]
-        if arrows == "data" or inputs or outputs:
-            if not inputs or not sinks:
-                errors.append(Issue("V11", "a data diagram shows where data enters (role input) and where it "
-                                           "leaves (role output)"))
-            for n in inputs:
-                where = f"nodes[{ir.nodes.index(n)}]"
-                if shape.indeg.get(n.key):
-                    errors.append(Issue("V11", f"input «{n.label}» has an incoming edge", where))
-                if not shape.outs.get(n.key):
-                    errors.append(Issue("V11", f"input «{n.label}» feeds nothing; add its outgoing edge", where))
-                words = grounding_tokens(n.label) - _GENERIC_IO
-                for e in ir.edges:
-                    if e.src != n.key or not words:
-                        continue
-                    target = next(x for x in ir.nodes if x.key == e.dst)
-                    refs = [r for r in (*target.p, *e.p) if r in card.refs]
-                    if refs and not words & source_tokens(" ".join(card.source(r) for r in refs)):
-                        errors.append(Issue("V11", f"input «{n.label}» goes to «{target.label}», but the text "
-                                                   f"«{target.label}» cites never mentions it; connect each input "
-                                                   f"only to the nodes that use it", where))
-            for n in outputs:
-                where = f"nodes[{ir.nodes.index(n)}]"
-                if shape.outs.get(n.key):
-                    errors.append(Issue("V11", f"output «{n.label}» has an outgoing edge", where))
-                if not shape.indeg.get(n.key):
-                    errors.append(Issue("V11", f"output «{n.label}» receives nothing; add its incoming edge", where))
+        if arrows == "data" and (not inputs or not sinks):
+            errors.append(Issue("V11", "a data diagram shows where data enters (role input) and where it "
+                                       "leaves (role output, or a final store)"))
+        for n in inputs:
+            where = f"nodes[{ir.nodes.index(n)}]"
+            if shape.indeg.get(n.key):
+                errors.append(Issue("V11", f"input «{n.label}» has an incoming edge", where))
+            if not shape.outs.get(n.key):
+                errors.append(Issue("V11", f"input «{n.label}» feeds nothing; add its outgoing edge", where))
+            # generic words go before tokenising, so 输入数据 leaves nothing rather than 入数
+            words = grounding_tokens(_GENERIC_IO_RE.sub(" ", n.label))
+            for e in ir.edges:
+                if e.src != n.key or not words:
+                    continue
+                target = next(x for x in ir.nodes if x.key == e.dst)
+                refs = [r for r in (*target.p, *e.p) if r in card.refs]
+                if refs and not words & source_tokens(" ".join(card.source(r) for r in refs)):
+                    errors.append(Issue("V11", f"input «{n.label}» goes to «{target.label}», but the text that node "
+                                               f"and edge cite ({', '.join(refs)}) never mentions it; connect each "
+                                               f"input only to the nodes that use it, and cite the text that says "
+                                               f"so on that node or edge", where))
+        for n in outputs:
+            where = f"nodes[{ir.nodes.index(n)}]"
+            if shape.outs.get(n.key):
+                errors.append(Issue("V11", f"output «{n.label}» has an outgoing edge", where))
+            if not shape.indeg.get(n.key):
+                errors.append(Issue("V11", f"output «{n.label}» receives nothing; add its incoming edge", where))
 
     for i, n in enumerate(ir.nodes):
         if title_match(n.label, list(card.related_titles)):

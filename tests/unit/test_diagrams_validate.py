@@ -9,7 +9,9 @@ import pytest
 
 from secondbrain.diagrams.ir import IR_JSON_SCHEMA, Card, parse_ir
 from secondbrain.diagrams.text import grounding_tokens, source_tokens, tokens
-from secondbrain.diagrams.validate import Limits, validate
+from secondbrain.diagrams.rejudge import strong_enough as marker_strong_enough
+from secondbrain.diagrams.staleness import marker
+from secondbrain.diagrams.validate import Limits, says_repeat, strong_enough, validate
 
 FIX = Path(__file__).resolve().parents[1] / "fixtures" / "diagrams"
 CARDS = {c["ref"]: Card.from_dict(c) for c in json.loads((FIX / "cards.json").read_text(encoding="utf-8"))}
@@ -425,7 +427,12 @@ def test_v11_data_diagrams_show_inputs_and_outputs():
     assert codes(data, card) == ["V11", "V11"]  # input has an incoming edge, output an outgoing one
     data, card = _dataflow(arrows="control")
     data["nodes"][0]["role"] = "step"
-    assert codes(data, card) == ["V11"]  # an output role alone still needs an input
+    assert codes(data, card) == []  # a control flow may end in an output without an input
+    data["edges"].append({"from": "y", "to": "f"})
+    assert codes(data, card) == ["V11"]  # but an output still has incoming edges only
+    data, card = _dataflow()
+    data["nodes"][0]["role"] = "step"
+    assert codes(data, card) == ["V11"]  # a data diagram needs its input
 
 
 def test_arrows_field_and_retired_data_role():
@@ -556,3 +563,125 @@ def test_v11_data_diagram_may_end_in_a_store_and_inputs_go_where_used():
 ])
 def test_v4_single_characters_and_symbols_count(label, prop):
     assert _first_node_v4(label, prop) == []
+
+
+# Fourth round: V3's K1, K3, K7 and the producers' questions ---------------------------------
+
+def _loop_card(p2: str) -> Card:
+    return Card(title="t", essence="取样器按误差决定是否继续。",
+                propositions=("每次取一批样本计算误差。", p2, "误差足够小就停止，否则继续取样。"))
+
+
+def _loop_flow(cite_p2: bool) -> dict:
+    """a -> b -> d? -> (e | f), no back edge; P2 is cited only when asked."""
+    return {"decision": "draw", "form": "flow", "question": "q",
+            "nodes": [{"key": "a", "label": "取一批样本", "p": ["P1", "E"]},
+                      {"key": "b", "label": "计算误差", "p": ["P1"] + (["P2"] if cite_p2 else [])},
+                      {"key": "d", "label": "误差足够小？", "role": "decision", "p": ["P3"]},
+                      {"key": "e", "label": "停止", "role": "end", "p": ["P3"]},
+                      {"key": "f", "label": "继续取样", "p": ["P3"]}],
+            "edges": [{"from": "a", "to": "b"}, {"from": "b", "to": "d"},
+                      {"from": "d", "to": "e", "label": "是", "p": ["P3"]},
+                      {"from": "d", "to": "f", "label": "否", "p": ["P3"]}]}
+
+
+def test_v5_back_edge_looks_only_at_the_text_the_diagram_cites():
+    card = _loop_card("误差计算要重复到足够小为止。")
+    assert "V5" not in codes(_loop_flow(cite_p2=False), card, FULL)
+    errors = [str(e) for e in validate(_loop_flow(cite_p2=True), card, FULL).errors]
+    assert len(errors) == 1 and errors[0].startswith("V5 P2, which the diagram cites, says the work repeats")
+    assert "«误差计算要重复到足够小为止。»" in errors[0]  # the message quotes the cited text it asks about
+    looped = _loop_flow(cite_p2=True)
+    looped["edges"].append({"from": "f", "to": "a"})
+    assert codes(looped, card, FULL) == []
+
+
+def test_v5_back_edge_is_a_flow_rule():
+    card = _loop_card("误差计算要重复到足够小为止。")
+    data = _loop_flow(cite_p2=True)
+    data["form"] = "structure"
+    for n in data["nodes"]:
+        n["role"] = "step"
+    data["edges"] = [dict(e, label=e.get("label") or "然后", p=e.get("p") or ["P1"]) for e in data["edges"]]
+    assert not any("repeats" in str(e) for e in validate(data, card, FULL).errors)
+
+
+@pytest.mark.parametrize("text", [
+    "同一目标已有发现进行时不会重复发起查询。", "避免两路检索返回同一文档造成重复。", "丢弃重复的工具输出与噪声。",
+    "去除重复项后再排序。", "推理层应做循环检测。", "循环队列用取模回绕下标。", "高危操作要 human-in-the-loop 确认。",
+    "ARQ is Automatic Repeat reQuest.", "The client never repeats the query.", "先判断是否重复再写入。",
+])
+def test_v5_negations_duplicates_and_names_do_not_ask_for_a_loop(text):
+    assert says_repeat(_loop_card(text)) is None
+    assert "V5" not in codes(_loop_flow(cite_p2=True), _loop_card(text), FULL)
+
+
+@pytest.mark.parametrize("text, word", [
+    ("误差计算要重复到足够小为止。", "重复"), ("逐位相乘并处理进位。", "逐位"), ("每一轮选一个最近的点。", "每一轮"),
+    ("训练迭代直到收敛。", "迭代"), ("Repeat the update until it converges.", "Repeat"), ("无限循环地读取输入。", "循环"),
+])
+def test_v5_loop_words(text, word):
+    ref, quote = says_repeat(_loop_card(text))
+    assert ref == "P2" and word in quote
+
+
+def test_v12_replacing_a_renderable_old_diagram_needs_e_and_two_propositions():
+    card = Card.from_dict({**_loop_card("误差计算要重复到足够小为止。").to_dict(), "old_diagram": "renders"})
+    data = _loop_flow(cite_p2=False)
+    data["edges"].append({"from": "f", "to": "a"})
+    assert codes(data, card, FULL) == []  # E, P1, P3
+    data["nodes"][2]["p"] = data["nodes"][3]["p"] = data["nodes"][4]["p"] = ["P1"]
+    data["edges"][2]["p"] = data["edges"][3]["p"] = ["P1"]
+    wording_off = Limits(grounding_min=0.0)  # the labels now cite P1 only; this test is about V12
+    errors = validate(data, card, wording_off).errors
+    assert [e.code for e in errors] == ["V12"] and "renders" in errors[0].message  # E and P1 only
+    broken = Card.from_dict({**card.to_dict(), "old_diagram": "broken"})
+    assert codes(data, broken, wording_off) == []  # a broken old diagram sets no bar
+    one = Card.from_dict({**card.to_dict(), "propositions": ["每次取一批样本计算误差。"]})
+    assert "V12" not in codes(data, one, wording_off)  # min(2, 1): E and the only proposition
+
+
+@pytest.mark.parametrize("refs, n_props, has_e", [
+    (("E", "P1", "P2"), 3, True), (("E", "P1"), 3, True), (("P1", "P2"), 3, True), (("P1", "P2"), 3, False),
+    (("E", "P1"), 1, True), (("E",), 1, True), ((), 0, False), (("E", "P3", "P1"), 2, True),
+])
+def test_v12_and_the_writeback_guard_use_one_rule(refs, n_props, has_e):
+    card = Card(title="t", essence="e" if has_e else "", propositions=tuple("p" for _ in range(n_props)))
+    nodes = [{"key": f"k{i}", "label": "x", "p": [r]} for i, r in enumerate(refs)] or [{"key": "k", "label": "x"}]
+    parsed, _ = parse_ir({"decision": "draw", "form": "flow", "question": "q", "nodes": nodes})
+    assert marker_strong_enough(marker(card, parsed), n_props, has_e) == strong_enough(refs, n_props, has_e)
+
+
+def test_v11_generic_words_are_removed_before_tokenising():
+    data, card = _dataflow()
+    data["nodes"][0]["label"] = "输入数据"
+    data["edges"][2]["p"] = ["P1"]  # the adder's edge now cites a line without x
+    v11 = lambda: [c for c in codes(data, card) if c == "V11"]
+    assert v11() == []  # nothing but generic words: nothing to check (was the pair 入数)
+    data["nodes"][0]["label"] = "input data"
+    assert v11() == []
+    data["nodes"][0]["label"] = "输入 x"
+    assert v11() == []  # x is on both lines the targets cite
+    data["nodes"][0]["label"] = "输入数据 q"
+    assert v11() == ["V11", "V11"]  # q is on neither
+
+
+def test_v5_unmerged_split_in_a_flow_is_not_gain():
+    card = Card(title="t", essence="请求分到两路处理。", propositions=("请求先校验。", "校验后分两路处理。"))
+    data = {"decision": "draw", "form": "flow", "question": "q",
+            "nodes": [{"key": "a", "label": "请求先校验", "p": ["P1", "E"]},
+                      {"key": "b", "label": "分两路处理", "p": ["P2"]},
+                      {"key": "c", "label": "两路处理", "p": ["P2"]},
+                      {"key": "d", "label": "请求分到两路", "p": ["E"]}],
+            "edges": [{"from": "a", "to": "b"}, {"from": "a", "to": "c"}, {"from": "b", "to": "d"}]}
+    errors = [str(e) for e in validate(data, card, FULL).errors]
+    assert len(errors) == 1 and "paths that split and never meet again" in errors[0]
+
+
+def test_v2_a_sequence_has_two_or_three_participants():
+    nodes = [{"key": k, "label": k, "p": ["P1"]} for k in "abcd"]
+    msgs = [{"from": "a", "to": "b", "text": "首次请求", "p": ["P1"]}] * 3
+    data = {"decision": "draw", "form": "sequence", "question": "q", "nodes": nodes, "messages": msgs}
+    assert "V2" in codes(data, ETAG)
+    data["nodes"] = nodes[:3]
+    assert "V2" not in codes(data, ETAG)
