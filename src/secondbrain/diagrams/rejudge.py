@@ -5,10 +5,17 @@ cards that prune leaves for review (by default mechanism cards with three or
 more propositions). Keep-tier cards are never in the pool, and the rest of
 the delete tier and the LR to TB flips belong to prune.
 
-Write-back rule for a pool card, given its final outcome:
+Write-back rule for a pool card, given its final outcome (each action row
+names the rule that applied):
 - draw: the diagram section is replaced by the new Mermaid block;
-- skip: an old diagram that parses stays as it is; one that does not parse
-  is removed;
+- skip, card in a removed domain (the audit tiered it "domain", or the domain
+  is listed in WritebackPolicy.remove_domains): the old diagram is removed;
+- skip, delete_review card: the old diagram is removed, because the
+  deterministic tier already judged it a restatement and the pool only gave
+  the card a chance at a new one (WritebackPolicy.delete_review_on_skip,
+  "remove" by default, "keep" treats these cards like the rest);
+- skip, any other card: an old diagram that parses stays as it is; one that
+  does not parse is removed;
 - rewrite still pending, or no outcome: nothing changes.
 
 Only the diagram section changes, byte for byte. Every write is guarded by the
@@ -17,6 +24,8 @@ file hash recorded at audit time, and nothing is written without write=True.
 from __future__ import annotations
 
 import hashlib
+from collections import Counter
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -25,7 +34,7 @@ from .prune import PrunePolicy, _diffstat, delete_section
 
 
 def select_pool(tiers: dict[str, dict[str, Any]], policy: PrunePolicy = PrunePolicy()) -> list[dict[str, Any]]:
-    """Pool rows in ref order: ref, pool_reason, old_parses, sha256."""
+    """Pool rows in ref order: ref, pool_reason, domain, tier_why, old_parses, sha256."""
     rows = []
     for ref in sorted(tiers):
         t = tiers[ref]
@@ -37,7 +46,8 @@ def select_pool(tiers: dict[str, dict[str, Any]], policy: PrunePolicy = PrunePol
             reason = "delete_review"
         else:
             continue
-        rows.append({"ref": ref, "pool_reason": reason, "old_parses": bool(t["ok"]), "sha256": t["sha256"]})
+        rows.append({"ref": ref, "pool_reason": reason, "domain": t.get("domain"), "tier_why": t.get("why"),
+                     "old_parses": bool(t["ok"]), "sha256": t["sha256"]})
     return rows
 
 
@@ -86,7 +96,29 @@ def replace_section(text: str, mermaid: str, fmt: CardFormat = DEFAULT_FORMAT) -
     return "\n".join(lines[:end] + block + [""] + lines[end:])
 
 
-def plan(pool: list[dict[str, Any]], outcomes: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
+@dataclass(frozen=True)
+class WritebackPolicy:
+    """What a skip does to an old diagram, beyond 'keep it if it parses'."""
+
+    delete_review_on_skip: str = "remove"  # or "keep"
+    remove_domains: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        if self.delete_review_on_skip not in ("remove", "keep"):
+            raise ValueError("delete_review_on_skip must be 'remove' or 'keep'")
+
+
+def _skip_rule(p: dict[str, Any], policy: WritebackPolicy) -> tuple[str, str]:
+    """(action, rule) for a pool card whose final outcome is skip."""
+    if p.get("tier_why") == "domain" or p.get("domain") in policy.remove_domains:
+        return "remove", "skip:domain"
+    if p["pool_reason"] == "delete_review" and policy.delete_review_on_skip == "remove":
+        return "remove", "skip:delete_review"
+    return ("keep_old", "skip:old_parses") if p["old_parses"] else ("remove", "skip:old_broken")
+
+
+def plan(pool: list[dict[str, Any]], outcomes: Iterable[dict[str, Any]],
+         policy: WritebackPolicy = WritebackPolicy()) -> list[dict[str, Any]]:
     """One action per pool card plus a refusal per outcome outside the pool.
 
     Later outcomes for the same ref replace earlier ones, so pass round 0
@@ -101,16 +133,25 @@ def plan(pool: list[dict[str, Any]], outcomes: Iterable[dict[str, Any]]) -> list
         o = final.get(p["ref"])
         row = {"ref": p["ref"], "pool_reason": p["pool_reason"], "sha256": p["sha256"]}
         if o is None or o.get("status") not in ("draw", "skip"):
-            actions.append({**row, "action": "pending", "status_in": o.get("status") if o else None})
+            actions.append({**row, "action": "pending", "rule": "pending",
+                            "status_in": o.get("status") if o else None})
         elif o["status"] == "draw" and o.get("mermaid"):
-            actions.append({**row, "action": "replace", "mermaid": o["mermaid"]})
-        elif p["old_parses"]:
-            actions.append({**row, "action": "keep_old", "reason": o.get("reason", "")})
+            actions.append({**row, "action": "replace", "rule": "draw", "mermaid": o["mermaid"]})
         else:
-            actions.append({**row, "action": "remove", "reason": o.get("reason", "")})
+            action, rule = _skip_rule(p, policy)
+            actions.append({**row, "action": action, "rule": rule, "reason": o.get("reason", "")})
     for ref in sorted(set(final) - in_pool):
-        actions.append({"ref": ref, "action": "not_in_pool", "status_in": final[ref].get("status")})
+        actions.append({"ref": ref, "action": "not_in_pool", "rule": "not_in_pool",
+                        "status_in": final[ref].get("status")})
     return actions
+
+
+def summary(actions: list[dict[str, Any]]) -> dict[str, dict[str, int]]:
+    """Counts of rule (outcome and what it does) per pool reason, for the plan output."""
+    out: dict[str, Counter] = {}
+    for a in actions:
+        out.setdefault(a.get("pool_reason", "not_in_pool"), Counter())[f"{a['rule']}→{a['action']}"] += 1
+    return {reason: dict(sorted(c.items())) for reason, c in sorted(out.items())}
 
 
 def apply(vault: Path, actions: list[dict[str, Any]], write: bool = False,
@@ -118,7 +159,7 @@ def apply(vault: Path, actions: list[dict[str, Any]], write: bool = False,
     """Carry out (or, with write=False, preview) replace and remove actions; one manifest row per action."""
     rows = []
     for a in actions:
-        row = {k: a[k] for k in ("ref", "action") if k in a}
+        row = {k: a[k] for k in ("ref", "pool_reason", "rule", "action") if k in a}
         if a["action"] not in ("replace", "remove"):
             rows.append({**row, "status": "unchanged"})
             continue

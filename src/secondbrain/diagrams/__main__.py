@@ -7,7 +7,8 @@
     python -m secondbrain.diagrams audit-tier OUT_DIR [--delete-domain D ...]
     python -m secondbrain.diagrams prune VAULT OUT_DIR [--write]
     python -m secondbrain.diagrams pool OUT_DIR
-    python -m secondbrain.diagrams writeback VAULT OUT_DIR OUTCOMES.jsonl ... [--write]
+    python -m secondbrain.diagrams writeback VAULT OUT_DIR OUTCOMES.jsonl ... [--delete-review-on-skip remove|keep]
+        [--remove-domain D ...] [--write]
 
 CARDS.jsonl holds one card per line: ref, title, kind, domain, essence,
 propositions (list), related_titles. audit-extract writes this format, so a
@@ -112,12 +113,15 @@ def cmd_pool(a) -> dict:
 def cmd_writeback(a) -> dict:
     tiers = json.loads((a.dir / "tiers.json").read_text(encoding="utf-8"))["cards"]
     outcomes = [o for path in a.outcomes for o in audit.read_jsonl(path)]
-    actions = rejudge.plan(rejudge.select_pool(tiers), outcomes)
+    policy = rejudge.WritebackPolicy(delete_review_on_skip=a.delete_review_on_skip,
+                                     remove_domains=tuple(a.remove_domain))
+    actions = rejudge.plan(rejudge.select_pool(tiers), outcomes, policy)
     rows = rejudge.apply(a.vault, actions, write=a.write)
     _write_jsonl(a.dir / ("writeback_manifest.jsonl" if a.write else "writeback_plan.jsonl"), rows)
     _write_jsonl(a.dir / "writeback_mermaid.jsonl",
                  [{"id": x["ref"], "text": x["mermaid"]} for x in actions if x["action"] == "replace"])
-    return {"actions": dict(Counter(r["action"] for r in rows)), "status": dict(Counter(r["status"] for r in rows))}
+    return {"actions": dict(Counter(r["action"] for r in rows)), "status": dict(Counter(r["status"] for r in rows)),
+            "by_pool_reason": rejudge.summary(actions)}
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -154,6 +158,11 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("dir", type=Path)
     s.add_argument("outcomes", type=Path, nargs="+",
                    help="outcomes.jsonl and pregated.jsonl files, earlier rounds first")
+    s.add_argument("--delete-review-on-skip", choices=("remove", "keep"), default="remove",
+                   help="old diagram of a delete_review card the model skips (default: remove)")
+    s.add_argument("--remove-domain", action="append", default=[],
+                   help="also remove old diagrams on skip in this domain (cards the audit tiered "
+                        "'domain' are removed anyway)")
     s.add_argument("--write", action="store_true", help="write the changes (default: plan only)")
     a = p.parse_args(argv)
     if a.cmd == "schema":

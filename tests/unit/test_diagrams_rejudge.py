@@ -20,6 +20,10 @@ TIERS = {
     "a.md": {"tier": "review", "why": "no_gain", "kind": "mechanism", "n_props": 1, "sha256": "1", "ok": True},
     "b.md": {"tier": "redraw", "why": "broken", "kind": "concept", "n_props": 2, "sha256": "2", "ok": False},
     "c.md": {"tier": "delete", "why": "le2_edges", "kind": "mechanism", "n_props": 3, "sha256": "3", "ok": True},
+    "g.md": {"tier": "delete", "why": "domain", "kind": "mechanism", "n_props": 3, "sha256": "7", "ok": True,
+             "domain": "english"},
+    "h.md": {"tier": "review", "why": "no_gain", "kind": "concept", "n_props": 2, "sha256": "8", "ok": True,
+             "domain": "vocab"},
     "d.md": {"tier": "delete", "why": "le2_edges", "kind": "mechanism", "n_props": 2, "sha256": "4", "ok": True},
     "e.md": {"tier": "keep", "why": "branch", "kind": "mechanism", "n_props": 4, "sha256": "5", "ok": True,
              "direction": "LR", "width": 900},
@@ -31,7 +35,8 @@ TIERS = {
 def test_pool_is_review_redraw_and_kept_back_deletes():
     pool = rejudge.select_pool(TIERS)
     assert [(p["ref"], p["pool_reason"], p["old_parses"]) for p in pool] == [
-        ("a.md", "review", True), ("b.md", "redraw", False), ("c.md", "delete_review", True)]
+        ("a.md", "review", True), ("b.md", "redraw", False), ("c.md", "delete_review", True),
+        ("g.md", "delete_review", True), ("h.md", "review", True)]
     touched_by_prune = {a["ref"] for a in prune.plan(TIERS)}
     assert touched_by_prune == {"d.md", "e.md", "f.md"}
     assert not touched_by_prune & {p["ref"] for p in pool}
@@ -43,10 +48,51 @@ def test_plan_applies_the_write_back_rule():
                 {"ref": "b.md", "status": "skip", "reason": "list"},
                 {"ref": "c.md", "status": "skip", "reason": "linear"},
                 {"ref": "e.md", "status": "draw", "mermaid": NEW}]
-    acts = {a["ref"]: a["action"] for a in rejudge.plan(pool, outcomes)}
-    assert acts == {"a.md": "replace", "b.md": "remove", "c.md": "keep_old", "e.md": "not_in_pool"}
+    acts = {a["ref"]: (a["rule"], a["action"]) for a in rejudge.plan(pool, outcomes)}
+    assert acts == {"a.md": ("draw", "replace"), "b.md": ("skip:old_broken", "remove"),
+                    "c.md": ("skip:delete_review", "remove"), "e.md": ("not_in_pool", "not_in_pool"),
+                    "g.md": ("pending", "pending"), "h.md": ("pending", "pending")}
     pending = rejudge.plan(pool, [{"ref": "a.md", "status": "rewrite"}])
-    assert [a["action"] for a in pending] == ["pending", "pending", "pending"]
+    assert [a["action"] for a in pending] == ["pending"] * 5
+
+
+def _skips(policy=rejudge.WritebackPolicy()):
+    pool = rejudge.select_pool(TIERS)
+    outcomes = [{"ref": p["ref"], "status": "skip", "reason": "no structure"} for p in pool]
+    return {a["ref"]: (a["rule"], a["action"]) for a in rejudge.plan(pool, outcomes, policy)}
+
+
+def test_skip_policy_by_pool_reason_and_domain():
+    assert _skips() == {
+        "a.md": ("skip:old_parses", "keep_old"),       # (c) review card, old diagram renders
+        "b.md": ("skip:old_broken", "remove"),         # (c) redraw card, old diagram broken
+        "c.md": ("skip:delete_review", "remove"),      # (a) already judged a restatement
+        "g.md": ("skip:domain", "remove"),             # (b) the audit tiered the domain for deletion
+        "h.md": ("skip:old_parses", "keep_old"),
+    }
+
+
+def test_delete_review_switch_keeps_the_domain_rule():
+    flipped = _skips(rejudge.WritebackPolicy(delete_review_on_skip="keep"))
+    assert flipped["c.md"] == ("skip:old_parses", "keep_old")
+    assert flipped["g.md"] == ("skip:domain", "remove")
+    listed = _skips(rejudge.WritebackPolicy(delete_review_on_skip="keep", remove_domains=("vocab",)))
+    assert listed["h.md"] == ("skip:domain", "remove")
+    with pytest.raises(ValueError):
+        rejudge.WritebackPolicy(delete_review_on_skip="drop")
+
+
+def test_summary_counts_rule_per_pool_reason():
+    pool = rejudge.select_pool(TIERS)
+    outcomes = [{"ref": "a.md", "status": "draw", "mermaid": NEW}, {"ref": "b.md", "status": "skip"},
+                {"ref": "c.md", "status": "skip"}, {"ref": "g.md", "status": "skip"},
+                {"ref": "e.md", "status": "skip"}]
+    assert rejudge.summary(rejudge.plan(pool, outcomes)) == {
+        "delete_review": {"skip:delete_review→remove": 1, "skip:domain→remove": 1},
+        "not_in_pool": {"not_in_pool→not_in_pool": 1},
+        "redraw": {"skip:old_broken→remove": 1},
+        "review": {"draw→replace": 1, "pending→pending": 1},
+    }
 
 
 def test_replace_section_changes_only_that_section():
@@ -113,11 +159,16 @@ def test_cli_pool_and_writeback(tmp_path, capsys):
                         encoding="utf-8")
     before = {p: p.read_bytes() for p in (tmp_path / "v").rglob("*.md")}
     main(["writeback", str(tmp_path / "v"), str(out), str(outcomes)])
-    assert json.loads(capsys.readouterr().out)["status"] == {"planned": 2}
+    preview = json.loads(capsys.readouterr().out)
+    assert preview["status"] == {"planned": 2}
+    assert preview["by_pool_reason"] == {"redraw": {"skip:old_broken→remove": 1}, "review": {"draw→replace": 1}}
     assert before == {p: p.read_bytes() for p in (tmp_path / "v").rglob("*.md")}
     main(["writeback", str(tmp_path / "v"), str(out), str(outcomes), "--write"])
-    assert json.loads(capsys.readouterr().out) == {"actions": {"remove": 1, "replace": 1},
-                                                   "status": {"written": 2}}
+    written = json.loads(capsys.readouterr().out)
+    assert (written["actions"], written["status"]) == ({"remove": 1, "replace": 1}, {"written": 2})
+    manifest = [json.loads(x) for x in (out / "writeback_manifest.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert [(m["pool_reason"], m["rule"], m["status"]) for m in manifest] == [
+        ("redraw", "skip:old_broken", "written"), ("review", "draw", "written")]
     changed = {p for p in before if p.read_bytes() != before[p]}
     assert {p.relative_to(tmp_path / "v").as_posix() for p in changed} == {TCP, BUBBLE}
     assert NEW in (tmp_path / "v" / TCP).read_text(encoding="utf-8")
