@@ -5,7 +5,7 @@ Each card has an essence `E` and propositions `P1..Pn`. Start from E: find the r
 ## 1. Draw when E's relation is
 
 - `flow`: a process with a branch, loop or merge, such as a scan that branches by item type and returns to the scan; with `"arrows":"data"`, parallel, bypass or residual paths
-- `structure`: a hierarchy, or a pointer chain citing 3+ sources, also given as a count ("four levels"); causes converging on one result; with `"arrows":"data"`, a block diagram or data path (which signals enter which unit)
+- `structure`: a hierarchy, or a pointer chain citing 3+ sources, also given as a count ("four levels"); causes or terms converging on one result; with `"arrows":"data"`, a block diagram or data path (which signals enter which unit)
 - `sequence`: 2-3 parties exchanging 3+ messages
 - `state`: one object with 3+ named states and the events between them
 

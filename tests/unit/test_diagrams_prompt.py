@@ -45,10 +45,10 @@ def _prompt_examples() -> list[tuple[Card, dict]]:
 # Token budget. The method write-up asked for about 1,000-1,500 tokens with one or
 # two examples. The pilots grew the prompt to 2,233 and then 2,196 o200k tokens
 # (4 draw and 2 skip examples). It was then cut back to the method's budget
-# with every rule kept: 1,495 o200k (1,530 cl100k) when written, with 2 draw
+# with every rule kept: 1,497 o200k (1,532 cl100k) when written, with 2 draw
 # examples. New rules have to replace old text.
 TOKEN_CAP = 1500
-BYTE_CAP = 5400  # dependency-free proxy for the same budget (5,280 bytes when written)
+BYTE_CAP = 5400  # dependency-free proxy for the same budget (5,289 bytes when written)
 
 
 def test_prompt_states_the_core_rules():
