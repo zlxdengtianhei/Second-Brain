@@ -1,0 +1,9 @@
+{
+  "id": "secondbrain-review",
+  "name": "SecondBrain Review",
+  "version": "0.1.0",
+  "minAppVersion": "1.5.0",
+  "description": "Daily review loop for a Second Brain vault: event-log registry with FSRS, flip and Q&A review with LLM grading, card explanations with map context.",
+  "author": "Second Brain contributors",
+  "isDesktopOnly": false
+}

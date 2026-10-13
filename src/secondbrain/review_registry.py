@@ -52,13 +52,13 @@ _EPOCH_DATE = date(1970, 1, 1)
 _UTC = timezone.utc
 
 # Relation type -> True when the target comes first, False when the card comes first.
+# part_of/has_part are left out: on a real 8,615-card vault they added 300-400 cycles in
+# either direction (see docs/review-registry.md section 6).
 PREREQ_TARGET_FIRST: Mapping[str, bool] = {
     "depends_on": True,
     "follows": True,
-    "part_of": True,
     "required_by": False,
     "precedes": False,
-    "has_part": False,
 }
 
 
@@ -162,22 +162,26 @@ def _to_ms(dt: datetime) -> int:
     return (dt - _EPOCH_UTC) // timedelta(milliseconds=1)
 
 
+_TS_RE = re.compile(
+    r"^(\d{4})-(\d{2})-(\d{2})[Tt ](\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,9}))?([Zz]|[+-]\d{2}:\d{2})$")
+_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
 def parse_ts(value: Any) -> datetime:
     """Parse an RFC 3339 timestamp with an offset; truncate to milliseconds."""
-    if not isinstance(value, str) or not value:
-        raise EventError("ts must be a non-empty string")
-    text = value.strip()
-    if text.endswith(("z", "Z")):
-        text = text[:-1] + "+00:00"
+    if not isinstance(value, str) or not _TS_RE.match(value):
+        raise EventError(f"ts is not RFC 3339 with an offset: {value!r}")
+    m = _TS_RE.match(value)
+    assert m is not None
+    frac = (m.group(7) or "").ljust(3, "0")[:3]
+    off = m.group(8)
+    tz = _UTC if off in ("Z", "z") else timezone(
+        (1 if off[0] == "+" else -1) * timedelta(hours=int(off[1:3]), minutes=int(off[4:6])))
     try:
-        dt = datetime.fromisoformat(text)
+        return datetime(int(m.group(1)), int(m.group(2)), int(m.group(3)), int(m.group(4)),
+                        int(m.group(5)), int(m.group(6)), int(frac) * 1000, tzinfo=tz)
     except ValueError as exc:
-        raise EventError(f"ts is not RFC 3339: {value!r}") from exc
-    if dt.tzinfo is None or dt.utcoffset() is None:
-        raise EventError(f"ts has no UTC offset: {value!r}")
-    if "T" not in text and " " not in text:
-        raise EventError(f"ts has no time part: {value!r}")
-    return dt.replace(microsecond=(dt.microsecond // 1000) * 1000)
+        raise EventError(f"ts is not a valid time: {value!r}") from exc
 
 
 def format_utc(dt: datetime) -> str:
@@ -282,9 +286,11 @@ def extract_review_items(markdown: str, section: str = DEFAULT_REVIEW_SECTION) -
 # Parsing and validation
 # --------------------------------------------------------------------------
 def _rating(value: Any, where: str) -> int:
-    if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= 4:
+    # JSON 3.0 and 3 are the same number in JavaScript; accept both here too.
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) \
+            or value != int(value) or not 1 <= value <= 4:
         raise EventError(f"{where} must be an integer 1-4")
-    return value
+    return int(value)
 
 
 def _str_field(obj: Mapping[str, Any], key: str) -> str:
@@ -301,20 +307,32 @@ def _parse_import(seed: Any) -> dict[str, Any]:
     if origin not in ("sr-sm2", "sr-fsrs"):
         raise EventError("import.from must be sr-sm2 or sr-fsrs")
     interval = seed.get("interval")
-    if isinstance(interval, bool) or not isinstance(interval, (int, float)) or interval < 0:
+    if isinstance(interval, bool) or not isinstance(interval, (int, float)) \
+            or not math.isfinite(interval) or interval < 0:
         raise EventError("import.interval must be a number >= 0")
-    due = seed.get("due")
-    if not isinstance(due, str) or not due:
-        raise EventError("import.due must be a date or timestamp string")
+    for key in ("due", "last_review"):
+        value = seed.get(key)
+        if key == "last_review" and (value is None or value == ""):
+            continue
+        if not isinstance(value, str) or not (_DATE_RE.match(value) or _TS_RE.match(value)):
+            raise EventError(f"import.{key} must be a YYYY-MM-DD date or an RFC 3339 timestamp")
+        if _DATE_RE.match(value):
+            try:
+                date.fromisoformat(value)
+            except ValueError as exc:
+                raise EventError(f"import.{key} is not a valid date") from exc
+        else:
+            parse_ts(value)
     out = dict(seed)
     if origin == "sr-sm2":
         ease = seed.get("ease")
-        if isinstance(ease, bool) or not isinstance(ease, (int, float)) or ease <= 0:
+        if isinstance(ease, bool) or not isinstance(ease, (int, float)) or not math.isfinite(ease) \
+                or ease <= 0:
             raise EventError("import.ease must be a positive number")
     else:
         for key in ("stability", "difficulty"):
             v = seed.get(key)
-            if isinstance(v, bool) or not isinstance(v, (int, float)) or v <= 0:
+            if isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v) or v <= 0:
                 raise EventError(f"import.{key} must be a positive number")
     return out
 
@@ -362,6 +380,7 @@ def parse_event(obj: Any, source: str = "", line: int = 0) -> Event:
 def parse_log_text(name: str, text: str) -> tuple[list[Event], list[Issue]]:
     """Parse the content of one log file (``.jsonl`` or ``.md``)."""
     is_md = name.endswith(".md")
+    text = text.lstrip("\ufeff")
     events: list[Event] = []
     issues: list[Issue] = []
     for no, raw in enumerate(text.split("\n"), start=1):
@@ -371,15 +390,19 @@ def parse_log_text(name: str, text: str) -> tuple[list[Event], list[Issue]]:
         if is_md and not line.startswith("{"):
             continue
         try:
-            obj = json.loads(line)
-        except json.JSONDecodeError as exc:
-            issues.append(Issue(name, no, f"invalid JSON: {exc.msg}"))
+            obj = json.loads(line, parse_constant=_reject_constant)
+        except (json.JSONDecodeError, ValueError) as exc:
+            issues.append(Issue(name, no, f"invalid JSON: {getattr(exc, 'msg', exc)}"))
             continue
         try:
             events.append(parse_event(obj, name, no))
         except EventError as exc:
             issues.append(Issue(name, no, str(exc)))
     return events, issues
+
+
+def _reject_constant(name: str) -> Any:
+    raise ValueError(f"invalid JSON constant {name}")
 
 
 def log_files(review_dir: Path) -> list[Path]:
@@ -580,8 +603,8 @@ class Replayer:
 
 
 def _seed_time(value: str, tz: Any, day_start_hour: int) -> datetime:
-    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", value.strip()):
-        d = date.fromisoformat(value.strip())
+    if _DATE_RE.match(value):
+        d = date.fromisoformat(value)
         return datetime(d.year, d.month, d.day, day_start_hour, tzinfo=tz)
     return parse_ts(value)
 

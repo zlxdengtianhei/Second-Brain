@@ -283,10 +283,11 @@ The daily queue lists due cards first, then new cards.
     |---|---|
     | `depends_on: T`, `follows: T` | T before C |
     | `required_by: T`, `precedes: T` | C before T |
-    | `part_of: T` | T before C (the whole before its parts) |
-    | `has_part: T` | C before T |
 
-    Other relation types do not order cards. Edges to cards outside the
+    Other relation types (including `part_of` and `has_part`) do not order
+    cards. On a real vault of 8,615 cards, adding `part_of`/`has_part` edges in
+    either direction raised the number of cycle breaks from 323 to 624–720,
+    so they conflict with the prerequisite edges. Edges to cards outside the
     candidate set, and self-edges, are ignored.
   - Ties: among cards that are ready, the smallest (`rank`, `id`) comes first.
     `rank` is an integer the caller computes (for example from the domain's

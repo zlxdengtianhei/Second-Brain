@@ -3,7 +3,7 @@
   "note": "Status and queue cases shared by the Python and TypeScript registries. All expectations are hand-written from docs/review-registry.md sections 5 and 6.",
   "now": "2026-03-10T12:00:00.000+01:00",
   "cards": [
-    {"id": "ex_data_structures", "title": "Data structures overview", "domain": "algo", "kind": "concept", "rank": 0},
+    {"id": "ex_data_structures", "title": "Data structures overview", "domain": "algo", "kind": "concept", "rank": 9},
     {"id": "ex_array", "title": "Arrays", "domain": "algo", "kind": "concept", "rank": 1},
     {"id": "ex_loop_invariant", "title": "Loop invariants", "domain": "algo", "kind": "concept", "rank": 2},
     {"id": "ex_sorting", "title": "Sorting", "domain": "algo", "kind": "concept", "rank": 3, "relations": [["precedes", "ex_binary_search"]]},
@@ -45,7 +45,7 @@
       "new_per_day": 10,
       "domains": [],
       "due": ["ex_array", "ex_tcp"],
-      "new": ["ex_data_structures", "ex_loop_invariant", "ex_sorting", "ex_binary_search", "ex_hash_table", "ex_tls", "ex_cycle_a", "ex_cycle_b"],
+      "new": ["ex_loop_invariant", "ex_sorting", "ex_binary_search", "ex_hash_table", "ex_data_structures", "ex_tls", "ex_cycle_a", "ex_cycle_b"],
       "new_quota": 9,
       "new_available": 8,
       "cycle_breaks": ["ex_cycle_a"]
