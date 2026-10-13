@@ -37,7 +37,7 @@ In the ingest chain the width check uses an estimate (V14). The checks that need
 | V2 | size: flow and structure 4 to 9 nodes (3 when two paths merge), state 3 to 8 states, sequence 2 to 3 participants (a fourth does not fit the note width) | every IR |
 | V3 | every node, labelled edge and message cites parts the card has (`E`, `P1`..`Pn`) | every IR |
 | V4 | at least half of each label's words are found in the cited text (formula names and symbols count; `yes`, `no`, `start`, `end` and a few others are exempt) | every IR |
-| V5 | the diagram adds structure: a branch, merge or loop in a flow; a merge, loop or three or more links in a structure (a plain chain must cite three or more parts); three or more transitions in a state; three or more messages in a sequence; and a flow whose cited text says the work repeats draws the back edge | every IR |
+| V5 | the diagram adds structure: a branch, merge or loop in a flow; a merge, loop or three or more links in a structure (a plain chain must cite three or more parts); three or more transitions in a state; three or more messages in a sequence; and a flow whose cited text says the work repeats draws the back edge (words such as repeat, loop, until, iterate, 重复, 循环, 直到; a negation such as "does not repeat", a duplicate such as 重复项, or a name such as "circular queue" does not count) | every IR |
 | V6 | label widths: node labels at most 20 units, decision labels 10, edge labels 14, messages 20 (a character from U+2E80 up, such as CJK or full-width punctuation, counts 1; other characters 0.5) | every IR |
 | V7 | structure, state and sequence links are labelled; edges leaving a decision state their condition; a decision has two or more exits | every IR |
 | V8 | a card with two or more propositions gets a diagram that cites two or more parts | every IR |
@@ -79,7 +79,7 @@ The first line records which parts of the card the diagram cites and the first 8
 |---|---|
 | `schema` | prints the IR JSON Schema |
 | `audit-extract VAULT OUT` | reads every card (read-only) into `cards.jsonl`, and every Mermaid block into `blocks.jsonl` (`--language` picks the card headings) |
-| `audit-tier OUT` | reads `cards.jsonl` and the `tools/mermaid_check` results in `checks.jsonl`, and sorts every diagram into a tier: `keep`, `delete`, `review` or `redraw` (`--delete-domain` puts a whole domain into `delete`) |
+| `audit-tier OUT` | reads `cards.jsonl` and the `tools/mermaid_check` results in `checks.jsonl`, and sorts every diagram into a tier: `keep`, `delete`, `review` or `redraw` (`--delete-domain` puts a whole domain into `delete`). It writes `tiers.json`, which also holds each old flowchart's labels and edges for the redraw rule of `writeback`; run `audit-tier` again on an audit folder made by an earlier version |
 | `prune VAULT OUT` | removes the diagram section of `delete` cards (mechanism cards with three or more propositions go to the review pool instead), and turns wide left-to-right keepers top to bottom |
 | `pool OUT` | lists the cards to judge again: tiers `review` and `redraw`, plus the `delete` cards that prune left for review (`--refs FILE` limits it to the card refs in a file) |
 | `packets CARDS OUT` | builds model requests in batches of ten (`--batch`), and writes the pregated cards to `pregated.jsonl` |
@@ -90,9 +90,10 @@ The first line records which parts of the card the diagram cites and the first 8
 
 The write-back rules for a pool card:
 
-- **draw**: the new diagram replaces the diagram section. If the old diagram renders, the new one replaces it only when it cites `E` and two propositions (all of them, if the card has fewer). Otherwise the card follows the skip rules below, under a rule name that starts with `draw:weak/`.
+- **draw**: the new diagram replaces the diagram section. If the old diagram renders, the new one replaces it only when it cites `E` and two propositions (all of them, if the card has fewer). Otherwise the card follows the skip rules below, under a rule name that starts with `draw:weak/`. A new flowchart that only redraws the old one is not written either: it has the same shape (the same node and edge counts and the same in and out degrees) and at least 30% of the label words of the two diagrams are shared. That card follows the skip rules under a rule name that starts with `draw:same_as_old/`.
 - **skip**: in a removed domain (`--remove-domain`, or tiered `domain` by the audit), the old diagram is removed. On a `delete` card that was in the pool for review, it is removed too (`--delete-review-on-skip keep` keeps it). Otherwise an old diagram that renders stays, and one that does not is removed.
 - **old-diagram audit**: an old diagram that stays is removed if its audit says `restates` or `misleading`.
+- **wide old diagram**: an old diagram that stays and renders wider than 700 px is turned top to bottom when its direction is `LR` or `RL` (action `direction_tb`, rule name ending `+tb`). One that cannot be turned stays as it is, and its rule name ends `+wide`.
 - **rewrite still pending, or no outcome**: nothing changes. The old-diagram audit acts only when its file is passed with `--old-audit`.
 
 A typical run: `audit-extract`, then `node tools/mermaid_check/check.mjs OUT/blocks.jsonl OUT/checks.jsonl`, then `audit-tier`, `prune`, `pool`, `packets` on the pool, the model answers, `apply --checker`, the rewrites, `old-audit-packets` and `old-audit-apply`, and finally `writeback` without `--write` to read the plan, then with `--write`. Run `sb diagrams <command> --help` for every option.
