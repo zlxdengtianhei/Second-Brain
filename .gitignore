@@ -1,0 +1,14 @@
+runtime/
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+state/
+.env
+*.local.toml
+node_modules/
