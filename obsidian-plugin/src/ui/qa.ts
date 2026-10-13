@@ -13,7 +13,7 @@ const MAX_STORED_ANSWER = 2000;
 /** The questions to ask; a card without question lines is recalled from its title. */
 export function qaQuestions(loaded: { card: { title: string }; items: ReviewItem[]; essence: string }): ReviewItem[] {
 	if (loaded.items.length) return loaded.items;
-	const question = `复述：${loaded.card.title}`;
+	const question = t("qa.recall", { title: loaded.card.title });
 	return [{ q: questionId(question), question, answer: loaded.essence || loaded.card.title }];
 }
 
@@ -104,7 +104,7 @@ export class QaCardRunner {
 			const r = outcome.result;
 			suggested = r.suggestedRating;
 			const box = area.createDiv({ cls: "sbr-grade" });
-			if (r.feedback) box.createDiv({ text: `${t("qa.feedback")}：${r.feedback}` });
+			if (r.feedback) box.createDiv({ text: t("qa.feedback", { text: r.feedback }) });
 			const list = (label: string, xs: string[]) => {
 				if (!xs.length) return;
 				box.createDiv({ cls: "sbr-muted", text: label });

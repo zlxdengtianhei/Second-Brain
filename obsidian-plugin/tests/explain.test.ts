@@ -1,12 +1,15 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { setLocale } from "../src/i18n";
 import { cardBody, explainVars, learnerState, selectRelations, siblingTitles, truncate } from "../src/llm/explain-context";
-import { DEFAULT_EXPLAIN_TEMPLATE, parseTemplate, renderMessages } from "../src/llm/prompts";
+import { DEFAULT_EXPLAIN_TEMPLATE, DEFAULT_TEMPLATES, parseTemplate, renderMessages } from "../src/llm/prompts";
 import { parseEvent, replay } from "../src/registry";
 import { cardFromFrontmatter, type IndexedCard } from "../src/vault/card-index";
 import { buildTaxonomy } from "../src/vault/taxonomy";
 import { fixtureText } from "./fixtures";
 
 const rel = (type: string, target: string, tier?: string) => (tier ? { type, target, tier } : { type, target });
+
+afterEach(() => setLocale("zh"));
 
 describe("selectRelations", () => {
 	it("puts prerequisite types first, keeps card order otherwise, drops duplicate targets", () => {
@@ -49,6 +52,31 @@ describe("explain context", () => {
 		expect(user).not.toMatch(/\{\{\w+\}\}/);
 		expect(user).toContain("控制在 600 字以内");
 		expect(user.length).toBeLessThan(3000);
+	});
+	it("with the English interface: English labels and separators, and the English template", () => {
+		setLocale("en");
+		const body = cardBody(card, text, 50);
+		expect(body.startsWith("Title: Binary search\nKind: mechanism\nDomain: algo\nPillar: Searching\nTopic: Divide and conquer search\n")).toBe(true);
+		expect(body.endsWith("\n… (truncated)")).toBe(true);
+		const vars = explainVars({
+			card: { ...card, topic: "" }, cardText: text, limits, siblings: [], learnerState: "Not reviewed yet.", domainTitle: "",
+			related: [{ title: "Arrays", type: "depends_on", essence: "" }, { title: "Sorting", type: "similar_to", essence: "Order by a key." }],
+			pillar: tax.pillars.get("Searching"),
+		});
+		expect(vars.related_lines).toBe("- Arrays | depends_on | (no essence)\n- Sorting | similar_to | Order by a key.");
+		expect(vars.pillar_topics).toBe("Linear, Divide and conquer search");
+		expect([vars.topic, vars.sibling_titles, vars.domain_moc_title]).toEqual(["(unknown)", "(none)", "algo"]);
+		expect(explainVars({ card, cardText: text, limits, related: [], siblings: [], learnerState: "", domainTitle: "x" }).pillar_summary).toBe("(this pillar is not in the taxonomy files)");
+		const user = renderMessages(parseTemplate(DEFAULT_TEMPLATES.en.explain), vars).find((m) => m.role === "user")!.content;
+		expect(user).not.toMatch(/\{\{\w+\}\}/);
+		expect(user).toContain("Keep it under 600 words.");
+		// The card body is the card's own text (this fixture has Chinese headings); everything else is the plugin's.
+		expect(user.replace(vars.card_body, "")).not.toMatch(/[\u3000-\u9fff\uff00-\uffef]/);
+		const labels = { none: "none", summary: () => "s", missing: (s: string) => s };
+		const ev = parseEvent({ v: 1, ts: "2026-03-04T08:00:00.000+01:00", device: "obs-a", card: "c", mode: "qa", rating: 2, items: [{ q: "h:1", rating: 2, missing: ["a", "b"] }] });
+		expect(learnerState([...replay([ev]).states.get("c")!.recent], 1, labels)).toBe("s\na; b");
+		setLocale("zh");
+		expect(learnerState([...replay([ev]).states.get("c")!.recent], 1, labels)).toBe("s\na；b");
 	});
 	it("lists same-topic siblings of the same pillar", () => {
 		const mk = (id: string, topic: string, pillar = "Searching") => ({ ...card, id, title: id, topic, pillar }) as IndexedCard;

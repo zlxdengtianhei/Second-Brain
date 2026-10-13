@@ -64,7 +64,7 @@ export async function gradeAnswer(llm: LlmClient, tpl: Template, input: GradeInp
 			renderMessages(tpl, {
 				question: input.question,
 				answer: input.answer,
-				propositions: input.propositions || "（本卡没有命题节）",
+				propositions: input.propositions || t("ctx.noPropositions"),
 				user_answer: input.userAnswer,
 			}),
 			{ abort },

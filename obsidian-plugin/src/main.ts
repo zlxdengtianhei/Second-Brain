@@ -1,10 +1,11 @@
+import * as obsidian from "obsidian";
 import { normalizePath, Notice, Plugin, parseYaml, type TAbstractFile, TFile, type WorkspaceLeaf } from "obsidian";
 import { extractReviewItems, sectionText } from "./registry";
 import { AiProvidersClient } from "./llm/ai";
-import { DEFAULT_EXPLAIN_TEMPLATE, DEFAULT_GRADE_TEMPLATE, parseTemplate, type Template } from "./llm/prompts";
-import { t } from "./i18n";
+import { DEFAULT_TEMPLATES, parseTemplate, type Template } from "./llm/prompts";
+import { type Lang, locale, setLocale, t } from "./i18n";
 import { ReviewService } from "./service";
-import { mergeSettings, reviewDir, type ReviewSettings } from "./settings";
+import { icsFile, mergeSettings, reviewDir, type ReviewSettings, sectionNames, type SectionNames } from "./settings";
 import { type LoadedCard, ReviewModal } from "./ui/review-modal";
 import { buildIcs, reviewUri } from "./ics";
 import { planSrImport } from "./sr-import";
@@ -17,6 +18,7 @@ import type { IndexedCard } from "./vault/card-index";
 import { CardIndex } from "./vault/card-index";
 import { EventStore, newDeviceId } from "./vault/event-store";
 import { IdbCache } from "./vault/idb-cache";
+import { appLanguage, catalogPath, contentLanguage, detectVaultLanguage, interfaceLanguage } from "./vault/language";
 import { buildTaxonomy } from "./vault/taxonomy";
 
 const DEVICE_KEY = "secondbrain-review:device";
@@ -29,10 +31,14 @@ export default class SecondBrainReviewPlugin extends Plugin {
 	index!: CardIndex;
 	service!: ReviewService;
 	llm!: AiProvidersClient;
+	/** The vault's language (catalog record or map pages); null when unknown. */
+	vaultLanguage: Lang | null = null;
 	private reloadTimer: number | null = null;
 
 	async onload(): Promise<void> {
 		this.settings = mergeSettings(await this.loadData());
+		// Before anything registers a name: command names keep the language they were registered in.
+		await this.detectLanguage();
 		this.index = new CardIndex(this.app, () => this.settings.knowledge);
 		const store = new EventStore(this.app.vault.adapter, () => reviewDir(this.settings), this.deviceId(), () => this.settings.logFormat);
 		const cache = new IdbCache(() => `${(this.app as { appId?: string }).appId ?? this.app.vault.getName()}|${reviewDir(this.settings)}|${store.device}`);
@@ -74,6 +80,9 @@ export default class SecondBrainReviewPlugin extends Plugin {
 		new Reminder(this).start();
 		const onFileChange = (file: TAbstractFile) => {
 			if (this.service.store.isLogPath(file.path) && file.path !== this.service.store.ownPath()) this.scheduleReload();
+			if (file.path === catalogPath(this.settings.data)) {
+				void this.detectLanguage().then((changed) => changed && this.service.notify());
+			}
 			if (file instanceof TFile && /\.ya?ml$/.test(file.path) && file.path.startsWith(this.settings.taxonomy + "/")) {
 				void this.loadTaxonomy();
 			}
@@ -81,6 +90,38 @@ export default class SecondBrainReviewPlugin extends Plugin {
 		this.registerEvent(this.app.vault.on("modify", onFileChange));
 		this.registerEvent(this.app.vault.on("create", onFileChange));
 		this.registerEvent(this.app.vault.on("delete", onFileChange));
+	}
+
+	/** Obsidian's interface language; getLanguage() exists from Obsidian 1.8.7, older versions keep it in local storage. */
+	appLanguage(): Lang {
+		const api = obsidian as { getLanguage?: () => string };
+		return appLanguage(typeof api.getLanguage === "function" ? api.getLanguage() : window.localStorage.getItem("language"));
+	}
+
+	/** Read the vault's language and set the interface language. True when either changed. */
+	async detectLanguage(): Promise<boolean> {
+		const before = [this.vaultLanguage, locale()].join();
+		this.vaultLanguage = await detectVaultLanguage(this.app.vault.adapter, this.settings);
+		this.applyLanguage();
+		return before !== [this.vaultLanguage, locale()].join();
+	}
+
+	/** Apply the interface language setting (called again when the setting changes). */
+	applyLanguage(): void {
+		setLocale(interfaceLanguage(this.settings.language, this.vaultLanguage, this.appLanguage()));
+	}
+
+	/** Language of card headings and default file names: the vault's, else the interface's. */
+	contentLanguage(): Lang {
+		return contentLanguage(this.vaultLanguage, locale());
+	}
+
+	sections(): SectionNames {
+		return sectionNames(this.settings, this.contentLanguage());
+	}
+
+	icsFile(): string {
+		return icsFile(this.settings, this.contentLanguage());
 	}
 
 	/** This device's writer id; kept in device-local storage so sync never copies it. */
@@ -118,6 +159,7 @@ export default class SecondBrainReviewPlugin extends Plugin {
 	}
 
 	async refreshAll(): Promise<void> {
+		await this.detectLanguage();
 		this.index.rebuild();
 		await Promise.all([this.loadTaxonomy(), this.service.reload()]);
 	}
@@ -142,12 +184,13 @@ export default class SecondBrainReviewPlugin extends Plugin {
 		const file = this.app.vault.getAbstractFileByPath(card.path);
 		if (!(file instanceof TFile)) throw new Error(`card file not found: ${card.path}`);
 		const text = await this.app.vault.cachedRead(file);
+		const names = this.sections();
 		return {
 			card,
 			text,
-			items: extractReviewItems(text, this.settings.reviewSection),
-			essence: sectionText(text, this.settings.essenceSection),
-			propositions: sectionText(text, this.settings.propositionsSection),
+			items: extractReviewItems(text, names.review),
+			essence: sectionText(text, names.essence),
+			propositions: sectionText(text, names.propositions),
 		};
 	}
 
@@ -172,7 +215,7 @@ export default class SecondBrainReviewPlugin extends Plugin {
 		if (view instanceof ExplainView) await view.explain(card);
 	}
 
-	/** A template from the vault, or the built-in default when the file is missing. */
+	/** A template from the vault, or the built-in default (in the interface language) when the file is missing. */
 	private async template(path: string, fallback: string): Promise<Template> {
 		const adapter = this.app.vault.adapter;
 		try {
@@ -184,11 +227,11 @@ export default class SecondBrainReviewPlugin extends Plugin {
 	}
 
 	gradeTemplate(): Promise<Template> {
-		return this.template(this.settings.gradeTemplate, DEFAULT_GRADE_TEMPLATE);
+		return this.template(this.settings.gradeTemplate, DEFAULT_TEMPLATES[locale()].grade);
 	}
 
 	explainTemplate(): Promise<Template> {
-		return this.template(this.settings.explainTemplate, DEFAULT_EXPLAIN_TEMPLATE);
+		return this.template(this.settings.explainTemplate, DEFAULT_TEMPLATES[locale()].explain);
 	}
 
 	/** Turn Spaced Repetition schedules in cards into import events (cards are not modified). */
@@ -209,7 +252,7 @@ export default class SecondBrainReviewPlugin extends Plugin {
 		scanning.hide();
 		if (plan.invalid.length) {
 			console.warn("[secondbrain-review] SR data that cannot be read (not imported):", plan.invalid.map((i) => ({ card: i.card.id, path: i.card.path, reason: i.reason })));
-			new Notice(t("import.invalid", { n: plan.invalid.length, first: plan.invalid.slice(0, 3).map((i) => i.card.title).join("、") }), 15_000);
+			new Notice(t("import.invalid", { n: plan.invalid.length, first: plan.invalid.slice(0, 3).map((i) => i.card.title).join(t("list.sep")) }), 15_000);
 		}
 		if (!plan.found.length) return void new Notice(t("import.none"));
 		new ConfirmModal(this.app, t("import.confirm", { n: plan.found.length, skipped: plan.skipped, invalid: plan.invalid.length }), t("import.go"), async () => {
@@ -228,7 +271,7 @@ export default class SecondBrainReviewPlugin extends Plugin {
 		} catch (e) {
 			return void new Notice(String((e as Error).message ?? e));
 		}
-		const path = normalizePath(s.icsPath);
+		const path = normalizePath(this.icsFile());
 		const dir = path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "";
 		const adapter = this.app.vault.adapter;
 		if (dir && !(await adapter.exists(dir))) await adapter.mkdir(dir);

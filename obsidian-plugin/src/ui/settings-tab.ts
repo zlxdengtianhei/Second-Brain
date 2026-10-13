@@ -1,7 +1,9 @@
 // Settings tab.
 import { type App, PluginSettingTab, Setting } from "obsidian";
-import { t } from "../i18n";
+import { LANGUAGE_NAMES, locale, t } from "../i18n";
 import type SecondBrainReviewPlugin from "../main";
+import { LANGUAGE_DEFAULTS } from "../settings";
+import { interfaceLanguage } from "../vault/language";
 
 export class ReviewSettingTab extends PluginSettingTab {
 	constructor(
@@ -20,15 +22,18 @@ export class ReviewSettingTab extends PluginSettingTab {
 			await p.saveData(s);
 			p.service.notify();
 		};
-		const text = (name: string, value: string, set: (v: string) => void, desc = "") =>
+		const text = (name: string, value: string, set: (v: string) => void, desc = "", placeholder = "") =>
 			new Setting(containerEl)
 				.setName(name)
 				.setDesc(desc)
 				.addText((c) =>
-					c.setValue(value).onChange(async (v) => {
-						set(v.trim());
-						await p.saveData(s);
-					}),
+					c
+						.setPlaceholder(placeholder)
+						.setValue(value)
+						.onChange(async (v) => {
+							set(v.trim());
+							await p.saveData(s);
+						}),
 				);
 		const num = (name: string, value: number, set: (v: number) => void, min = 0) =>
 			new Setting(containerEl).setName(name).addText((c) => {
@@ -41,6 +46,28 @@ export class ReviewSettingTab extends PluginSettingTab {
 					}
 				});
 			});
+
+		const auto = interfaceLanguage("auto", p.vaultLanguage, p.appLanguage());
+		new Setting(containerEl)
+			.setName(t("settings.language"))
+			.setDesc(t("settings.language.desc"))
+			.addDropdown((dd) =>
+				dd
+					.addOption("auto", t("settings.language.auto", { lang: LANGUAGE_NAMES[auto] }))
+					.addOption("en", LANGUAGE_NAMES.en)
+					.addOption("zh", LANGUAGE_NAMES.zh)
+					.setValue(s.language)
+					.onChange(async (v) => {
+						s.language = v === "en" || v === "zh" ? v : "auto";
+						await p.saveData(s);
+						const before = locale();
+						p.applyLanguage();
+						if (locale() !== before) {
+							this.display();
+							p.service.notify();
+						}
+					}),
+			);
 
 		new Setting(containerEl).setName(t("settings.study")).setHeading();
 		num(t("settings.newPerDay"), s.newPerDay, (v) => (s.newPerDay = v));
@@ -104,13 +131,19 @@ export class ReviewSettingTab extends PluginSettingTab {
 			}),
 		);
 		text(t("settings.reminderTime"), s.reminderTime, (v) => (s.reminderTime = v));
+		const lang = p.contentLanguage();
+		const defaults = LANGUAGE_DEFAULTS[lang];
 		new Setting(containerEl)
 			.setName(t("settings.icsPath"))
+			.setDesc(t("settings.icsDefault.desc", { value: defaults.icsPath }))
 			.addText((c) =>
-				c.setValue(s.icsPath).onChange(async (v) => {
-					s.icsPath = v.trim();
-					await p.saveData(s);
-				}),
+				c
+					.setPlaceholder(defaults.icsPath)
+					.setValue(s.icsPath)
+					.onChange(async (v) => {
+						s.icsPath = v.trim();
+						await p.saveData(s);
+					}),
 			)
 			.addButton((b) => b.setButtonText(t("settings.icsWrite")).onClick(() => void p.writeIcs()));
 
@@ -118,9 +151,10 @@ export class ReviewSettingTab extends PluginSettingTab {
 		text(t("settings.knowledge"), s.knowledge, (v) => (s.knowledge = v));
 		text(t("settings.taxonomy"), s.taxonomy, (v) => (s.taxonomy = v));
 		text(t("settings.data"), s.data, (v) => (s.data = v));
-		text(t("settings.section"), s.reviewSection, (v) => (s.reviewSection = v));
-		text(t("settings.essenceSection"), s.essenceSection, (v) => (s.essenceSection = v));
-		text(t("settings.propositionsSection"), s.propositionsSection, (v) => (s.propositionsSection = v));
+		const sectionDesc = (value: string) => t("settings.sectionDefault.desc", { value });
+		text(t("settings.section"), s.reviewSection, (v) => (s.reviewSection = v), sectionDesc(defaults.reviewSection), defaults.reviewSection);
+		text(t("settings.essenceSection"), s.essenceSection, (v) => (s.essenceSection = v), sectionDesc(defaults.essenceSection), defaults.essenceSection);
+		text(t("settings.propositionsSection"), s.propositionsSection, (v) => (s.propositionsSection = v), sectionDesc(defaults.propositionsSection), defaults.propositionsSection);
 		new Setting(containerEl)
 			.setName(t("settings.logFormat"))
 			.setDesc(t("settings.logFormat.desc"))

@@ -1,12 +1,15 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { setLocale } from "../src/i18n";
 import type { ChatMessage, LlmClient, Readiness } from "../src/llm/ai";
 import { gradeAnswer, parseGrade } from "../src/llm/grading";
-import { DEFAULT_EXPLAIN_TEMPLATE, DEFAULT_GRADE_TEMPLATE, fill, parseTemplate, renderMessages } from "../src/llm/prompts";
+import { DEFAULT_EXPLAIN_TEMPLATE, DEFAULT_GRADE_TEMPLATE, DEFAULT_TEMPLATES, fill, parseTemplate, renderMessages } from "../src/llm/prompts";
 import { itemRecord, qaQuestions } from "../src/ui/qa";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 const PROMPTS = fileURLToPath(new URL("../../examples/prompts/", import.meta.url));
+
+afterEach(() => setLocale("zh"));
 
 class FakeLlm implements LlmClient {
 	calls: ChatMessage[][] = [];
@@ -28,6 +31,11 @@ describe("templates", () => {
 	it("built-in defaults equal the example files", () => {
 		expect(parseTemplate(readFileSync(PROMPTS + "grade.md", "utf8"))).toEqual(parseTemplate(DEFAULT_GRADE_TEMPLATE));
 		expect(parseTemplate(readFileSync(PROMPTS + "explain.md", "utf8"))).toEqual(parseTemplate(DEFAULT_EXPLAIN_TEMPLATE));
+	});
+	it("English built-in defaults equal the English example files", () => {
+		expect(parseTemplate(readFileSync(PROMPTS + "grade.en.md", "utf8"))).toEqual(parseTemplate(DEFAULT_TEMPLATES.en.grade));
+		expect(parseTemplate(readFileSync(PROMPTS + "explain.en.md", "utf8"))).toEqual(parseTemplate(DEFAULT_TEMPLATES.en.explain));
+		expect(DEFAULT_TEMPLATES.zh).toEqual({ grade: DEFAULT_GRADE_TEMPLATE, explain: DEFAULT_EXPLAIN_TEMPLATE });
 	});
 	it("English examples use the same placeholders", () => {
 		const names = (s: string) => [...new Set([...s.matchAll(/\{\{(\w+)\}\}/g)].map((m) => m[1]))].sort();
@@ -78,6 +86,21 @@ describe("gradeAnswer", () => {
 		expect(user).toContain("my answer");
 		expect(user).toContain("- P1");
 	});
+	it("with the English interface, the English template and an English note for a card without propositions", async () => {
+		setLocale("en");
+		const llm = new FakeLlm('{"verdict":"miss","suggested_rating":1}');
+		await gradeAnswer(llm, parseTemplate(DEFAULT_TEMPLATES.en.grade), { ...input, propositions: "" });
+		const user = llm.calls[0].find((m) => m.role === "user")!.content;
+		expect(user).toContain("Question: Q?");
+		expect(user).toContain("Card propositions:\n(this card has no propositions section)");
+		const failed = await gradeAnswer(new FakeLlm(new Error("timeout")), tpl, input);
+		expect(!failed.graded && failed.reason).toBe("The model call failed: timeout");
+	});
+	it("a card without propositions gets the same Chinese note as before", async () => {
+		const llm = new FakeLlm('{"verdict":"miss","suggested_rating":1}');
+		await gradeAnswer(llm, tpl, { ...input, propositions: "" });
+		expect(llm.calls[0].find((m) => m.role === "user")!.content).toContain("本卡命题：\n（本卡没有命题节）");
+	});
 	it("falls back to self-rating when the model is missing, fails, or breaks the format", async () => {
 		expect(await gradeAnswer(new FakeLlm("x", { ok: false, reason: "no provider" }), tpl, input)).toEqual({ graded: false, reason: "no provider" });
 		const failed = await gradeAnswer(new FakeLlm(new Error("timeout")), tpl, input);
@@ -94,6 +117,9 @@ describe("Q&A records", () => {
 		expect(qs).toHaveLength(1);
 		expect(qs[0].answer).toBe("Halve the interval.");
 		expect(qs[0].q).toMatch(/^h:[0-9a-f]{8}$/);
+		expect(qs[0].question).toBe("复述：Binary search");
+		setLocale("en");
+		expect(qaQuestions({ card: { title: "Binary search" }, items: [], essence: "" })[0]).toMatchObject({ question: "Recall: Binary search", answer: "Binary search" });
 	});
 	it("records grader, verdict and missing points", () => {
 		const item = { q: "h:1", question: "Q", answer: "A" };

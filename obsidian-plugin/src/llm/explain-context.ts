@@ -1,4 +1,6 @@
 // Context for "explain this card": the card, its related cards' essence, its place in the map, learner state.
+// Labels are in the interface language, the same language as the built-in template.
+import { t } from "../i18n";
 import { stripFrontmatter } from "../registry";
 import type { IndexedCard, Relation } from "../vault/card-index";
 import type { PillarInfo } from "../vault/taxonomy";
@@ -73,31 +75,34 @@ export function truncate(text: string, max: number): string {
 /** Card text for the model: a short header from the front matter, then the body (no sources, no hashes). */
 export function cardBody(card: IndexedCard, text: string, maxChars: number): string {
 	const head = [
-		`标题：${card.title}`,
-		card.kind && `类型：${card.kind}`,
-		card.domain && `领域：${card.domain}`,
-		card.pillar && `支柱：${card.pillar}`,
-		card.topic && `主题：${card.topic}`,
+		t("ctx.title", { v: card.title }),
+		card.kind && t("ctx.kind", { v: card.kind }),
+		card.domain && t("ctx.domain", { v: card.domain }),
+		card.pillar && t("ctx.pillar", { v: card.pillar }),
+		card.topic && t("ctx.topic", { v: card.topic }),
 	].filter(Boolean);
 	let body = stripFrontmatter(text).trim();
-	if (body.length > maxChars) body = body.slice(0, maxChars) + "\n…（已截断）";
+	if (body.length > maxChars) body = body.slice(0, maxChars) + "\n" + t("ctx.truncated");
 	return `${head.join("\n")}\n\n${body}`;
 }
 
 /** Template variables (see examples/prompts/explain.md). */
 export function explainVars(inp: ExplainInputs): Record<string, string> {
 	const lim = inp.limits;
-	const related = inp.related.slice(0, lim.maxRelated).map((r) => `- ${r.title}｜${r.type}｜${truncate(r.essence || "（无本质）", lim.essenceChars)}`);
+	const sep = t("ctx.relatedSep");
+	const related = inp.related.slice(0, lim.maxRelated).map((r) => `- ${r.title}${sep}${r.type}${sep}${truncate(r.essence || t("ctx.noEssence"), lim.essenceChars)}`);
+	const unknown = t("ctx.unknown");
+	const none = t("ctx.none");
 	return {
 		learner_state: inp.learnerState,
 		card_body: cardBody(inp.card, inp.cardText, lim.cardChars),
-		domain_moc_title: inp.domainTitle || inp.card.domain || "（未知）",
-		pillar_title: inp.pillar?.name ?? inp.card.pillar ?? "（未知）",
-		pillar_summary: inp.pillar?.why || "（体系文件里没有这个支柱）",
-		pillar_topics: inp.pillar?.topics.join("、") || "（无）",
-		topic: inp.card.topic || "（未知）",
-		sibling_titles: inp.siblings.slice(0, lim.siblings).join("、") || "（无）",
-		related_lines: related.join("\n") || "（无）",
+		domain_moc_title: inp.domainTitle || inp.card.domain || unknown,
+		pillar_title: inp.pillar?.name ?? inp.card.pillar ?? unknown,
+		pillar_summary: inp.pillar?.why || t("ctx.noPillar"),
+		pillar_topics: inp.pillar?.topics.join(t("list.sep")) || none,
+		topic: inp.card.topic || unknown,
+		sibling_titles: inp.siblings.slice(0, lim.siblings).join(t("list.sep")) || none,
+		related_lines: related.join("\n") || none,
 		max_chars: String(lim.answerChars),
 	};
 }
@@ -126,6 +131,6 @@ export function learnerState(
 	const date = new Date(last.ms + last.offsetMin * 60_000).toISOString().slice(0, 10);
 	const lines = [labels.summary(Math.max(reps, reviews.length), date, last.rating!)];
 	const withMissing = reviews.find((e) => e.missing.length);
-	if (withMissing) lines.push(labels.missing(withMissing.missing.slice(0, 6).join("；")));
+	if (withMissing) lines.push(labels.missing(withMissing.missing.slice(0, 6).join(t("ctx.missingSep"))));
 	return lines.join("\n");
 }

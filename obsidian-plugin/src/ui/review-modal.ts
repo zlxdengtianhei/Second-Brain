@@ -131,7 +131,7 @@ export class ReviewModal extends Modal {
 	private async showFlip(root: HTMLElement, loaded: LoadedCard): Promise<void> {
 		const body = root.createDiv();
 		const qs = loaded.items.length ? loaded.items : null;
-		if (!qs) body.createDiv({ cls: "sbr-muted", text: t("session.noItems", { section: this.plugin.settings.reviewSection }) });
+		if (!qs) body.createDiv({ cls: "sbr-muted", text: t("session.noItems", { section: this.plugin.sections().review }) });
 		const answers: HTMLElement[] = [];
 		if (qs) {
 			for (const item of qs) {

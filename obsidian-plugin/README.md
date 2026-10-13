@@ -7,7 +7,9 @@ from that log, so card files are never modified. The `sb review` commands of the
 Python package (`status`, `queue`, `log`, `import-sr`) read and write the same log, so
 reviews a terminal agent logs with `sb review log` count too.
 
-The interface is in Chinese. Strings live in `src/i18n.ts` if you want to add a locale.
+The interface is in English or Chinese. By default it follows the vault's language, so an
+English vault gets the English interface and a Chinese vault the Chinese one. The card section
+headings the plugin reads follow the vault's language too (see [Language](#language)).
 
 ## What it does
 
@@ -43,16 +45,39 @@ To start a session at once: `obsidian://secondbrain-review?mode=flip` or
    provider there (type, key, model, test), then pick it in this plugin's settings.
    Without it, flip review and the dashboard work; Q&A answers are rated by you.
 
+## Language
+
+The vault's language is the one `sb init` or `sb language --set` recorded in
+`<data>/secondbrain/catalog.json`. A vault made before that record existed is detected from
+its generated map pages (the `.md` files in the folder that holds the taxonomy folder, for
+example `20_MOCs`), the same way the `sb` command does it. The plugin reads the language when
+Obsidian starts, when the catalog changes, and when you click Refresh on the dashboard.
+
+| What | Follows | English vault | Chinese vault |
+|---|---|---|---|
+| Interface (views, buttons, notices, settings, status bar, calendar event text) | The **Interface language** setting. `Auto` (the default) uses the vault's language; when the vault has no language, Obsidian's language | English | Chinese |
+| Built-in grading and explanation templates, and the context lines the plugin adds to them | The interface language | `examples/prompts/*.en.md` | `examples/prompts/*.md` |
+| Section headings the plugin reads, when the setting is empty | The vault's language; when the vault has no language, the interface language | `Review cards`, `Essence`, `Propositions` | `复习卡`, `本质`, `命题` |
+| Calendar file, when the setting is empty | Same as the section headings | `90_Meta/review-reminder.ics` | `90_Meta/复习提醒.ics` |
+
+A heading or calendar path that you type in the settings always wins. The section headings
+are the ones `sb` writes into cards (`src/secondbrain/cards.py`); a test checks that the two
+tables agree. Command names take the interface language when Obsidian starts, so after you
+change the setting, restart Obsidian to rename the commands.
+
+Strings live in `src/i18n.ts`. To add a language, add a table with the same keys.
+
 ## Settings
 
 | Setting | Default |
 |---|---|
+| Interface language | `Auto` (the vault's language, else Obsidian's) |
 | Knowledge folder, taxonomy folder (pillar YAML), data folder | `10_Knowledge`, `20_MOCs/_pillars`, `_data` |
-| Section names: `question::answer` lines, essence, propositions | `复习卡`, `本质`, `命题` |
+| Section names: `question::answer` lines, essence, propositions | Empty: the headings of the vault's language (see [Language](#language)) |
 | New cards per day; study domains (new cards come only from these, in prerequisite order) | 10; all domains |
 | Model (from AI Providers); grading and explanation templates | none; `90_Meta/prompts/grade.md`, `90_Meta/prompts/explain.md` (built-in defaults when missing; see `examples/prompts/`) |
 | Explanation limits: related cards, essence length, same-topic cards, card length, answer length | 8, 120, 10, 6000, 600 |
-| Daily notice; calendar time and file | on; `09:00`, `90_Meta/复习提醒.ics` |
+| Daily notice; calendar time and file | on; `09:00`, empty (the file name of the vault's language) |
 | Log format | `jsonl` (choose `md` if your sync service only syncs notes) |
 
 ## Data
@@ -75,30 +100,34 @@ Unit tests cannot load the plugin inside Obsidian. Run these steps on a copy of 
 vault, once on desktop and once on a phone. Keep the developer console open
 (desktop: Ctrl/Cmd+Shift+I) and note any error.
 
+The steps name the English labels; with the Chinese interface the labels are the Chinese
+ones in `src/i18n.ts` (for example `Start review` is `开始复习`, `Good` is `记得`).
+
 1. **Install.** Copy the three files, enable the plugin. Expect: no console error; a
-   status-bar item `复习 N` appears after the vault has loaded. Note how many seconds
-   that takes.
+   status-bar item `Review N` appears after the vault has loaded. Note how many seconds
+   that takes. In a Chinese vault, the interface and the section headings are Chinese; in
+   an English vault (for example `examples/vault`), English.
 2. **Dashboard.** Click the ribbon icon. Expect: the side view shows due, today not
    reviewed, new cards (started / limit), reviewed today, streak, and one row per
    domain. In a new vault every card is unlearned and due is 0.
 3. **Note block.** Add the `secondbrain-review` code block to `HOME.md`. Expect: the
    same numbers in reading view and live preview, and a scrollable domain table.
-4. **Flip review.** Click 开始复习. Expect: questions render (formulas, links);
+4. **Flip review.** Click Start review. Expect: questions render (formulas, links);
    space shows the answers; each rating button shows an interval; keys 1–4 rate.
    After each rating `_data/review/events-obs-xxxxxx.jsonl` has one more line with
-   `"mode":"flip"` and that rating. A card rated 重来 comes back at the end of the
+   `"mode":"flip"` and that rating. A card rated Again comes back at the end of the
    session.
 5. **Study plan.** In settings, turn on one or two study domains and change new
    cards per day. Expect: new cards come only from those domains, in their order.
 6. **Q&A review.** Install AI Providers, add a provider, pick it in this plugin's
-   settings, click 问答复习. Answer one question well and one badly. Expect: the
+   settings, click Q&A review. Answer one question well and one badly. Expect: the
    suggested rating is highlighted, you can pick another, and after the last
    question one `"mode":"qa"` line is written with one item per question and the
    lowest rating as the card rating. Then select a model that does not exist (or go
-   offline): expect "未评分" with the reason, and you can still rate.
-7. **Explain.** Open a card and run 讲解当前卡. Expect: the answer streams into the
-   side view; the line above shows the context size and related-card count; a
-   follow-up question gets an answer that uses the earlier one; 停止 stops it.
+   offline): expect "Not graded" with the reason, and you can still rate.
+7. **Explain.** Open a card and run Explain the current card. Expect: the answer streams
+   into the side view; the line above shows the context size and related-card count; a
+   follow-up question gets an answer that uses the earlier one; Stop stops it.
 8. **Reminders.** Next day, open Obsidian. Expect: one notice with the counts, and no
    second one that day. In settings, write the calendar file and import it into the
    phone and desktop calendars. Expect: a reminder at the set time; tapping the link
@@ -108,7 +137,11 @@ vault, once on desktop and once on a phone. Keep the developer console open
 10. **Two devices.** Review a few cards on each device, let sync finish, reopen.
     Expect: both show the same due counts and card states. With Obsidian Sync, turn on
     "Sync all other types" first, or switch the log format to `md`.
-11. **Spaced Repetition import** (only if your cards have `<!--SR:...-->` comments or
+11. **Language.** In settings, set Interface language to the other language. Expect: the
+    settings tab, the dashboard and the status bar change at once; the section headings
+    the plugin reads do not change; after a restart, the command names change too. Set it
+    back to Auto.
+12. **Spaced Repetition import** (only if your cards have `<!--SR:...-->` comments or
     `sr-*` front matter). For an existing vault, prefer the CLI before installing the
     plugin: `sb review import-sr --dry-run`, then `sb review import-sr`. In the plugin,
     run the import command. Expect: a confirmation with the number of cards; cards whose
@@ -120,7 +153,7 @@ vault, once on desktop and once on a phone. Keep the developer console open
 
 ```sh
 npm ci
-npm test        # vitest: shared vectors with Python, data layer and cache, LLM parsing, review UI flows (happy-dom)
+npm test        # vitest: shared vectors with Python, data layer and cache, LLM parsing, both languages, review UI flows (happy-dom)
 npm run build   # type check + production bundle
 ```
 

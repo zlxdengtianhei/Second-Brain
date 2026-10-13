@@ -31,7 +31,7 @@ export class ExplainView extends ItemView {
 	}
 
 	getDisplayText(): string {
-		return this.card ? `${t("explain.title")}：${this.card.title}` : t("explain.title");
+		return this.card ? t("explain.titleCard", { title: this.card.title }) : t("explain.title");
 	}
 
 	getIcon(): string {
@@ -81,6 +81,7 @@ export class ExplainView extends ItemView {
 	private async buildMessages(card: IndexedCard): Promise<ChatMessage[] | null> {
 		const p = this.plugin;
 		const s = p.settings;
+		const essenceSection = p.sections().essence;
 		let text: string;
 		try {
 			text = (await p.loadCard(card)).text;
@@ -94,7 +95,7 @@ export class ExplainView extends ItemView {
 			let essence = "";
 			if (target) {
 				const file = p.app.vault.getAbstractFileByPath(target.path);
-				if (file instanceof TFile) essence = sectionText(await p.app.vault.cachedRead(file), s.essenceSection);
+				if (file instanceof TFile) essence = sectionText(await p.app.vault.cachedRead(file), essenceSection);
 			}
 			related.push({ title: target?.title ?? rel.target, type: rel.type, essence });
 		}

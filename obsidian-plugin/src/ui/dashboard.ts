@@ -1,6 +1,6 @@
 // Today dashboard: one model, rendered in the side view and in ```secondbrain-review``` code blocks.
 import type { Counts, Queue, Summary } from "../registry";
-import { t } from "../i18n";
+import { locale, t } from "../i18n";
 
 export interface DomainRow {
 	domain: string;
@@ -55,7 +55,7 @@ export function dashboardModel(
 	rows.sort((a, b) => {
 		if (a.studying !== b.studying) return a.studying ? -1 : 1;
 		if (a.studying) return opts.studyDomains.indexOf(a.domain) - opts.studyDomains.indexOf(b.domain);
-		return a.label.localeCompare(b.label, "zh");
+		return a.label.localeCompare(b.label, locale());
 	});
 	return {
 		loaded: opts.loaded,
@@ -125,7 +125,7 @@ export function renderDashboard(el: HTMLElement, m: DashboardModel, actions: Das
 
 	const buttons = el.createDiv({ cls: "sbr-buttons" });
 	const left = m.due + m.newLeft;
-	const flip = buttons.createEl("button", { cls: "mod-cta", text: left ? `${t("btn.flip")}（${left}）` : t("btn.flip") });
+	const flip = buttons.createEl("button", { cls: "mod-cta", text: left ? t("btn.flipCount", { n: left }) : t("btn.flip") });
 	flip.onclick = () => actions.flip();
 	const qa = buttons.createEl("button", { text: t("btn.qa") });
 	qa.onclick = () => actions.qa();
