@@ -30,12 +30,15 @@ from typing import Any, Iterable, Iterator
 
 import yaml
 
+from .. import config
+from ..cards import HEADINGS
 from .text import tokens
 
 _Loader = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
 FENCE = re.compile(r"```mermaid\n(.*?)```", re.S)
 _PROP = re.compile(r"^- P(\d+)\.\s*(.+)$", re.M)
 _WIKI = re.compile(r"\[\[([^\]|#]+)(?:#[^\]|]*)?(?:\|[^\]]*)?\]\]")
+LANGUAGES = tuple(HEADINGS)
 
 
 @dataclass(frozen=True)
@@ -43,12 +46,20 @@ class CardFormat:
     """Where the card parts live: the knowledge folder and the section headings."""
 
     knowledge_dir: str = "10_Knowledge"
-    essence: str = "本质"
-    propositions: str = "命题"
-    diagram: str = "图"
-    related: str = "相关"
+    essence: str = HEADINGS["zh"]["essence"]
+    propositions: str = HEADINGS["zh"]["propositions"]
+    diagram: str = HEADINGS["zh"]["diagram"]
+    related: str = HEADINGS["zh"]["related"]
+
+    @classmethod
+    def for_language(cls, language: str, knowledge_dir: str = "10_Knowledge") -> "CardFormat":
+        """The headings cards.render_card writes for ``language`` (en or zh)."""
+        h = HEADINGS[language]
+        return cls(knowledge_dir, h["essence"], h["propositions"], h["diagram"], h["related"])
 
 
+# The library default is the Chinese vault these tools were first run on; the
+# command line picks the format by language (card_format).
 DEFAULT_FORMAT = CardFormat()
 
 
@@ -78,6 +89,49 @@ def sections(body: str) -> dict[str, str]:
         buf.append(line)
     out[cur] = "\n".join(buf)
     return out
+
+
+def heading_counts(paths: Iterable[Path]) -> Counter:
+    """Per language, how many of these cards have that language's essence heading."""
+    counts: Counter = Counter()
+    for p in paths:
+        try:
+            secs = sections(split_frontmatter(Path(p).read_bytes().decode("utf-8"))[1])
+        except (OSError, UnicodeDecodeError):
+            continue
+        counts.update(lang for lang in LANGUAGES if HEADINGS[lang]["essence"] in secs)
+    return counts
+
+
+def card_format(vault: Path, language: str | None = None, refs: Iterable[str] | None = None,
+                knowledge_dir: str = DEFAULT_FORMAT.knowledge_dir) -> tuple[CardFormat, str, str]:
+    """The card format for a vault, its language, and where the language came from.
+
+    The language is ``language`` when given (the --language flag); else
+    ``[cards] language`` of a loaded config file; else the headings the cards
+    use. ``refs`` are the vault-relative cards a command will touch (default:
+    every card under the knowledge folder). Raises ValueError when those cards
+    use another language's headings and none of the chosen one's, so a wrong
+    setting cannot read every card as empty.
+    """
+    root = Path(vault)
+    paths = [root / r for r in refs] if refs is not None else sorted((root / knowledge_dir).rglob("*.md"))
+    counts = heading_counts(paths)
+    settings = config.current()
+    if language:
+        source = "--language"
+    elif settings.source is not None:
+        language, source = settings.card_language, f"[cards] language in {settings.source}"
+    elif counts:
+        language, source = max(LANGUAGES, key=lambda x: counts[x]), "card headings"
+    else:
+        language, source = settings.card_language, "default"
+    if counts and not counts[language]:
+        found = "; ".join(f"{n} have '## {HEADINGS[lang]['essence']}' ({lang})" for lang, n in counts.most_common())
+        raise ValueError(f"language {language} (from {source}) does not match the cards: none has "
+                         f"'## {HEADINGS[language]['essence']}', {found}. Pass --language "
+                         f"{counts.most_common(1)[0][0]}")
+    return CardFormat.for_language(language, knowledge_dir), language, source
 
 
 def read_card(text: str, ref: str, fmt: CardFormat = DEFAULT_FORMAT) -> dict[str, Any]:

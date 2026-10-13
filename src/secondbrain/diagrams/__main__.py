@@ -3,19 +3,24 @@
     python -m secondbrain.diagrams schema
     python -m secondbrain.diagrams packets CARDS.jsonl OUT_DIR [--batch 10] [--skip-domain D ...]
     python -m secondbrain.diagrams apply CARDS.jsonl ANSWER.json ... --out OUT_DIR [--checker CHECK.mjs]
-    python -m secondbrain.diagrams audit-extract VAULT OUT_DIR
+    python -m secondbrain.diagrams audit-extract VAULT OUT_DIR [--language en|zh]
     python -m secondbrain.diagrams audit-tier OUT_DIR [--delete-domain D ...]
-    python -m secondbrain.diagrams prune VAULT OUT_DIR [--write]
+    python -m secondbrain.diagrams prune VAULT OUT_DIR [--language en|zh] [--write]
     python -m secondbrain.diagrams pool OUT_DIR [--refs REFS.txt] [--out POOL.jsonl]
     python -m secondbrain.diagrams old-audit-packets POOL.jsonl OUT_DIR [--outcomes OUTCOMES.jsonl ...]
     python -m secondbrain.diagrams old-audit-apply ANSWER.json ... --out OUT_DIR
     python -m secondbrain.diagrams writeback VAULT OUT_DIR OUTCOMES.jsonl ... [--old-audit FILE ...]
-        [--refs REFS.txt] [--delete-review-on-skip remove|keep] [--remove-domain D ...] [--write]
+        [--refs REFS.txt] [--delete-review-on-skip remove|keep] [--remove-domain D ...] [--language en|zh] [--write]
 
 CARDS.jsonl holds one card per line: ref, title, kind, domain, essence,
 propositions (list), related_titles. audit-extract writes this format, so a
 trial run on existing cards can start from its cards.jsonl. Mermaid output and
 audit blocks are written as {"id", "text"} lines for tools/mermaid_check.
+
+The commands that read or write cards in a vault (audit-extract, prune,
+writeback) find the section headings by card language: --language, else
+[cards] language of the config file, else the headings the cards use. pool
+reads cards.jsonl, so it follows the language audit-extract used.
 """
 from __future__ import annotations
 
@@ -169,8 +174,19 @@ def cmd_audit_apply(a) -> dict:
     return dict(Counter(f"{r['verdict']}:{r['category']}" for r in results))
 
 
+def _card_format(a, refs=None) -> audit.CardFormat:
+    """Card headings for a.vault by language; the choice goes to stderr."""
+    try:
+        fmt, language, source = audit.card_format(a.vault, a.language, refs,
+                                                  getattr(a, "knowledge_dir", audit.DEFAULT_FORMAT.knowledge_dir))
+    except ValueError as e:
+        raise SystemExit(str(e))
+    print(f"card language {language} (from {source})", file=sys.stderr)
+    return fmt
+
+
 def cmd_audit_extract(a) -> dict:
-    return audit.extract(a.vault, a.out, audit.CardFormat(knowledge_dir=a.knowledge_dir))
+    return audit.extract(a.vault, a.out, _card_format(a))
 
 
 def cmd_audit_tier(a) -> dict:
@@ -183,7 +199,7 @@ def cmd_audit_tier(a) -> dict:
 def cmd_prune(a) -> dict:
     tiers = json.loads((a.dir / "tiers.json").read_text(encoding="utf-8"))["cards"]
     actions = prune.plan(tiers, prune.PrunePolicy(width_limit=a.width_limit))
-    rows = prune.apply(a.vault, actions, write=a.write)
+    rows = prune.apply(a.vault, actions, write=a.write, fmt=_card_format(a, [x["ref"] for x in actions]))
     _write_jsonl(a.dir / ("prune_manifest.jsonl" if a.write else "prune_plan.jsonl"), rows)
     summary: dict = {"actions": dict(Counter(r["action"] for r in rows)),
                      "status": dict(Counter(r["status"] for r in rows)),
@@ -206,7 +222,8 @@ def cmd_writeback(a) -> dict:
     outcomes = [o for path in a.outcomes for o in audit.read_jsonl(path)]
     audits = [v for path in a.old_audit for v in audit.read_jsonl(path)]
     actions = rejudge.plan(pool, outcomes, _writeback_policy(a), audits)
-    rows = rejudge.apply(a.vault, actions, write=a.write)
+    touched = [x["ref"] for x in actions if x["action"] in ("replace", "remove")]
+    rows = rejudge.apply(a.vault, actions, write=a.write, fmt=_card_format(a, touched))
     _write_jsonl(a.dir / ("writeback_manifest.jsonl" if a.write else "writeback_plan.jsonl"), rows)
     _write_jsonl(a.dir / "writeback_mermaid.jsonl",
                  [{"id": x["ref"], "text": x["mermaid"]} for x in actions if x["action"] == "replace"])
@@ -217,6 +234,8 @@ def cmd_writeback(a) -> dict:
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="python -m secondbrain.diagrams", description=__doc__.split("\n\n")[0])
     sub = p.add_subparsers(dest="cmd", required=True)
+    lang = {"choices": audit.LANGUAGES,
+            "help": "card heading language (default: [cards] language of the config file, else the cards' headings)"}
     sub.add_parser("schema", help="print the IR JSON Schema")
     s = sub.add_parser("packets", help="cards -> model request packets (pregated cards skipped)")
     s.add_argument("cards", type=Path)
@@ -235,6 +254,7 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("vault", type=Path)
     s.add_argument("out", type=Path)
     s.add_argument("--knowledge-dir", default=audit.DEFAULT_FORMAT.knowledge_dir)
+    s.add_argument("--language", **lang)
     s = sub.add_parser("audit-tier", help="cards.jsonl + checks.jsonl -> tiers.json")
     s.add_argument("dir", type=Path)
     s.add_argument("--delete-domain", action="append", default=[])
@@ -242,6 +262,7 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("vault", type=Path)
     s.add_argument("dir", type=Path)
     s.add_argument("--width-limit", type=int, default=700)
+    s.add_argument("--language", **lang)
     s.add_argument("--write", action="store_true", help="write the changes (default: plan only)")
     s = sub.add_parser("pool", help="tiers.json + cards.jsonl -> pool.jsonl, the cards to judge again")
     s.add_argument("dir", type=Path)
@@ -271,6 +292,7 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("--remove-domain", action="append", default=[],
                    help="also remove old diagrams on skip in this domain (cards the audit tiered "
                         "'domain' are removed anyway)")
+    s.add_argument("--language", **lang)
     s.add_argument("--write", action="store_true", help="write the changes (default: plan only)")
     a = p.parse_args(argv)
     if a.cmd == "schema":
