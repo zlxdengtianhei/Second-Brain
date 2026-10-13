@@ -38,6 +38,35 @@ class Service:
                 'snapshot_fingerprint': s.fingerprint, 'inbox': dict(sorted(inbox_counts.items())),
                 'review': review, 'jobs': jobs.list_jobs(self.root)}
 
+    def job_show(self, job_id: str) -> dict:
+        return {**jobs.load(self.root, job_id), 'run_records': jobs.list_runs(self.root, job_id)}
+
+    def job_packet(self, job_id: str, role: str, chunk: str | None = None, *, vault_arg: str | None = None) -> dict:
+        """Create the next run for ``role`` and return its hand-off (packet file, run id, submit command)."""
+        from .executors.host import HostExecutor
+        host = HostExecutor(vault=vault_arg)
+        if jobs.load(self.root, job_id)['kind'] == 'ingest':
+            from .pipelines.ingest import packet_for
+            return packet_for(self.root, job_id, role=role, chunk=chunk, executor=host)
+        from .runner import run_job
+        result = run_job(self.root, job_id, producer=host, reviewer=host, apply=False)
+        if result.get('status') != 'awaiting_submission':
+            raise ValueError('No model step is due for this job')
+        return result['handoff']
+
+    def job_advance(self, job_id: str, *, producer, reviewer, apply: bool = True) -> dict:
+        """Run every step that can run now; writes knowledge when the gate passes and ``apply``."""
+        kind = jobs.load(self.root, job_id)['kind']
+        self._snapshot = None
+        if kind == 'ingest':
+            from .pipelines.ingest import advance
+            return advance(self.root, job_id, producer=producer, reviewer=reviewer, apply=apply)
+        if kind == 'classification-batch':
+            from .backlog import run as run_batch
+            return run_batch(self.root, job_id, producer=producer, reviewer=reviewer, apply=apply)
+        from .runner import run_job
+        return run_job(self.root, job_id, producer=producer, reviewer=reviewer, apply=apply)
+
     def read_cards(self, ids: list[str]):
         if len(ids) > 50 or len(ids) != len(set(ids)):
             raise ValueError('每次读取1–50个唯一卡ID')

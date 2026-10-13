@@ -181,36 +181,20 @@ def _ingest(args, root: Path) -> list:
 
 
 def _job(args, root: Path):
+    service = Service(root)
     if args.job_command == 'list':
         return jobs.list_jobs(root)
     if args.job_command == 'show':
-        return {**jobs.load(root, args.id), 'run_records': jobs.list_runs(root, args.id)}
+        return service.job_show(args.id)
     if args.job_command == 'submit':
         payload = json.loads(args.file.read_text(encoding='utf-8'))
-        return Service(root).submit(args.id, payload, role=args.role, run_id=args.run_id, model=args.model)
+        return service.submit(args.id, payload, role=args.role, run_id=args.run_id, model=args.model)
     if args.job_command == 'abandon':
         return jobs.abandon_run(root, args.id, args.run_id, reason=args.reason)
-    kind = jobs.load(root, args.id)['kind']
     if args.job_command == 'packet':
-        from .executors.host import HostExecutor
-        host = HostExecutor(vault=str(root) if args.vault else None)
-        if kind == 'ingest':
-            from .pipelines.ingest import packet_for
-            return packet_for(root, args.id, role=args.role, chunk=args.chunk, executor=host)
-        from .runner import run_job
-        result = run_job(root, args.id, producer=host, reviewer=host, apply=False)
-        if result.get('status') != 'awaiting_submission':
-            raise ValueError('No model step is due for this job')
-        return result['handoff']
+        return service.job_packet(args.id, args.role, args.chunk, vault_arg=str(root) if args.vault else None)
     producer, reviewer = make_executors(args, root)
-    if kind == 'ingest':
-        from .pipelines.ingest import advance
-        return advance(root, args.id, producer=producer, reviewer=reviewer, apply=not args.proposal_only)
-    if kind == 'classification-batch':
-        from .backlog import run as run_batch
-        return run_batch(root, args.id, producer=producer, reviewer=reviewer, apply=not args.proposal_only)
-    from .runner import run_job
-    return run_job(root, args.id, producer=producer, reviewer=reviewer, apply=not args.proposal_only)
+    return service.job_advance(args.id, producer=producer, reviewer=reviewer, apply=not args.proposal_only)
 
 
 def _review(args, root: Path):
