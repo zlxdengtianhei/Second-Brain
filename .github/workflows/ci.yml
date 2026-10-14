@@ -30,6 +30,13 @@ jobs:
       # Ubuntu 24.04 blocks the Chrome sandbox's user namespaces by default.
       - name: Allow the Chrome sandbox
         run: echo 0 | sudo tee /proc/sys/kernel/apparmor_restrict_unprivileged_userns
+      # The checker renders labels in "Noto Sans CJK SC" on Linux. Without a CJK font, Chrome
+      # measures fallback glyphs, and the 700 px width gate says nothing about Chinese diagrams.
+      - name: Install a CJK font
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends fonts-noto-cjk
+          fc-match "Noto Sans CJK SC"
       - name: Install the package
         run: python -m pip install -e ".[test]"
       - name: Run pytest
