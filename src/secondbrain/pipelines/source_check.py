@@ -26,9 +26,19 @@ A card with no relation at all must get a link, be linked by another card's
 ``links``, or say in ``alone`` why it stands alone. The program applies the
 decisions to the settled chunks before anything is written; see :func:`apply`.
 
-The step runs only when accepted cards come from two or more chunks. Its input
-is frozen as the slot's candidate (made by the program, not a producer), so the
-answer is bound to exactly the cards it judged.
+A retry writes the cards its parent left pending, and those missed the parent's
+source check: a chunk reviewer leaves a repeat of another chunk's card to this
+check, and by the retry that card is in the vault (the real-vault ingest: a
+card whose points three written cards of its source already held was written
+as confirmed). So in a retry each card also lists the closest cards earlier
+jobs of the source wrote (``near_written``, with their propositions), and
+``same`` may name one of them. A written card is not changed: the new card is
+written next to it with ``status: needs-review`` and must link it.
+
+The step runs when accepted cards come from two or more chunks, and in a retry
+whenever a card is accepted and earlier jobs of the source wrote cards. Its
+input is frozen as the slot's candidate (made by the program, not a producer),
+so the answer is bound to exactly the cards it judged.
 """
 from __future__ import annotations
 
@@ -47,6 +57,8 @@ MAX_PROPOSITIONS, MAX_FLASHCARDS = 12, 8
 _WIKILINK = re.compile(r'\[\[([^\[\]|#]+)((?:#[^\[\]|]*)?)((?:\|[^\[\]]*)?)\]\]')
 #: Existing cards shown per card as possible link targets (drill 3: the Euclid card was second).
 NEAR_EXISTING = 3
+#: Cards earlier jobs of the source wrote, shown per card of a retry by closeness (plus the ones it links).
+NEAR_WRITTEN = 5
 
 _STR = {'type': 'string'}
 _NSTR = {'type': ['string', 'null']}
@@ -80,17 +92,24 @@ def is_slot(name: str | None) -> bool:
     return name == SLOT
 
 
-def needed(settled: list[dict]) -> bool:
-    """True when accepted cards come from two or more chunks."""
-    return sum(1 for o in settled if o['accepted']) >= 2
+def needed(settled: list[dict], written: bool = False) -> bool:
+    """True when accepted cards come from two or more chunks, or from one when ``written``.
+
+    ``written``: the job is a retry and earlier jobs of the source wrote cards.
+    """
+    chunks = sum(1 for o in settled if o['accepted'])
+    return chunks >= 2 or (written and chunks >= 1)
 
 
 def frozen_input(settled: list[dict], source: dict, *, relation_views: dict,
-                 near_existing: Callable[[dict], list[dict]] = lambda card: []) -> dict:
+                 near_existing: Callable[[dict], list[dict]] = lambda card: [],
+                 near_written: Callable[[dict], list[dict]] | None = None) -> dict:
     """What the reviewer judges: every accepted card and new topic, sorted by where they are filed.
 
     ``near_existing(card)`` gives the existing cards (id, title, domain) a card
-    may link; ``relation_views`` the relation types and their meanings.
+    may link; ``near_written(card)``, in a retry, the cards earlier jobs of the
+    source wrote that are closest to it (id, title, domain, essence,
+    propositions); ``relation_views`` the relation types and their meanings.
     """
     accepted = [(o['chunk'], s, c) for o in settled for s, c in o['accepted'].items()]
     slugs = {s for _, s, _ in accepted}
@@ -112,7 +131,8 @@ def frozen_input(settled: list[dict], source: dict, *, relation_views: dict,
                                      if isinstance(f, dict)],
                       'relations': relations, 'linked_from': sorted(linked_from.get(slug, [])),
                       'isolated': not relations and not linked_from.get(slug),
-                      'near_existing': near_existing(c)[:NEAR_EXISTING]})
+                      'near_existing': near_existing(c)[:NEAR_EXISTING],
+                      **({'near_written': near_written(c)} if near_written else {})})
     cards.sort(key=lambda c: (c['domain'], c['pillar'], c['topic'], c['chunk'], c['slug']))
     topics = []
     for o in settled:
@@ -134,7 +154,10 @@ def validate_answer(frozen: dict, payload: Any, closed: Callable[[str, str, str]
         raise ValueError('the answer must be {"cards": [...], "new_topics": [...]}')
     errors = []
     cards = {c['slug']: c for c in frozen['cards']}
-    rows = _rows(payload['cards'], 'cards', 'slug', set(cards), DECISIONS, errors)
+    written = {s: {e['id'] for e in c.get('near_written') or []} for s, c in cards.items()}
+    # a retry card may link a written card by its slug: such a relation counts as a link to its id
+    alias = {e['slug']: e['id'] for c in cards.values() for e in c.get('near_written') or [] if e.get('slug')}
+    rows = _rows(payload['cards'], 'cards', 'slug', set(cards), DECISIONS, errors, also=written)
     missing = [s for s in cards if s not in rows]
     if missing:
         errors.append(f'cards: give a decision for every card; missing: {", ".join(missing)}')
@@ -147,11 +170,21 @@ def validate_answer(frozen: dict, payload: Any, closed: Callable[[str, str, str]
         other = topics.get(row.get('with'))
         if row['decision'] == 'same' and other is not None and other['decision'] == 'same':
             errors.append(f'new_topics: {tid} names {row["with"]}, which is itself "same"; name the topic that stays')
-    merged = {s: r['with'] for s, r in rows.items() if r['decision'] == 'same'}
+    merged = {s: r['with'] for s, r in rows.items() if r['decision'] == 'same' and r['with'] in cards}
     for slug, into in merged.items():
         if into in merged:
             errors.append(f'cards: {slug} names {into}, which is itself "same" as {merged[into]}; '
                           f'name {merged[into]} instead')
+    # a card that repeats a card an earlier job of the source wrote: written next to it as needs-review
+    written_repeats = {s: r['with'] for s, r in rows.items() if r['decision'] == 'same' and r['with'] not in cards}
+    for slug, into in written_repeats.items():
+        if any((rows[slug].get('carry') or {}).get(k) for k in ('propositions', 'flashcards', 'replace')):
+            errors.append(f'cards: {slug} is "same" as the written card {into}, which is not changed; give no "carry"')
+        linked_into = any(alias.get(r['target'], r['target']) == into for r in cards[slug]['relations']) or any(
+            isinstance(x, dict) and x.get('target') == into for x in rows[slug].get('links') or [])
+        if not linked_into:
+            errors.append(f'cards: {slug} is "same" as the written card {into}; link it in "links" so the owner '
+                          'sees the pair')
     # what each kept card ends with: its own propositions and flashcards plus what merged cards carry to it
     totals = {s: [len(c['propositions']), len(c['flashcards'])] for s, c in cards.items()}
     replaced = set()
@@ -186,14 +219,15 @@ def validate_answer(frozen: dict, payload: Any, closed: Callable[[str, str, str]
             errors.append(f'cards: {slug} would have {props} propositions and {flashcards} flashcards with what is '
                           f'carried to it; at most {MAX_PROPOSITIONS} and {MAX_FLASHCARDS}. Carry fewer')
     domain = _final_domains(frozen, topics)
-    linked = {(s, r['target']) for s, c in cards.items() for r in c['relations']}
+    linked = {(s, alias.get(r['target'], r['target'])) for s, c in cards.items() for r in c['relations']}
     added = set()
     for slug, row in rows.items():
         links = row.get('links') or []
         if links and slug in merged:
             errors.append(f'cards: {slug} is "same"; put its links on {merged[slug]}')
             continue
-        existing = {e['id']: e.get('domain') for e in cards[slug]['near_existing']}
+        existing = {e['id']: e.get('domain')
+                    for e in list(cards[slug]['near_existing']) + list(cards[slug].get('near_written') or [])}
         for i, link in enumerate(links):
             at = f'cards: {slug}.links[{i}]'
             target, kind = link.get('target') if isinstance(link, dict) else None, (link or {}).get('type')
@@ -201,7 +235,8 @@ def validate_answer(frozen: dict, payload: Any, closed: Callable[[str, str, str]
                 errors.append(f'{at}: {target} is "same" as {merged[target]}; link {merged[target]}')
                 continue
             if target == slug or (target not in cards and target not in existing):
-                errors.append(f'{at}.target must be another card of the packet or one of its near_existing ids')
+                errors.append(f'{at}.target must be another card of the packet or one of its near_existing'
+                              + (' or near_written' if written[slug] else '') + ' ids')
                 continue
             if {(slug, target), (target, slug)} & (linked | added):
                 errors.append(f'{at}: {slug} and {target} are linked already; one relation per pair')
@@ -232,7 +267,8 @@ def _final_domains(frozen: dict, topics: dict) -> dict:
     return {c['slug']: moved.get((c['domain'], c['pillar'], c['topic']), c['domain']) for c in frozen['cards']}
 
 
-def _rows(items, where, key, known, decisions, errors) -> dict:
+def _rows(items, where, key, known, decisions, errors, also=None) -> dict:
+    """Rows by ``key``; ``also`` maps a name to the further values its ``with`` may take (written cards)."""
     out = {}
     for i, row in enumerate(items):
         at = f'{where}[{i}]'
@@ -254,8 +290,10 @@ def _rows(items, where, key, known, decisions, errors) -> dict:
                 errors.append(f'{at}: "keep" takes no "with" or "carry"')
                 continue
         else:
-            if other not in known or other == name:
-                errors.append(f'{at}.with must name another {key} of the packet')
+            extra = (also or {}).get(name) or set()
+            if (other not in known and other not in extra) or other == name:
+                errors.append(f'{at}.with must name another {key} of the packet'
+                              + (' or one of its near_written ids' if extra else ''))
                 continue
             if not isinstance(row.get('reason'), str) or not row['reason'].strip():
                 errors.append(f'{at}.reason must say what the two share')
@@ -272,6 +310,10 @@ def apply(settled: list[dict], frozen: dict, answer: dict) -> tuple[list[dict], 
       Relations to it point to that card instead, and its own relations move
       there, except where that card already links the target (in either
       direction) or would link itself.
+    - ``same`` as a card an earlier job of the source wrote (a retry): that
+      card is not changed. This card is written with ``status: needs-review``
+      (``_overlap_with``, as for a chunk reviewer's ``needs_review``) and keeps
+      its links.
     - ``links``: added to the card, after its own relations.
     - a topic ``same`` as another: its cards are filed under that topic (domain,
       pillar and topic), and it is not added to the taxonomy.
@@ -281,7 +323,9 @@ def apply(settled: list[dict], frozen: dict, answer: dict) -> tuple[list[dict], 
     if judged != now:
         raise ValueError('the source check judged a different set of cards than the chunks now accept')
     rows = {r['slug']: r for r in answer['cards']}
-    merged = {s: r['with'] for s, r in rows.items() if r['decision'] == 'same'}
+    slugs = {c['slug'] for c in frozen['cards']}
+    merged = {s: r['with'] for s, r in rows.items() if r['decision'] == 'same' and r['with'] in slugs}
+    written_repeats = {s: r['with'] for s, r in rows.items() if r['decision'] == 'same' and r['with'] not in slugs}
     topic_of = {t['id']: (t['domain'], t['pillar'], t['name']) for t in frozen['new_topics']}
     refile = {topic_of[r['id']]: topic_of[r['with']] for r in answer['new_topics'] if r['decision'] == 'same'}
     original = {s: c for o in settled for s, c in o['accepted'].items()}
@@ -294,6 +338,8 @@ def apply(settled: list[dict], frozen: dict, answer: dict) -> tuple[list[dict], 
             key = (card['domain'], card['pillar'], card['topic'])
             if key in refile:
                 card['domain'], card['pillar'], card['topic'] = refile[key]
+            if slug in written_repeats:
+                card.update(_overlap_with=written_repeats[slug], _overlap_reason=rows[slug]['reason'])
             kept[slug] = card
     carried, repeats, replacements = {}, {}, {}
     for slug, into in merged.items():  # what the merged card adds goes to the card it repeats
@@ -382,6 +428,8 @@ def apply(settled: list[dict], frozen: dict, answer: dict) -> tuple[list[dict], 
                     **({'repeats_skipped': repeats[s]} if repeats[s] else {})}
                    for s, into in merged.items()],
         'rewritten_links': rewritten,
+        'same_as_written': [{'slug': s, 'title': original[s]['title'], 'with': into, 'reason': rows[s]['reason']}
+                            for s, into in written_repeats.items()],
         'added_links': added,
         'alone': [{'slug': s, 'reason': rows[s]['alone']} for s in kept if rows[s].get('alone')],
         'refiled_topics': [{'from': dict(zip(('domain', 'pillar', 'name'), k)),

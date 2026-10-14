@@ -548,6 +548,12 @@ def _written_slugs(packet: dict) -> dict:
     return {c['slug']: c['id'] for cards in written.values() for c in cards if c.get('slug')}
 
 
+def _written_ids(packet: dict) -> list[str]:
+    """Ids of the cards earlier jobs of this source wrote, every chunk (retry jobs only)."""
+    written = (packet.get('retry') or {}).get('written') or {}
+    return list(dict.fromkeys(c['id'] for cards in written.values() for c in cards if c.get('id')))
+
+
 def _legal_listing(packet: dict, domain: str) -> str:
     """``Pillar: topic, topic; Pillar: topic`` for error messages a repair round can act on."""
     tax = _taxonomy_of(packet, domain)
@@ -694,10 +700,15 @@ NEAR_DUPLICATES_PER_CARD = 5
 NEAR_DUPLICATE_PROPOSITION_BYTES = 150_000
 
 
+def _neighbor_query(card: dict) -> str:
+    """The search text for a card's neighbours: title, essence and first three propositions."""
+    return ' '.join([str(card.get('title') or ''), str(card.get('essence') or '')]
+                    + [str(p) for p in (card.get('propositions') or [])[:3]])
+
+
 def _neighbor_ids(root: Path, snapshot, card: dict) -> list[str]:
     from ..index import search
-    query = ' '.join([str(card.get('title') or ''), str(card.get('essence') or '')]
-                     + [str(p) for p in (card.get('propositions') or [])[:3]])
+    query = _neighbor_query(card)
     hits = search(root, snapshot, query, NEAR_DUPLICATES_PER_CARD) if query.strip() else []
     return [h['id'] for h in hits]
 
@@ -1503,7 +1514,7 @@ def _source_check_stage(root: Path, job_id: str, packet: dict, settled: list[dic
     written as the chunk reviews left them.
     """
     from ..runner import AwaitingSubmission, call_executor
-    if not source_check.needed(settled):
+    if not source_check.needed(settled, written=bool(_written_ids(packet))):
         return []
     slot = source_check.SLOT
     while True:
@@ -1536,14 +1547,36 @@ def _source_check_stage(root: Path, job_id: str, packet: dict, settled: list[dic
 
 
 def _source_check_input(root: Path, packet: dict, settled: list[dict]) -> dict:
-    """The source check's frozen input: the cards, their relation types, and the existing cards each may link."""
+    """The source check's frozen input: the cards, their relation types, and the existing cards each may link.
+
+    In a retry each card also gets the cards earlier jobs of the source wrote
+    that are closest to it (ranked among those cards only) and the ones it
+    links, with their essence and propositions, so the check can tell a repeat
+    of one of them (see :mod:`.source_check`).
+    """
+    from ..search import search as rank
     snapshot = read_snapshot(root)
     domains = sorted({c['domain'] for o in settled for c in o['accepted'].values()})
 
     def near_existing(card):
         return [{'id': i, 'title': snapshot.cards[i].title, 'domain': snapshot.cards[i].domain}
                 for i in _neighbor_ids(root, snapshot, card)[:source_check.NEAR_EXISTING]]
+    written = replace(snapshot, cards={i: snapshot.cards[i] for i in _written_ids(packet) if i in snapshot.cards})
+    by_slug = _written_slugs(packet)  # a retry card may link a written card by its slug
+    slug_of = {i: s for s, i in by_slug.items()}
+
+    def near_written(card):
+        query = _neighbor_query(card)
+        ranked = [h['id'] for h in rank(written, query, source_check.NEAR_WRITTEN)] if query.strip() else []
+        linked = [by_slug.get(r.get('target'), r.get('target')) for r in card.get('relations') or []
+                  if isinstance(r, dict)]
+        out = []
+        for i in dict.fromkeys(ranked + [t for t in linked if t in written.cards]):
+            digest_, props = _card_digest(written.cards[i])
+            out.append({'id': i, **({'slug': slug_of[i]} if i in slug_of else {}), **digest_, 'propositions': props})
+        return out
     frozen = source_check.frozen_input(settled, packet['source'], near_existing=near_existing,
+                                       near_written=near_written if written.cards else None,
                                        relation_views=_relation_views(packet['catalog'], domains))
     return {**frozen, 'placement': packet['placement']} if packet.get('placement') else frozen
 
@@ -1566,7 +1599,8 @@ def skip_source_check(root: Path, job_id: str, *, reason: str) -> dict:
             raise IngestError(f'{job_id} is not an ingest job')
         settled = [chunk_outcome(root, state, packet, c['chunk_id']) for c in effective_chunks(packet, state)]
         info = (state.get('chunks') or {}).get(source_check.SLOT) or {}
-        if not all(o['settled'] for o in settled) or not source_check.needed(settled) or not info.get('candidate'):
+        if not all(o['settled'] for o in settled) or not source_check.needed(
+                settled, written=bool(_written_ids(packet))) or not info.get('candidate'):
             raise IngestError(f'{job_id} has no source check waiting; run `sb job advance`')
         if info.get('review') or info.get('skipped'):
             raise IngestError(f'The source check of {job_id} is already done')
@@ -1589,7 +1623,7 @@ def skip_source_check(root: Path, job_id: str, *, reason: str) -> dict:
 
 def _checked(root: Path, state: dict, packet: dict, settled: list[dict]) -> tuple[list[dict], dict | None]:
     """``(settled, report)`` after the source check's decisions; ``report`` is None when no check was due."""
-    if not source_check.needed(settled):
+    if not source_check.needed(settled, written=bool(_written_ids(packet))):
         return settled, None
     info = (state.get('chunks') or {}).get(source_check.SLOT) or {}
     if info.get('skipped'):
@@ -2119,6 +2153,7 @@ def _check_report(check: dict, ids: dict) -> dict:
     name = lambda slug: ids.get(slug, slug)  # noqa: E731
     return {'status': 'checked', 'cards': check['cards'],
             'merged': [{**m, 'into': name(m['into'])} for m in check['merged']],
+            'same_as_written': [{**r, 'id': name(r['slug'])} for r in check.get('same_as_written') or []],
             'rewritten_links': check.get('rewritten_links', 0),
             'added_links': [{**r, 'from': name(r['from']), 'target': name(r['target'])} for r in check['added_links']],
             'alone': [{**a, 'id': name(a['slug'])} for a in check['alone']],

@@ -268,12 +268,14 @@ def test_host_mode_gives_up_a_check_that_keeps_failing_only_after_two_failures(t
     assert skip() != 0  # nothing left to skip
 
 
-def test_a_carried_link_to_a_card_the_retry_merges_goes_to_the_card_it_repeats(tmp_path):
-    # V1: a retry's merged_into was untested (a mutant that ignored it survived)
+def partial_parent(tmp_path, pending):
+    """The two-chunk source ingested with the cards in ``pending`` still rejected after the repair round.
+
+    Returns (root, job id, the parent's result, the producer's whole answer).
+    """
     root = build_ingest_vault(tmp_path / 'vault')
     settings(chunk_chars=1000)
     (root / '00_Inbox' / SOURCE_NAME).write_text(SOURCE, encoding='utf-8')
-    pending = {'queue-order', 'arrival-order'}
     whole = produce()
 
     def parent_producer(task):
@@ -295,11 +297,18 @@ def test_a_carried_link_to_a_card_the_retry_merges_goes_to_the_card_it_repeats(t
     parent = ingest.advance(root, job['job_id'], producer=FakeExecutor('gpt-test', responder=with_diagrams(parent_producer)),
                             reviewer=FakeExecutor('claude-test', responder=parent_reviewer))
     assert parent['status'] == 'partial' and {p['slug'] for p in parent['pending']} == pending
-    cost = next(p['id'] for p in parent['produced'] if p['slug'] == 'lit-marker-cost')
-    assert parent['skipped_relations'] == [{'from': cost, 'type': 'depends_on', 'target_slug': 'arrival-order',
-                                            'reason': 'target card was not written'}]
-    lantern = next(p['id'] for p in parent['produced'] if p['slug'] == 'lantern-queue')
-    child = ingest.retry(root, job['job_id'])
+    return root, job['job_id'], parent, whole
+
+
+def retry_pending(root, job_id, parent, whole, check, by_slug=False):
+    """Retry ``job_id``: the producer offers the pending cards again (links to the written lantern card by id, or
+    ``by_slug``), the chunk reviewer accepts them as distinct, and ``check(packet)`` answers the source check.
+
+    Returns (the child's result, the source check tasks seen).
+    """
+    pending = {p['slug'] for p in parent['pending']}
+    lantern = 'lantern-queue' if by_slug else next(p['id'] for p in parent['produced'] if p['slug'] == 'lantern-queue')
+    child = ingest.retry(root, job_id)
 
     def child_producer(task):
         answer = whole(task)
@@ -309,17 +318,29 @@ def test_a_carried_link_to_a_card_the_retry_merges_goes_to_the_card_it_repeats(t
         answer['coverage'] = [r for r in answer['coverage'] if not r.get('cards') or set(r['cards']) & pending]
         answer['new_topics'] = []
         return answer
+    seen = []
 
     def child_reviewer(task):
         if is_source_check_task(task):
-            return keep_all(task.packet, **{'arrival-order': {'decision': 'same', 'with': 'queue-order',
-                                                              'reason': 'both say the order is kept'}})
+            seen.append(task)
+            return check(task.packet)
         out = review(task)
         for row in out['cards']:
             row['overlap'] = 'distinct'
         return out
     done = ingest.advance(root, child['job_id'], producer=FakeExecutor('gpt-test', responder=with_diagrams(child_producer)),
                           reviewer=FakeExecutor('claude-test', responder=child_reviewer))
+    return done, seen
+
+
+def test_a_carried_link_to_a_card_the_retry_merges_goes_to_the_card_it_repeats(tmp_path):
+    # V1: a retry's merged_into was untested (a mutant that ignored it survived)
+    root, job_id, parent, whole = partial_parent(tmp_path, {'queue-order', 'arrival-order'})
+    cost = next(p['id'] for p in parent['produced'] if p['slug'] == 'lit-marker-cost')
+    assert parent['skipped_relations'] == [{'from': cost, 'type': 'depends_on', 'target_slug': 'arrival-order',
+                                            'reason': 'target card was not written'}]
+    done, _ = retry_pending(root, job_id, parent, whole, lambda packet: keep_all(packet, **{'arrival-order': {
+        'decision': 'same', 'with': 'queue-order', 'reason': 'both say the order is kept'}}))
     assert done['status'] == 'applied', done.get('pending')
     order = next(p['id'] for p in done['produced'] if p['slug'] == 'queue-order')
     assert done['restored_relations'] == [{'from': cost, 'type': 'depends_on', 'target_slug': 'arrival-order',
@@ -327,13 +348,74 @@ def test_a_carried_link_to_a_card_the_retry_merges_goes_to_the_card_it_repeats(t
     assert {'type': 'depends_on', 'target': order} in read_snapshot(root).cards[cost].fm['relations']
 
 
+# --- a retry's cards against the cards its source wrote (the real-vault ingest: a retry wrote, as confirmed, a card
+# whose points three cards of the parent already held; the chunk reviewer had sent it to the source check, which
+# by the retry no longer saw those cards) ------------------------------------------------------------------------
+@pytest.mark.parametrize('by_slug', [False, True])
+def test_a_single_chunk_retry_is_checked_against_the_cards_its_source_wrote(tmp_path, monkeypatch, by_slug):
+    monkeypatch.setattr(source_check, 'NEAR_WRITTEN', 1)  # the closest written card, and the ones the card links
+    root, job_id, parent, whole = partial_parent(tmp_path, {'arrival-order'})
+    ids = {p['slug']: p['id'] for p in parent['produced']}
+    before = ingest._card_digest(read_snapshot(root).cards[ids['queue-order']])[1]
+    done, seen = retry_pending(root, job_id, parent, whole, keep_all, by_slug=by_slug)
+    assert len(jobs.read_input(root, done['job_id'])['chunks']) == 1  # only the chunk with the pending card
+    [task] = seen
+    [card] = task.packet['cards']
+    assert card['slug'] == 'arrival-order'
+    near = {e['id']: e for e in card['near_written']}
+    assert list(near) == [ids['queue-order'], ids['lantern-queue']]  # the closest, then the one it links
+    assert near[ids['queue-order']]['propositions'] == before and before
+    assert near[ids['queue-order']]['essence'] and near[ids['queue-order']]['title'] == CARDS['queue-order']['title']
+    # kept: written as reviewed, and the carried link from the parent's cost card reaches it
+    assert done['status'] == 'applied', done.get('pending')
+    arrival = next(p['id'] for p in done['produced'] if p['slug'] == 'arrival-order')
+    assert read_snapshot(root).cards[arrival].fm['status'] == 'confirmed'
+    assert done['needs_review'] == [] and done['source_check']['same_as_written'] == []
+    assert [r['target'] for r in done['restored_relations']] == [arrival]
+
+
+def test_a_retry_card_that_repeats_a_written_card_is_written_next_to_it_as_needs_review(tmp_path):
+    root, job_id, parent, whole = partial_parent(tmp_path, {'arrival-order'})
+    order = next(p['id'] for p in parent['produced'] if p['slug'] == 'queue-order')
+    before = read_snapshot(root).cards[order]
+    reason = 'both say items keep arrival order; this one adds the lit markers'
+    done, _ = retry_pending(root, job_id, parent, whole, lambda packet: keep_all(packet, **{'arrival-order': {
+        'decision': 'same', 'with': order, 'reason': reason,
+        'links': [{'target': order, 'type': 'similar_to', 'note': 'the same order rule'}]}}))
+    assert done['status'] == 'applied', done.get('pending')
+    arrival = next(p['id'] for p in done['produced'] if p['slug'] == 'arrival-order')
+    after = read_snapshot(root)
+    assert after.cards[arrival].fm['status'] == 'needs-review'
+    assert {'type': 'similar_to', 'target': order} in [{k: r[k] for k in ('type', 'target')}
+                                                         for r in after.cards[arrival].fm['relations']]
+    assert done['needs_review'] == [{'id': arrival, 'title': ARRIVAL['title'], 'overlap_with': order, 'reason': reason}]
+    assert done['source_check']['same_as_written'] == [{'slug': 'arrival-order', 'title': ARRIVAL['title'],
+                                                        'with': order, 'reason': reason, 'id': arrival}]
+    assert done['source_check']['merged'] == []
+    # the written card is not changed: nothing carried to it, only the back link of the new relation
+    assert ingest._card_digest(after.cards[order]) == ingest._card_digest(before)
+    assert after.cards[order].fm['sources'] == before.fm['sources']
+    assert [r['target'] for r in done['restored_relations']] == [arrival]  # kept, not merged away
+
+
+def test_needs_a_check_for_two_chunks_or_for_any_accepted_card_of_a_retry_whose_source_wrote_cards():
+    one, two, none = [{'accepted': {'a': {}}}], [{'accepted': {'a': {}}}, {'accepted': {'b': {}}}], [{'accepted': {}}]
+    assert source_check.needed(two) and source_check.needed(two, written=True)
+    assert not source_check.needed(one) and source_check.needed(one, written=True)
+    assert not source_check.needed(none, written=True)
+
+
 # --- the answer's form ------------------------------------------------------------------------------
-def frozen_card(slug, *targets, isolated=False, domain='d', near=()):
-    return {'slug': slug, 'chunk': 'c01', 'title': slug, 'domain': domain, 'pillar': 'p', 'topic': 't',
+def frozen_card(slug, *targets, isolated=False, domain='d', near=(), written=None):
+    card = {'slug': slug, 'chunk': 'c01', 'title': slug, 'domain': domain, 'pillar': 'p', 'topic': 't',
             'propositions': [f'{slug} one', f'{slug} two'],
             'flashcards': [{'q': f'{slug} q{i}?', 'a': f'{slug} a{i}'} for i in (1, 2)],
             'relations': [{'type': 'similar_to', 'target': t} for t in targets], 'linked_from': [],
             'isolated': isolated, 'near_existing': [{'id': i, 'title': i, 'domain': 'other'} for i in near]}
+    if written is not None:  # a retry: the closest cards earlier jobs of the source wrote
+        card['near_written'] = [{'id': i, 'slug': i[3:], 'title': i, 'domain': 'd', 'essence': i,
+                                 'propositions': [f'{i} one']} for i in written]
+    return card
 
 
 FROZEN = {'cards': [frozen_card('a', 'b'), frozen_card('b'), frozen_card('c', 'a', near=['kc_old'])],
@@ -383,6 +465,39 @@ def test_the_answer_must_settle_every_card_without_chains(cards, topics, message
         return None if kind == 'similar_to' else f'{kind!r} is not open to domain {domain}'
     with pytest.raises(ValueError, match=message):
         source_check.validate_answer(FROZEN, answer(cards, topics), closed=closed)
+
+
+RETRY = {**FROZEN, 'cards': [frozen_card('a', 'b', written=[]), frozen_card('b', 'w2', written=['kc_w2']),  # by slug
+                             frozen_card('c', 'a', near=['kc_old'], written=['kc_w'])]}
+
+
+@pytest.mark.parametrize('cards, message', [
+    (same('c', 'kc_old', links=[{'target': 'kc_old', 'type': 'similar_to'}]), 'or one of its near_written ids'),
+    (same('a', 'kc_w'), 'another slug of the packet(?! or)'),
+    (same('c', 'kc_w', carry={'propositions': ['c one']}, links=[{'target': 'kc_w', 'type': 'similar_to'}]),
+     'give no "carry"'),
+    (same('c', 'kc_w'), 'link it in "links"'),
+    ({**same('b', 'kc_w2', links=[{'target': 'kc_w2', 'type': 'similar_to'}])}, 'linked already'),
+])
+def test_a_retry_card_may_repeat_only_a_written_card_listed_for_it_and_must_link_it_without_carrying(cards, message):
+    with pytest.raises(ValueError, match=message):
+        source_check.validate_answer(RETRY, answer(cards))
+
+
+def test_a_retry_card_that_repeats_a_written_card_it_links_or_links_now_is_valid_and_keeps_its_links():
+    for cards in (same('b', 'kc_w2'), same('c', 'kc_w', links=[{'target': 'kc_w', 'type': 'similar_to'}]),
+                  links('c', ('kc_w', 'similar_to')), {**same('b', 'kc_w2'), **links('c', ('b', 'similar_to'))}):
+        assert source_check.validate_answer(RETRY, answer(cards))
+    settled = [{'chunk': 'c01', 'accepted': {s: {'title': s, 'domain': 'd', 'pillar': 'p', 'topic': 't',
+                                                 'relations': [{'type': 'similar_to', 'target': 'kc_w2'}] if s == 'b'
+                                                 else [], 'propositions': [f'{s} one']} for s in 'abc'},
+                'topics': {}}]
+    out, report = source_check.apply(settled, RETRY, answer({**same('b', 'kc_w2'), **links('c', ('b', 'similar_to'))}))
+    kept = out[0]['accepted']
+    assert set(kept) == {'a', 'b', 'c'} and kept['b']['_overlap_with'] == 'kc_w2' and kept['b']['_overlap_reason'] == 'r'
+    assert kept['b']['propositions'] == ['b one'] and kept['c']['relations'] == [{'type': 'similar_to', 'target': 'b'}]
+    assert report['merged'] == [] and report['merged_into'] == {}
+    assert report['same_as_written'] == [{'slug': 'b', 'title': 'b', 'with': 'kc_w2', 'reason': 'r'}]
 
 
 def test_a_card_merged_into_may_hold_twice_the_flashcards_of_a_new_card():
