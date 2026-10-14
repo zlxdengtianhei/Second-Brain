@@ -369,7 +369,18 @@ The daily queue lists due cards first, then new cards.
     `tests/fixtures/review/rank.json` holds the shared expectations.
   - Cycles: when cards remain but none is ready, the remaining card with the
     smallest (`rank`, `id`) is taken next and reported as a cycle break. No
-    card is dropped.
+    card is dropped. `sb review queue` reports the number of these cards as
+    `cycle_breaks`.
+  - A learning-order cycle is a group of two or more cards whose prerequisite
+    links (`depends_on`, `follows`, `required_by`, `precedes`) lead back to
+    themselves: a strongly connected group of the edges above, counted over the
+    whole vault, not only over the queue's candidates. `sb refresh` and
+    `sb status` report one `learning_order_cycle` issue per group, with
+    `card_ids` and `mocs`. `sb review queue` reports the same groups as
+    `prerequisite_cycles: {groups, cards}`. The two queue numbers count
+    different things: `prerequisite_cycles` counts every card in a cycle,
+    learned or not; `cycle_breaks` counts the unlearned cards the queue took out
+    of order, and such a card can also be one that only depends on a cycle.
 
 ## 7. Configuration and paths
 

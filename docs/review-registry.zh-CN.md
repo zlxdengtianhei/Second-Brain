@@ -236,7 +236,8 @@ TypeScript 实现直接调用 ts-fsrs。Python 实现自己实现这张策略表
 
     其他关系类型（包括 `part_of` 和 `has_part`）不决定卡片顺序。在一个有 8,615 张卡片的真实知识库上，无论按哪个方向加入 `part_of`/`has_part` 边，断环次数都从 323 增加到 624–720，所以这些边与先修边冲突。指向候选集合之外卡片的边，以及指向自身的边，都被忽略。
   - 并列：在已就绪的卡片中，(`rank`, `id`) 最小的排在最前。`rank` = 领域位置 × 1,000,000 + 支柱序号 × 1,000 + 主题位置。领域位置是该领域在学习领域中的下标；没有选定学习领域时，是在按码位排序的全部领域中的下标。支柱序号是分类体系 YAML 里该支柱的 `order`（缺失时为它在列表中的位置 + 1）；主题位置是卡片的 `topic` 在该支柱 `topics` 中的下标。未知的支柱和主题取 999。Python：`build_taxonomy` 和 `rank_cards`（向 `queue_report` 传 `taxonomy=`）；插件：`rankCards`。`tests/fixtures/review/rank.json` 存放共用的期望结果。
-  - 环：还有剩余卡片、但没有一张就绪时，取剩余卡片中 (`rank`, `id`) 最小的一张作为下一张，并报告为一次断环。不丢弃任何卡片。
+  - 环：还有剩余卡片、但没有一张就绪时，取剩余卡片中 (`rank`, `id`) 最小的一张作为下一张，并报告为一次断环。不丢弃任何卡片。`sb review queue` 用 `cycle_breaks` 报告这类卡片的张数。
+  - 学习顺序的环，是两张或更多卡片组成的一组，它们之间的前置关系（`depends_on`、`follows`、`required_by`、`precedes`）绕回自身，即上表这些边构成的强连通组；按整个知识库统计，不只统计队列的候选卡。`sb refresh` 和 `sb status` 每组报告一次 `learning_order_cycle`，带 `card_ids` 和 `mocs`。`sb review queue` 用 `prerequisite_cycles: {groups, cards}` 报告同样的组。队列里这两个数统计的东西不同：`prerequisite_cycles` 统计环里的每张卡，不论学过与否；`cycle_breaks` 统计队列不按顺序取出的未学卡，其中也可能有只是依赖某个环、本身不在环里的卡。
 
 ## 7. 配置与路径
 
