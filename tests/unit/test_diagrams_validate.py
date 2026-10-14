@@ -657,10 +657,14 @@ def test_v5_when_e_says_it_the_model_can_say_it_is_no_repeat():
     assert report.ok and not report.warnings and report.ir.no_repeat[0].p == "E"
 
 
-def _no_repeat(**item):
+def _no_repeat_card(p2: str, item: dict):
     data = _loop_flow(cite_p2=True)
     data["no_repeat"] = [item]
-    return validate(data, _loop_card("误差计算要重复到足够小为止。"), FULL)
+    return validate(data, _loop_card(p2), FULL)
+
+
+def _no_repeat(**item):
+    return _no_repeat_card("误差计算要重复到足够小为止。", item)
 
 
 def test_no_repeat_excuses_only_the_words_it_copies():
@@ -678,6 +682,29 @@ def test_no_repeat_excuses_only_the_words_it_copies():
         assert [w.code for w in report.warnings] == ["W3"] and problem in str(report.warnings[0]), item
         if item["p"] == "P2":  # the rewrite message says why the item did not count
             assert f"(your no_repeat item for P2: {problem}" in str(report.errors[0])
+
+
+def test_an_ignored_no_repeat_item_excuses_nothing():
+    """V3's G1: a quote copied whole from a long sentence is too long, so its loop word still counts."""
+    text = "误差计算要重复到足够小为止，这一步对所有样本都用同一个公式和同一个阈值来判断，不另设规则。"
+    assert _no_repeat_card(text, {"p": "P2", "quote": "要重复到足够小", "why": "x"}).ok  # the one loop word
+    report = _no_repeat_card(text, {"p": "P2", "quote": text, "why": "x"})
+    assert [w.code for w in report.warnings] == ["W3"] and "quote is 45 characters" in str(report.warnings[0])
+    assert [e.code for e in report.errors] == ["V5"]
+
+
+def test_no_repeat_excuses_only_the_source_it_names():
+    """V3's G2: the same words in another cited source still ask for the back edge."""
+    words = "误差计算要重复到足够小为止。"
+    card = Card(title="t", essence="取样器按误差决定是否继续，" + words, propositions=_loop_card(words).propositions)
+    data = _loop_flow(cite_p2=True)
+    for named, other in (("P2", "E"), ("E", "P2")):
+        data["no_repeat"] = [{"p": named, "quote": "要重复到足够小", "why": "x"}]
+        report = validate(data, card, FULL)
+        [error] = [str(e) for e in report.errors]
+        assert not report.warnings and error.startswith(f"V5 {other}, which the diagram cites"), named
+    data["no_repeat"] = [{"p": ref, "quote": "要重复到足够小", "why": "x"} for ref in ("E", "P2")]
+    assert validate(data, card, FULL).ok
 
 
 def test_no_repeat_keeps_other_loop_words_in_the_same_text():
