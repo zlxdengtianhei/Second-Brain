@@ -71,6 +71,6 @@ sb job abandon <job_id> --run-id <run_id> --reason "sub-agent crashed"
 | 服务 | 工具 |
 |---|---|
 | `sb serve`（只读） | `status`、`inbox_list`、`search`、`read_cards`、`read_taxonomy`、`read_task`、`job_show`、`job_packet` |
-| `sb serve --writer` | 以上全部，另加 `ingest_prepare`、`job_submit`、`job_advance` |
+| `sb serve --writer` | 以上全部，另加 `ingest_prepare`（可选的放置参数 `domain`、`pillar`、`topic`，同 `sb ingest --domain`）、`job_submit`、`job_advance` |
 
 `job_packet` 返回给子代理的完整任务文本；它在处理状态里记一次运行，不碰知识库。`job_submit` 保存并校验答案，从不写入知识。只有写入服务上的 `job_advance` 会写知识库，而且只在过了复核闸门之后。如果想让某些宿主只有读权限，就把两个服务分开注册。

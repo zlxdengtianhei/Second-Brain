@@ -71,6 +71,6 @@ Use the full path of `sb` if the host does not start it from your virtual enviro
 | Server | Tools |
 |---|---|
 | `sb serve` (read-only) | `status`, `inbox_list`, `search`, `read_cards`, `read_taxonomy`, `read_task`, `job_show`, `job_packet` |
-| `sb serve --writer` | the above, plus `ingest_prepare`, `job_submit`, `job_advance` |
+| `sb serve --writer` | the above, plus `ingest_prepare` (with the optional placement `domain`, `pillar`, `topic`, as `sb ingest --domain`), `job_submit`, `job_advance` |
 
 `job_packet` returns the full task text for a sub-agent; it records a run in the processing state and does not touch the vault. `job_submit` stores and validates an answer and never writes knowledge. Only `job_advance` on the writer server writes the vault, and only after the review gate. Register the two servers separately if you want some hosts to have read access only.
