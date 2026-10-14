@@ -69,7 +69,7 @@ flowchart TB
   n2 -->|"probably yes"| n4
 ```
 
-第一行记录图引用了卡片的哪些部分，以及对本质和全部命题计算的 SHA-256 的前 8 位十六进制数字。如果之后卡片文字改了，哈希就不再匹配，这张图算作过期。生成器还会自己给节点编号（`n1`、`n2`……），转义 Mermaid 会当作语法读取的每个字符，并且流程图一律从上到下排布。生成器不写颜色或样式，因为 Obsidian 在深色主题下会反转图的颜色。
+第一行记录图引用了卡片的哪些部分，以及对本质和全部命题计算的 SHA-256 的前 8 位十六进制数字。如果之后卡片文字改了，哈希就不再匹配，这张图算作过期。生成器还会自己给节点编号（`n1`、`n2`……），转义 Mermaid 会当作语法读取的每个字符，并且流程图一律从上到下排布（每个分组内部也是；Mermaid 会把与外部没有连线的分组从左到右排布，除非另行指定）。生成器不写颜色或样式，因为 Obsidian 在深色主题下会反转图的颜色。
 
 ## 知识库里已有的图
 
@@ -81,7 +81,7 @@ flowchart TB
 | `audit-extract VAULT OUT` | 读取每张卡片（只读），写入 `cards.jsonl`；读取每个 Mermaid 代码块，写入 `blocks.jsonl`（`--language` 选择用哪套卡片小节名） |
 | `audit-repair OUT --checker tools/mermaid_check/check.mjs` | 改写解析失败的旧流程图：给每个标签加引号（标签里的 `"` 写成 `#quot;`），把用了 Mermaid 关键字或符号的节点 id 改名，把 `A -- 文字 --> B` 改成竖线之间的标签，每行只写一条语句。它不改标签的内容。它渲染改写结果，写入 `repairs.jsonl` |
 | `audit-tier OUT` | 读取 `cards.jsonl`、`checks.jsonl` 里的 `tools/mermaid_check` 结果，以及存在时的 `repairs.jsonl`（修复后能渲染的图算作能渲染），把每张图分进一个档：`keep`、`delete`、`review` 或 `redraw`（`--delete-domain` 把整个领域分进 `delete`）。它写出 `tiers.json`，其中还记下每张旧流程图的标签和边，供 `writeback` 的重画规则使用。由缺少这些信息的 `tiers.json` 生成的池，`writeback` 会拒绝：重新运行 `audit-tier`，再运行 `pool` |
-| `prune VAULT OUT` | 删除 `delete` 档卡片的图小节（有三条或更多命题的机制卡改为进入复核池），把保留下来的、从左到右排布且过宽的图改成从上到下，并为只在 `audit-repair` 后才能渲染的保留图写入修复后的源码（方向是 `LR` 或 `RL` 且宽于 700 px 时，同时改成从上到下）。带 `--checker` 时，它渲染改了方向或修复过的图，并列出仍宽于 700 px 的图 |
+| `prune VAULT OUT` | 删除 `delete` 档卡片的图小节（有三条或更多命题的机制卡改为进入复核池），把保留下来的、从左到右排布且过宽的图改成从上到下，并为只在 `audit-repair` 后才能渲染的保留图写入修复后的源码（方向是 `LR` 或 `RL` 且宽于 700 px 时，同时改成从上到下）。带 `--checker` 时，它渲染改了方向或修复过的图；改成从上到下后反而比原来宽的图不改方向（摘要里计为 `not_turned`）；并列出仍宽于 700 px 的图 |
 | `pool OUT` | 列出要重新判断的卡片：`review` 和 `redraw` 两档，加上 prune 留待复核的 `delete` 档卡片（`--refs FILE` 只取该文件里的卡片引用） |
 | `packets CARDS OUT` | 按每批十张（`--batch`）生成给模型的请求，并把预筛掉的卡片写入 `pregated.jsonl`。旧图能渲染的卡片会附上旧图的源码（修复过的就附修复后的源码）；说明要求只在新图能明显更好地表达本质里的关系时才画新图 |
 | `apply CARDS ANSWERS... --out OUT` | 读取模型答案，为每张卡做决定：`draw`（附 Mermaid）、`rewrite`（写出一个重写任务文件 `rewrite-NNN.json`）或 `skip`，结果写入 `outcomes.jsonl` 和 `mermaid.jsonl`。每份答案命名为 `X.answer.json`，放在它所回答的任务文件 `X.json` 旁边。`--checker tools/mermaid_check/check.mjs` 渲染每张新图，并按 V9、实测宽度（V14）和 V15 把关 |
@@ -95,7 +95,7 @@ flowchart TB
 - **skip**：在被移除的领域里（由 `--remove-domain` 指定，或在审计中被分档为 `domain`），旧图被删除。因复核而进入池中的 `delete` 档卡片，旧图也被删除（`--delete-review-on-skip keep` 会保留它）。其他情况下，能渲染的旧图（包括 `audit-repair` 修复后能渲染的）保留，不能渲染的删除。
 - **旧图审计**：保留下来的旧图，如果审计结果是 `restates` 或 `misleading`，就被删除。
 - **修复过的旧图**：只在 `audit-repair` 后才能渲染的旧图如果保留，就用修复后的源码替换原来坏掉的源码（动作 `repair_old`，规则名以 `+repaired` 结尾）。
-- **过宽的旧图**：保留下来、渲染宽度超过 700 px 的旧图，方向是 `LR` 或 `RL` 时改为从上到下（动作 `direction_tb`，规则名以 `+tb` 结尾）。不能改方向的保持原样，规则名以 `+wide` 结尾；带 `--checker` 时，改了方向或修复后仍宽于 700 px 的图也以 `+wide` 结尾。状态图会被缩放到合适宽度，从不标记。
+- **过宽的旧图**：保留下来、渲染宽度超过 700 px 的旧图，方向是 `LR` 或 `RL` 时改为从上到下（动作 `direction_tb`，规则名以 `+tb` 结尾）。不能改方向的保持原样，规则名以 `+wide` 结尾。带 `--checker` 时，改成从上到下后会比原来宽的图不改方向：保持原样（动作 `keep_old`，规则名用 `+wide` 代替 `+tb`；修复过的图不改方向写回，规则名以 `+wide+repaired` 结尾）；改了方向或修复后仍宽于 700 px 的图也以 `+wide` 结尾。状态图会被缩放到合适宽度，从不标记。
 - **重写仍待定，或没有结果**：不做任何改动。只有用 `--old-audit` 传入旧图审计文件时，旧图审计才起作用。
 
 一次典型的运行：先运行 `audit-extract`，再运行 `node tools/mermaid_check/check.mjs OUT/blocks.jsonl OUT/checks.jsonl`，然后依次是 `audit-repair --checker`、`audit-tier`、`prune`、`pool`、对池运行 `packets`、模型作答、`apply --checker`、重写、`old-audit-packets` 和 `old-audit-apply`；最后先不带 `--write` 运行 `writeback --checker`，查看计划，再带 `--write` 运行。运行 `sb diagrams <command> --help` 查看全部选项。
