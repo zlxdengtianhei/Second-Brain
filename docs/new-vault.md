@@ -45,6 +45,7 @@ The catalog names the domains, the MOC page of each domain, and the relation typ
 - `inverse_relations` maps each relation to its inverse, so that a link from a new card can be mirrored on the card it points to. The mapping must be consistent in both directions; a symmetric relation maps to itself.
 - `depends_on`, `required_by`, `follows` and `precedes` set the learning order: in MOC pages and for new cards in the review queue, a prerequisite comes first.
 - Optional `relation_gloss` maps a relation type to a short explanation.
+- `relation_types` are open to every domain. `domain_relations` maps a domain to extra types that only its cards may use. A link also needs its inverse (the back link written on the target) to be open to the target's domain, and two cards may hold only one relation between them.
 
 Then write it into the vault:
 

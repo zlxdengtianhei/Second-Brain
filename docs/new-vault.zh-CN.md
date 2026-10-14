@@ -45,6 +45,7 @@ export SECONDBRAIN_VAULT=~/MyVault
 - `inverse_relations` 把每种关系映射到它的反向关系。这样，新卡片指向另一张卡的链接，可以在那张卡上反向补上。映射必须在两个方向上一致；对称关系映射到它自己。
 - `depends_on`、`required_by`、`follows` 和 `precedes` 决定学习顺序：在地图页里，以及在复习队列的新卡里，先修在前。
 - 可选的 `relation_gloss` 把一种关系类型映射到一段简短说明。
+- `relation_types` 对所有领域开放。`domain_relations` 把一个领域映射到只有该领域的卡片能用的额外类型。一条链接的反向类型（写在目标卡上的反向链接）也必须对目标卡所在领域开放；两张卡之间只能有一条关系。
 
 然后把它写进知识库：
 

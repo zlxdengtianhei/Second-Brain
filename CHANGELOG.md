@@ -5,6 +5,7 @@
 First public version.
 
 - Ingest chain: inbox status, frozen sources and chunks, producer and independent reviewer, deterministic checks, one repair round, review gate, one recoverable vault transaction, optional git commit.
+- Ingest gate: relation types opened per domain, one relation per pair of cards, a card that mostly repeats an existing one written as `needs-review`, and disagreements with existing cards recorded in `_data/secondbrain/conflicts.jsonl` and listed by `sb status`.
 - Executors: host hand-off for sub-agents of a coding-agent harness; API clients for OpenAI-compatible and Anthropic endpoints, with a model-family check.
 - Entry points: the `sb` CLI, an Agent Skill (`skills/secondbrain`), and an MCP server with separate read-only and writer launches.
 - Taxonomy and maps of content: domain, pillar and topic for every card; MOC pages regenerated in prerequisite order; topics proposed by the producer and accepted by the reviewer.

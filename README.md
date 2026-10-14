@@ -89,11 +89,11 @@ flowchart TD
 1. **Freeze.** `sb ingest` stores the exact bytes of the source, splits it into chunks, and finds candidate domains and the closest existing cards for each chunk.
 2. **Produce.** A producer model gets the chunk, the taxonomy and the closest cards. It answers with JSON: cards (essence, propositions, questions and answers, relations, verbatim quotes) and a coverage table that accounts for every part of the chunk.
 3. **Check.** Code rejects the answer if a quote is not in the source, a domain, pillar or topic does not exist, a relation points nowhere, a title repeats an existing card, or part of the chunk is not accounted for. The producer gets the errors and corrects them.
-4. **Review.** A reviewer in a separate run sees the chunk, the cards without the producer's reasons, and the closest existing cards. It accepts, asks for a revision, or marks a duplicate, with a reason for each card.
+4. **Review.** A reviewer in a separate run sees the chunk, the cards without the producer's reasons, and the closest existing cards. It accepts, asks for a revision, or marks a duplicate, with a reason for each card. A card that mostly repeats an existing card it links is still written, marked `needs-review`. Where a new card disagrees with an existing one, the disagreement is recorded and shown by `sb status`; nothing is merged or corrected automatically.
 5. **Gate.** Only accepted cards go on. Rejected cards get one repair round; if they still fail, they stay pending with the reviewer's reasons. `sb ingest --retry <job>` tries the pending cards of a source again.
 6. **Diagram.** For accepted cards that describe a process or a structure, the model describes a diagram as data. Code checks it and generates Mermaid (see [Card diagrams](#card-diagrams)).
 7. **Write.** One transaction writes the cards, adds inverse relations to existing cards, adds approved new topics to the taxonomy, copies the source to `40_Sources/`, updates the registries, regenerates the affected maps and `HOME.md`, and removes the file from the inbox.
-8. **Review daily.** New cards appear as new in the review queue. Nothing else is needed to register them.
+8. **Review daily.** New cards appear as new in the review queue. Nothing else is needed to register them. A card marked `needs-review` waits until you set its `status` to `confirmed`.
 
 Details: [docs/ingest.md](docs/ingest.md).
 
