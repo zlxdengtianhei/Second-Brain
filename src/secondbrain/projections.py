@@ -162,8 +162,13 @@ def review_projection(snapshot, today: date, *, extra_targets=(), generated_at=N
             'due': reviews.local_day(r['due'], now.tzinfo)} for r in queue['cards'] if r['kind'] == 'due']
     new = [{'id': r['id'], 'title': r['title'], 'path': r['path'][:-3], 'domain': r['domain']}
            for r in queue['cards'] if r['kind'] == 'new']
-    issues = ([{'code': 'learning_order_cycle', 'count': queue['cycle_breaks'],
-                'detail': 'Prerequisite edges among new cards form a cycle; the queue breaks it in card id order'}]
+    cycles = queue['prerequisite_cycles']
+    issues = ([{'code': 'learning_order_cycle', 'groups': cycles['groups'], 'cards': cycles['cards'],
+                'queue_breaks': queue['cycle_breaks'],
+                'detail': f'{cycles["groups"]} groups of cards ({cycles["cards"]} cards in all) have prerequisite links '
+                          'that lead back to themselves; to get past them, the queue took '
+                          f'{queue["cycle_breaks"]} not-yet-learned cards out of prerequisite order. '
+                          'sb refresh lists the groups.'}]
               if queue['cycle_breaks'] else [])
     counts = {'scanned': len(snapshot.cards), 'due': len(due), 'new': len(new),
               'new_available': queue['new_available'], 'new_quota': queue['new_quota']}
@@ -213,12 +218,15 @@ def review_projection(snapshot, today: date, *, extra_targets=(), generated_at=N
                        f'{lay.projections}/kb_review.json': jobs.encoded(site)}, counts, issues)
 
 
-def entry_projection(snapshot, today: date, *, final_paths=(), removed_paths=(), reads=None) -> Projection:
+def entry_projection(snapshot, today: date, *, final_paths=(), removed_paths=(), reads=None,
+                     conflicts: int | None = None) -> Projection:
     """HOME and the generated blocks of the entry docs.
 
     ``snapshot`` is the vault as the current write leaves it; ``final_paths``
     and ``removed_paths`` are the files that write creates and removes, so the
-    folder table counts the same state as the card count.
+    folder table counts the same state as the card count. ``conflicts`` is the
+    number of open conflicts when the write records new ones; otherwise they
+    are counted from the conflict record on disk, as `sb status` does.
     """
     reads = {} if reads is None else reads
     lay = _layout(snapshot)
@@ -248,8 +256,15 @@ def entry_projection(snapshot, today: date, *, final_paths=(), removed_paths=(),
         review_line = T['review_no_extra'].format(install=labels.install_hint('review', labels.language()))
     home = [line.format(inbox=lay.inbox, review_link=review_line) for line in T['home']]
     waiting = sum(c.fm.get('status') == 'needs-review' for c in snapshot.cards.values())
-    if waiting:  # they never reach the review queue unless the owner looks at them
-        home.append(T['needs_review'].format(n=waiting))
+    if conflicts is None:
+        from .pipelines.ingest import open_conflicts
+        conflicts = len(open_conflicts(snapshot.root, snapshot)) if snapshot.root is not None else 0
+    # both wait for the owner: needs-review cards never reach the review queue, conflicts are never settled by sb
+    step = 4  # after the three steps every HOME has
+    for key, n in (('needs_review', waiting), ('conflicts', conflicts)):
+        if n:
+            home.append(T[key].format(i=step, n=n))
+            step += 1
     home.append('')
     if lay.entry_docs:
         home += [' · '.join(f'[[{name[:-3]}]]' for name in lay.entry_docs), '']

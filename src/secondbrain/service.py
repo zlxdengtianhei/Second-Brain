@@ -142,22 +142,40 @@ class Service:
 
 
 def _state_size(root: Path) -> dict:
-    """Where the vault's job records and caches are, and their size."""
+    """Where the vault's job records and caches are, how large each part is, and what `sb job prune` can free."""
     import os
     from .store import state_root
     try:
         base = state_root(root)
     except ValueError as exc:
         return {'error': str(exc)}
-    total = 0
+    parts: Counter = Counter()
     for folder, _, names in os.walk(base):
+        top = os.path.relpath(folder, base).split(os.sep)[0]
         for name in names:
             try:
-                total += os.lstat(os.path.join(folder, name)).st_size
+                parts[name if top == '.' else top] += os.lstat(os.path.join(folder, name)).st_size
             except OSError:
                 pass
-    return {'path': str(base), 'mb': round(total / 1e6, 1),
-            'hint': 'rollback journals of old writes take most of it; sb job prune shows which can go'}
+
+    def mb(size):
+        return round(size / 1e6, 1)
+    try:
+        prunable = jobs.prune(root)['mb']
+    except (OSError, ValueError):
+        prunable = None
+    cache, records = parts.get('cache', 0), parts.get('jobs', 0)
+    if cache >= records:  # drill 3: 99 of 181 MB, while sb job prune found nothing
+        hint = (f'most of it is the parse cache and search index (cache/, {mb(cache)} MB); they grow with the '
+                'vault and are rebuilt when missing, so nothing there needs cleaning up')
+    else:
+        hint = f'most of it is job records (jobs/, {mb(records)} MB)'
+    if prunable:
+        hint += f'; sb job prune --apply frees {prunable} MB of rollback journals older than 30 days'
+    elif prunable is not None:
+        hint += '; sb job prune finds no rollback journal older than 30 days (--days N looks at newer ones)'
+    return {'path': str(base), 'mb': mb(sum(parts.values())),
+            'parts': {name: mb(size) for name, size in sorted(parts.items())}, 'prunable_mb': prunable, 'hint': hint}
 
 
 def initialize(root: Path, catalog: dict, job_id: str = 'initialize-catalog'):

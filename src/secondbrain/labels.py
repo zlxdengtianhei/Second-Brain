@@ -129,9 +129,11 @@ PAGES = {
             '2. 新资料放进 `{inbox}/`，运行 `sb inbox list`，再 `sb ingest <文件>`。',
             '3. 未完成的任务：`sb job list`；部分写入的源：`sb ingest --retry <任务>`。',
         ],
-        'needs_review': '4. 标为 needs-review 的卡：**{n:,}** 张。把 `status` 改为 `confirmed` 之前，它们不进复习队列；'
+        'needs_review': '{i}. 标为 needs-review 的卡：**{n:,}** 张。把 `status` 改为 `confirmed` 之前，它们不进复习队列；'
                         '在 Obsidian 里搜索 `[status:needs-review]`，或运行 `sb status --needs-review` 列出它们，'
                         '再逐张合并、修改或确认。',
+        'conflicts': '{i}. 新卡与已有卡在事实上说法不一：**{n:,}** 处。`sb status` 列出每一处和两张卡各自的说法，'
+                     '由你判断哪张对、改正说错的那张。已有卡的正文改动之前，这一处一直列在那里。',
         'review_link': '[[{review}|打开 {date} 的复习页]]：不依赖插件；`sb daily --apply` 生成当天的复习页，'
                        '并把这里改成当天的链接。',
         'review_missing': '{date} 的复习页还没有生成：运行 `sb daily --apply`，它生成复习页并在这里加上链接'
@@ -155,6 +157,7 @@ PAGES = {
             '`sb classify --domain <域>` 分类，',
             '`sb review queue` 看今天要复习的卡，`sb refresh --apply` 刷新 MOC，`sb job list` 查看未完成任务。',
             '这些命令不自动打开 Obsidian；生成后从 HOME 或左侧目录打开。',
+            '本块由 `sb` 生成；块外的文字是手写的，`sb` 不会更新。那里提到的其他命令（例如旧系统的命令）不是 `sb` 的功能。',
         ],
     },
     'en': {
@@ -197,9 +200,12 @@ PAGES = {
             '2. Put new material into `{inbox}/`, run `sb inbox list`, then `sb ingest <file>`.',
             '3. Unfinished jobs: `sb job list`; sources with pending cards: `sb ingest --retry <job>`.',
         ],
-        'needs_review': '4. Cards marked needs-review: **{n:,}**. They stay out of the review queue until their '
+        'needs_review': '{i}. Cards marked needs-review: **{n:,}**. They stay out of the review queue until their '
                         '`status` is `confirmed`: search `[status:needs-review]` in Obsidian, or run '
                         '`sb status --needs-review`, then merge, fix or confirm each.',
+        'conflicts': '{i}. New and existing cards that disagree on a fact: **{n:,}**. `sb status` lists each one '
+                     'with what both cards say; decide which is right and fix the wrong one. Each stays listed '
+                     "until the existing card's text changes.",
         'review_link': "[[{review}|Open the review page of {date}]]: works without the plugin; "
                        "`sb daily --apply` makes each day's page and points this link to it.",
         'review_missing': 'The review page of {date} has not been made yet: run `sb daily --apply`; it makes '
@@ -226,6 +232,8 @@ PAGES = {
             "`sb review queue` for today's reviews, `sb refresh --apply` to rebuild the maps, "
             '`sb job list` for unfinished jobs.',
             'These commands do not open Obsidian; open the pages from HOME or the file list.',
+            '`sb` writes this block; text outside it is written by hand and `sb` does not update it. Other '
+            'commands named there (for example those of an older system) are not `sb` commands.',
         ],
     },
 }

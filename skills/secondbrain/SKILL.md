@@ -40,7 +40,7 @@ This freezes the source and splits it into chunks. It prints a JSON **list** wit
 For each hand-off start a **new** sub-agent (no shared history with you or other sub-agents):
 
 - `role: producer` (steps `produce`, `repair`, `diagram`) → text from `references/subagent-producer.md`;
-- `role: reviewer` (step `review`) → text from `references/subagent-reviewer.md`. When the host lets you choose, use a model from a different family than the producer. When the host offers only one family (for example, all sub-agents run models of one vendor), still start a new sub-agent for each review: `sb` accepts it in host mode, marks the job `same_family: true`, and you report that (section 5).
+- `role: reviewer` (steps `review`, `source_check`) → text from `references/subagent-reviewer.md`. When the host lets you choose, use a model from a different family than the producer. When the host offers only one family (for example, all sub-agents run models of one vendor), still start a new sub-agent for each review: `sb` accepts it in host mode, marks the job `same_family: true`, and you report that (section 5).
 
 Fill in the three values from the hand-off (`packet_path`, `output_path`, `submit_cmd`) and nothing else. The sub-agent submits its own answer with `sb job submit`; `sb` checks the answer's form on the spot and returns errors to the sub-agent, not to you. Diagram answers are also checked card by card at the next `sb job advance`: a diagram that fails comes back as one rewrite hand-off (chunk `dg01.r1` …, section 4), which goes to a new sub-agent like any other. `submit_cmd` starts with the absolute path of the `sb` program you are running, so it works in a sub-agent shell that does not have `sb` on its `PATH`. The sub-agent must be able to read and write files and run that command on the same machine.
 
@@ -50,7 +50,7 @@ Fill in the three values from the hand-off (`packet_path`, `output_path`, `submi
 sb job advance <job_id> --executor host
 ```
 
-It runs every deterministic step that can run and prints **one** job object. Its `handoffs` are the next tasks: reviews, one repair round for rejected cards (chunk `c01.r1` …), the diagram request for the accepted cards (chunk `dg01` …), and at most one diagram rewrite (chunk `dg01.r1` …). Every one goes to a new sub-agent as in section 3; diagram tasks use the producer text. When `handoffs` is empty, read `status`. Repeat sections 3 and 4 until `status` is `applied` or `partial`.
+It runs every deterministic step that can run and prints **one** job object. Its `handoffs` are the next tasks: reviews, one repair round for rejected cards (chunk `c01.r1` …), the source check when the accepted cards come from two or more chunks (chunk `xc01`, step `source_check`: one reviewer looks at all of them together for cards and new topics that two chunks repeat), the diagram request for the accepted cards (chunk `dg01` …), and at most one diagram rewrite (chunk `dg01.r1` …). Every one goes to a new sub-agent as in section 3; the source check uses the reviewer text, diagram tasks the producer text. The first-round producers of a source all run at once and see no other chunk's cards; the source check is what keeps two chunks from writing the same card. When `handoffs` is empty, read `status`. Repeat sections 3 and 4 until `status` is `applied` or `partial`.
 
 Then `sb` writes the cards, a copy of the source, the registries and the maps in one transaction. By default (`[ingest] after_ingest = "move"`) the inbox file then leaves the inbox; its bytes stay in the sources folder (by default `40_Sources/<hash>/<file>`), and `sb inbox list` shows it as `done` with `in_inbox: false`. With `after_ingest = "keep"` the inbox file stays where it is.
 
@@ -68,8 +68,9 @@ From the final state report:
 - cards still pending, with the reviewer's reasons (`pending`), and for a retry child whether it made progress (`retry_progress`);
 - material that needs a new pillar or domain (`needs_taxonomy`);
 - duplicates of existing cards (`duplicates`) and skipped passages (`out_of_scope`);
+- what the source check settled (`source_check`): cards not written because another card of the source holds them (`merged`, with `into`), cards written as needs-review because they overlap one (`overlap`), and new topics filed under another new topic (`refiled_topics`). `status: skipped` means the check's answer kept failing and the cards were written as the chunk reviews left them;
 - cards written as needs-review because they mostly repeat an existing card (`needs_review`, with `overlap_with`). They stay out of the review queue until the user sets `status: confirmed`; `sb status` counts all such cards and `sb status --needs-review` lists them;
-- links that could not be written (`skipped_relations`: the card, the type and the target), so the user can add them by hand when a retry does not;
+- links that could not be written (`skipped_relations`: the card, the type, the target and the `reason`). With reason `target card was not written` the target is still pending and a retry adds the link when it writes it; with any other reason no retry will, so the user adds it by hand. A retry child lists every link carried to it once: under `restored_relations` (added, `linked_as` when the new card already links that card another way, `redirected_from` when the target turned out to repeat an existing card) or again under `skipped_relations`;
 - conflicts with existing cards (`conflicts`): what disagrees and with which card. The user settles them; `sb status` lists them until that card's text changes. Do not edit the existing card yourself;
 - whether reviews were done by the producer's model family (`same_family: true` in `sb job show <job_id>`);
 - inbox items you skipped, with reasons.
@@ -79,7 +80,9 @@ A `partial` job wrote the accepted cards and kept the rest pending. `sb ingest -
 When a retry child ends `partial` too, its result says whether to go on:
 
 - with a `hint` (`sb ingest --retry <child>`), it wrote cards or settled items; retry the child, not the first job. `sb ingest --retry` on an older job of the chain does not start anything; its `message` names the newest job.
-- with `retry_progress.progress: false` and a `message`, it wrote no card and left as many items open as it was given. Stop retrying. Report the `pending` items with their reasons; a further retry helps only after the user changes what blocked them (for example the taxonomy). The user may also close the source with the items left open: `sb inbox skip <file> --reason "<why>"`.
+- with `retry_progress.progress: false` and a `message`, it wrote no card and left as many items open as it was given. Stop retrying. Report the `pending` items with their reasons; a further retry helps only after the user changes what blocked them (for example the taxonomy).
+
+`needs_taxonomy` passages may fit a new topic that another chunk of the same source added: the chunks are produced at the same time, so a chunk cannot use a topic its sibling is proposing. The retry sees the topic once it is written and can file them there without any change by the user (drill 3: all 16 such passages of one chunk). The user may also close the source with the items left open: `sb inbox skip <file> --reason "<why>"`.
 
 `sb recover <job_id> --rollback` undoes a written job byte for byte if the user asks. A rolled-back source can be ingested again with `sb ingest`; `sb job reset <job_id> --reason "<why>"` sets aside a stuck job that never wrote. Roll back a retry child (`<job_id>-retry1` …) before its parent; after a retry child is rolled back, `sb ingest --retry <job_id> --executor host` on the parent starts a new child.
 

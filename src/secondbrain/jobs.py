@@ -329,7 +329,7 @@ def submit(root: Path, job_id: str, payload: dict, *, role: str, run_id: str,
         run.update(status='submitted', output_sha256=ref['sha256'], ended_at=now(),
                    model_reported=model_reported or run.get('model_reported'),
                    attestation=attestation, usage=usage)
-        if role == 'reviewer':
+        if role == 'reviewer' and slot['candidate'].get('run_id'):  # a program-made input has no producer
             producer = load_run(root, job_id, slot['candidate']['run_id'])
             policy = config.review_policy()
             a = gates.model_family(producer.get('model_reported') or producer.get('model_requested'),
@@ -351,6 +351,30 @@ def submit(root: Path, job_id: str, payload: dict, *, role: str, run_id: str,
         state['updated_at'] = now()
         write_json(root, location(job_id), state)
         return result
+
+
+def put_program_candidate(root: Path, job_id: str, chunk: str, payload: dict) -> dict:
+    """Store input the program made for a reviewer-only step (the ingest source check) as ``chunk``'s candidate.
+
+    The reviewer's answer is then bound to it like any review to its candidate.
+    Returns the existing ref when the slot already has one.
+    """
+    with vault_lock(root):
+        state = load(root, job_id)
+        if _job_write_blocked(root, job_id, state):
+            raise Conflict('TERMINAL_JOB')
+        slot = _slot(state, chunk, create=True)
+        if slot.get('candidate'):
+            return slot['candidate']
+        raw = encoded(payload)
+        path = location(job_id, 'out', f'program-{chunk}.json')
+        write_json(root, path, payload)
+        slot.update(candidate={'path': path, 'sha256': digest(raw), 'run_id': None,
+                               'input_sha256': state['input_sha256'], 'by': 'program'},
+                    review=None, status='proposed')
+        state['updated_at'] = now()
+        write_json(root, location(job_id), state)
+        return slot['candidate']
 
 
 def _verified_bytes(root: Path, job_id: str, ref: dict) -> bytes:
@@ -381,6 +405,8 @@ def require_independent_review(root: Path, state: dict, chunk: str | None = None
         raise Conflict('Missing candidate or review')
     _verified_bytes(root, state['job_id'], candidate_ref)
     review_raw = _verified_bytes(root, state['job_id'], review_ref)
+    if candidate_ref.get('by') == 'program' and candidate_ref.get('run_id') is None:
+        return json.loads(review_raw)  # the program made the input (put_program_candidate): no producer to differ from
     producer = load_run(root, state['job_id'], candidate_ref['run_id'])
     reviewer = load_run(root, state['job_id'], review_ref['run_id'])
     gates.check_independence(state['input_sha256'], candidate_ref, review_ref,

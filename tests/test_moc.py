@@ -158,6 +158,37 @@ def test_learning_order_cycle_keeps_every_card():
     assert set(cyc["card_ids"]) == {"c1", "c2"}
 
 
+def test_a_cycle_is_only_the_cards_that_lead_back_to_themselves():
+    # drill 3: status said 14, the daily queue 186 and a Tarjan count 51 for the same vault
+    cards = _cards_with_edges([
+        ("c1", "c2", "depends_on"), ("c2", "c1", "depends_on"),   # c1 <-> c2
+        ("c3", "c2", "follows"),                                  # c3 after the cycle: not in it
+        ("c4", "c3", "depends_on"), ("c5", "c4", "depends_on"),   # c3 -> c4 -> c5
+        ("c6", "c5", "depends_on"), ("c5", "c6", "depends_on"),   # c5 <-> c6, downstream of c3 and c4
+        ("c7", "c8", "required_by"), ("c8", "c7", "precedes"),    # c7 before c8 and c8 before c7
+    ])
+    assert moc.prerequisite_cycles(cards) == [["c1", "c2"], ["c5", "c6"], ["c7", "c8"]]
+    _, issues = moc.learning_order(cards)
+    assert [i["card_ids"] for i in issues if i["code"] == "learning_order_cycle"] == [
+        ["c1", "c2"], ["c5", "c6"], ["c7", "c8"]]  # c3 and c4 sit between two cycles; the old count took them in
+
+
+def test_cycles_are_counted_once_for_the_vault_even_across_maps():
+    cat = catalog({"attention": "Example Attention Map", "other": "Other Map"})
+    cards = {
+        "c1": make_card(1, "attention", rels=[{"target": "c2", "type": "depends_on"}]),
+        "c2": make_card(2, "other", rels=[{"target": "c1", "type": "depends_on"}]),
+        "c3": make_card(3, "attention", rels=[{"target": "c4", "type": "depends_on"}]),
+        "c4": make_card(4, "attention", rels=[{"target": "c3", "type": "depends_on"}]),
+    }
+    proj = moc.build_mocs(snapshot(cards, {REAL_FRAG["title"]: REAL_FRAG}, cat))
+    cycles = [i for i in proj.issues if i["code"] == "learning_order_cycle"]
+    assert [(i["card_ids"], i["mocs"]) for i in cycles] == [
+        (["c1", "c2"], ["Example Attention Map", "Other Map"]), (["c3", "c4"], ["Example Attention Map"])]
+    scoped = moc.build_mocs(snapshot(cards, {REAL_FRAG["title"]: REAL_FRAG}, cat), affected_domains=["other"])
+    assert [i["card_ids"] for i in scoped.issues if i["code"] == "learning_order_cycle"] == [["c1", "c2"]]
+
+
 # --------------------------------------------------------------------------
 # build_mocs — shared MOC, real fragment
 # --------------------------------------------------------------------------

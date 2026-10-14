@@ -195,6 +195,29 @@ def is_diagram_task(task):
     return is_slot(task.chunk)
 
 
+def is_source_check_task(task):
+    from secondbrain.pipelines.source_check import is_slot
+    return is_slot(task.chunk)
+
+
+def keep_all(packet, **decisions):
+    """A source-check answer: ``keep`` for every card and topic unless ``decisions`` (slug -> row) says otherwise."""
+    return {'cards': [{'slug': c['slug'], 'decision': 'keep', **decisions.get(c['slug'], {})} for c in packet['cards']],
+            'new_topics': [{'id': t['id'], 'decision': 'keep', **decisions.get(t['id'], {})}
+                           for t in packet['new_topics']]}
+
+
+def with_source_check(responder, seen=None, **decisions):
+    """Wrap a reviewer responder so the source check gets ``keep_all`` (with ``decisions``)."""
+    def respond(task):
+        if is_source_check_task(task):
+            if seen is not None:
+                seen.append(task)
+            return keep_all(task.packet, **decisions)
+        return responder(task)
+    return respond
+
+
 def with_diagrams(responder, irs=None, seen=None):
     """Wrap a producer responder so diagram requests get scripted IRs."""
     def respond(task):
@@ -210,15 +233,20 @@ def scripted(producer_outputs, reviewer_outputs, diagrams=None):
     """Responders that hand out answers in call order and record the packets they saw.
 
     Diagram requests are answered from ``diagrams`` (ref -> IR; skip otherwise)
-    and recorded under ``seen['diagram']``.
+    and recorded under ``seen['diagram']``; the source check (sources whose
+    cards come from two or more chunks) keeps every card, recorded under
+    ``seen['source_check']``.
     """
-    seen = {'producer': [], 'reviewer': [], 'diagram': []}
+    seen = {'producer': [], 'reviewer': [], 'diagram': [], 'source_check': []}
 
     def make(role, queue):
         def respond(task):
             if role == 'producer' and is_diagram_task(task):
                 seen['diagram'].append(task)
                 return diagram_answer(task.packet, diagrams)
+            if role == 'reviewer' and is_source_check_task(task):
+                seen['source_check'].append(task)
+                return keep_all(task.packet)
             seen[role].append(task)
             if not queue:
                 raise AssertionError(f'unexpected {role} call for {task.chunk}')

@@ -12,6 +12,8 @@ For each card in `candidate.cards` decide:
 - `revise`: anything else. Give a concrete, checkable reason (what is wrong, where), not general advice.
   When the card fits another domain better, put that domain's slug in `suggested_domain`, also when it is not among `taxonomies`: `domains` lists every domain with its question. Choose by what the knowledge is used as: a card about a general tool or library belongs where that tool's other cards are, even when the source used it to build something else. The producer then gets that domain's taxonomy in the repair round.
 
+`other_chunks_cards` lists the cards proposed for the other chunks of this source. Do not revise a card only because one of them makes the same point: once every chunk is reviewed, a check of the whole source decides which of such cards are written. A relation to one of them must still make sense.
+
 `overlap`, on an accepted card that has a relation to an existing card (the validator asks for it then):
 - `distinct`: the card holds a recallable unit the linked cards do not have; they are related, not the same.
 - `needs_review`: the card mostly repeats one existing card (put its id in `overlap_with`; the card must link it) and you cannot tell whether the two should be merged. Both cards are kept and linked, and the new one is written with `status: needs-review` for the owner to merge or keep. A relation note of the card saying that the other card "already covers" it, or that the two "measure the same thing", points here or to `duplicate`.

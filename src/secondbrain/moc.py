@@ -106,17 +106,9 @@ def _link(relpath, alias):
 # --------------------------------------------------------------------------
 # Learning order (only the four prerequisite edges)
 # --------------------------------------------------------------------------
-def learning_order(cards):
-    """Return ``(ordered_cards, issues)`` — a stable prerequisite topo sort.
-
-    Only ``depends_on`` / ``follows`` / ``required_by`` / ``precedes`` create a
-    before/after ordering; every other relation type is ignored here. Edges are
-    oriented "must be learned first" -> "must be learned later" and ties break
-    by card id. A cycle is reported as an issue but **no card is dropped**: the
-    remaining cards are appended in stable id order.
-    """
-    by_id = {c.id: c for c in cards}
-    indeg = {cid: 0 for cid in by_id}
+def _prereq_edges(cards):
+    """``{src: {dst}}``: ``src`` must be learned before ``dst``, from the four prerequisite edges among ``cards``."""
+    by_id = {c.id for c in cards}
     adj = {}
     for c in cards:
         for rel in c.fm.get("relations") or ():
@@ -129,18 +121,90 @@ def learning_order(cards):
             if not isinstance(tgt, str) or tgt not in by_id or tgt == c.id:
                 continue
             # src must be learned before dst.
-            if typ == "required_by":      # c is required_by tgt -> c before tgt
+            if typ in ("required_by", "precedes"):  # c before tgt
                 src, dst = c.id, tgt
-            elif typ == "precedes":       # c precedes tgt -> c before tgt
-                src, dst = c.id, tgt
-            elif typ == "follows":        # c follows tgt -> tgt before c
+            else:                                     # depends_on / follows: tgt before c
                 src, dst = tgt, c.id
-            else:                         # depends_on: tgt before c
-                src, dst = tgt, c.id
-            out = adj.setdefault(src, set())
-            if dst not in out:
-                out.add(dst)
-                indeg[dst] += 1
+            adj.setdefault(src, set()).add(dst)
+    return adj
+
+
+def prerequisite_cycles(cards):
+    """Groups of two or more cards whose prerequisite links lead from each card back to itself.
+
+    The one definition of a learning-order cycle that `sb refresh`, `sb status`,
+    `sb daily` and `sb review queue` report: the strongly connected groups of
+    the graph of the four prerequisite edges among ``cards`` (as in
+    :func:`learning_order`). A card that only depends on a cycle, or that a
+    cycle depends on, is not in it. Each group is sorted by id; groups by their
+    first id.
+    """
+    adj = _prereq_edges(cards)
+    index, low, on_stack, stack, groups = {}, {}, set(), [], []
+    for root in sorted(c.id for c in cards):
+        if root in index:
+            continue
+        work = [(root, iter(sorted(adj.get(root, ()))))]
+        index[root] = low[root] = len(index)
+        stack.append(root)
+        on_stack.add(root)
+        while work:
+            node, children = work[-1]
+            child = next(children, None)
+            if child is not None:
+                if child not in index:
+                    index[child] = low[child] = len(index)
+                    stack.append(child)
+                    on_stack.add(child)
+                    work.append((child, iter(sorted(adj.get(child, ())))))
+                elif child in on_stack:
+                    low[node] = min(low[node], index[child])
+                continue
+            work.pop()
+            if work:
+                low[work[-1][0]] = min(low[work[-1][0]], low[node])
+            if low[node] == index[node]:
+                group = []
+                while True:
+                    member = stack.pop()
+                    on_stack.discard(member)
+                    group.append(member)
+                    if member == node:
+                        break
+                if len(group) > 1:
+                    groups.append(sorted(group))
+    return sorted(groups)
+
+
+def cycle_issues(cards, moc_of=None):
+    """One ``learning_order_cycle`` issue per group of :func:`prerequisite_cycles`."""
+    out = []
+    for group in prerequisite_cycles(cards):
+        issue = {"code": "learning_order_cycle", "card_ids": group,
+                 "detail": "These cards' prerequisite links lead back to themselves, so no order puts every "
+                           "prerequisite first; every card is kept and the group follows in card id order"}
+        if moc_of is not None:
+            issue["mocs"] = sorted({moc_of[c] for c in group if c in moc_of})
+        out.append(issue)
+    return out
+
+
+def learning_order(cards):
+    """Return ``(ordered_cards, issues)`` — a stable prerequisite topo sort.
+
+    Only ``depends_on`` / ``follows`` / ``required_by`` / ``precedes`` create a
+    before/after ordering; every other relation type is ignored here. Edges are
+    oriented "must be learned first" -> "must be learned later" and ties break
+    by card id. Each cycle (:func:`prerequisite_cycles`) is reported as an issue
+    but **no card is dropped**: the cards Kahn's sort cannot place are appended
+    in stable id order.
+    """
+    by_id = {c.id: c for c in cards}
+    adj = _prereq_edges(cards)
+    indeg = {cid: 0 for cid in by_id}
+    for outs in adj.values():
+        for dst in outs:
+            indeg[dst] += 1
 
     ready = [cid for cid, d in indeg.items() if d == 0]
     heapq.heapify(ready)
@@ -153,48 +217,10 @@ def learning_order(cards):
             if indeg[d] == 0:
                 heapq.heappush(ready, d)
 
-    issues = []
     seen = set(order)
     remaining = sorted(cid for cid in by_id if cid not in seen)
-    if remaining:
-        # Distinguish the actual cycle members from cards that merely depend on
-        # a cycle (which Kahn couldn't schedule). Peel in-degree-zero leaves from
-        # the remaining subgraph; what is left is a real cycle.
-        rem = set(remaining)
-        in_adj = {n: set() for n in rem}
-        out_adj = {n: set() for n in rem}
-        in_deg = {n: 0 for n in rem}
-        out_deg = {n: 0 for n in rem}
-        for src, outs in adj.items():
-            if src in rem:
-                for d in outs:
-                    if d in rem:
-                        in_adj[d].add(src)
-                        out_adj[src].add(d)
-                        in_deg[d] += 1
-                        out_deg[src] += 1
-        # Peel nodes with no in-edge or no out-edge among the remaining subgraph
-        # (they are upstream/downstream of a cycle, not cycle members).
-        changed = True
-        while changed:
-            changed = False
-            for n in sorted(rem):
-                if in_deg[n] == 0 or out_deg[n] == 0:
-                    rem.discard(n)
-                    for p in in_adj[n]:
-                        if p in rem:
-                            out_deg[p] -= 1
-                    for q in out_adj[n]:
-                        if q in rem:
-                            in_deg[q] -= 1
-                    changed = True
-        cycle_nodes = sorted(rem) if rem else list(remaining)
-        issues.append({
-            "code": "learning_order_cycle",
-            "card_ids": cycle_nodes,
-            "detail": "Prerequisite edges form a cycle; every card is kept and the rest follow in card id order",
-        })
-        order.extend(remaining)
+    issues = cycle_issues(cards) if remaining else []
+    order.extend(remaining)
     return [by_id[cid] for cid in order], issues
 
 
@@ -427,8 +453,7 @@ def _render_root(moc_title, moc_domains, narrative, pillars, pillar_counts,
 def _process_moc(snapshot, moc_title, moc_domains, domain_to_moc, issues):
     domain_set = set(moc_domains)
     cards = [c for c in snapshot.cards.values() if c.domain in domain_set]
-    ordered, lo_issues = learning_order(cards)
-    issues.extend(lo_issues)
+    ordered, _ = learning_order(cards)  # cycles are reported once for the whole vault (build_mocs)
 
     ctx = {cid: (c.path, c.title, c.domain) for cid, c in snapshot.cards.items()}
     taxonomy = snapshot.taxonomies.get(moc_title)
@@ -638,6 +663,12 @@ def build_mocs(snapshot, *, affected_domains=None):
         metrics_mocs[moc] = res["metrics"]
         covered.update(res["metrics"]["card_ids"])
         total_pages += res["metrics"]["page_count"]
+
+    # Learning-order cycles over the whole vault, the same groups `sb status`, `sb daily` and
+    # `sb review queue` count; listed when a card of the group is on a map built here.
+    moc_of = {cid: domain_to_moc[c.domain] for cid, c in snapshot.cards.items() if c.domain in domain_to_moc}
+    issues.extend(i for i in cycle_issues(list(snapshot.cards.values()), moc_of)
+                  if covered.intersection(i["card_ids"]))
 
     # Unknown relation targets among cards that landed in a scoped MOC.
     known = set(snapshot.cards)

@@ -38,7 +38,7 @@ from ..executors.base import CHUNK_TOO_LARGE, INVALID_OUTPUT, ExecutorFailure
 from ..locks import job_lock
 from ..store import Change, Conflict, digest, read_bytes
 from ..vault import Card, append_list_items, parse_note, read_snapshot
-from . import card_diagrams
+from . import card_diagrams, source_check
 from .chunking import chunk_text
 from .routing import essence, route
 
@@ -223,11 +223,11 @@ def retry(root: Path, job_id: str, *, settings: config.Settings | None = None) -
         written.setdefault(card['chunk'], []).append({'id': card['id'], 'title': card['title'], 'slug': card.get('slug')})
     settled = {cid: {key: list(rows) for key, rows in kinds.items()}
                for cid, kinds in (lineage.get('settled') or {}).items() if cid in open_items}
-    # links to cards that were still pending; restored when a later job writes the target
+    # links to cards that were still pending; restored when a later job writes the target. The parent lists
+    # every link it could not settle, its own and those carried to it, so its result is the whole list
     written_now = {card.get('slug') for card in parent.get('produced') or []}
     skipped = []
-    for row in (lineage.get('skipped_relations') or []) + [
-            r for r in parent.get('skipped_relations') or [] if r.get('reason') == 'target card was not written']:
+    for row in [r for r in parent.get('skipped_relations') or [] if r.get('reason') == 'target card was not written']:
         entry = {k: row.get(k) for k in ('from', 'type', 'target_slug')}
         if entry['target_slug'] not in written_now and entry not in skipped:
             skipped.append(entry)
@@ -1146,6 +1146,8 @@ def validate_submission(packet: dict, payload: dict, *, role: str, candidate=Non
         raise IngestError('ingest runs are always bound to a chunk slot')
     if card_diagrams.is_slot(chunk):
         return card_diagrams.validate_answer(payload)
+    if source_check.is_slot(chunk):
+        return source_check.validate_answer(candidate, payload)
     existing_ids, existing_titles, existing_domains = _vault_ids_titles(root)
     if role == 'reviewer':
         return validate_review(candidate, payload, existing_ids, packet['catalog']['domains'])
@@ -1175,7 +1177,7 @@ def _known_topics(root, state, slot: str, payload, kept: dict) -> set:
     in_use |= {(c['domain'], c['pillar'], c['topic']) for s, c in kept.items() if s not in refiled}
     out = set()
     for other, info in (state.get('chunks') or {}).items():
-        if other == slot or not info.get('candidate') or card_diagrams.is_slot(other):
+        if other == slot or not info.get('candidate') or card_diagrams.is_slot(other) or source_check.is_slot(other):
             continue
         for t in jobs.artifact(root, state, 'candidate', other).get('new_topics', []):
             key = (t['domain'], t['pillar'], t['name'])
@@ -1434,14 +1436,78 @@ def advance(root: Path, job_id: str, *, producer, reviewer, apply: bool = True) 
         if handoffs or not all(o['settled'] for o in settled):
             state = jobs.update(root, job_id, status='awaiting_submission' if handoffs else 'producing')
             return {**state, 'handoffs': handoffs}
+        handoffs = _source_check_stage(root, job_id, packet, settled, reviewer)
+        if handoffs:
+            state = jobs.update(root, job_id, status='awaiting_submission')
+            return {**state, 'handoffs': handoffs}
+        checked, _ = _checked(root, jobs.load(root, job_id), packet, settled)
         if not apply:
-            state = jobs.update(root, job_id, status='reviewed', proposal=_summary(settled))
+            state = jobs.update(root, job_id, status='reviewed', proposal=_summary(checked))
             return state
-        _, handoffs = _diagram_stage(root, job_id, packet, settled, producer)
+        _, handoffs = _diagram_stage(root, job_id, packet, checked, producer)
         if handoffs:
             state = jobs.update(root, job_id, status='awaiting_submission')
             return {**state, 'handoffs': handoffs}
         return apply_job(root, job_id, settled)
+
+
+# --------------------------------------------------------------------------
+# Source check (after every chunk settled, before diagrams; see source_check)
+# --------------------------------------------------------------------------
+def _source_check_stage(root: Path, job_id: str, packet: dict, settled: list[dict], executor) -> list:
+    """Run the source check when it is due and not done; returns host hand-offs.
+
+    An answer that fails validation is asked for again while the repair budget
+    lasts; after that the check is recorded as skipped and the cards are
+    written as the chunk reviews left them.
+    """
+    from ..runner import AwaitingSubmission, call_executor
+    if not source_check.needed(settled):
+        return []
+    slot = source_check.SLOT
+    while True:
+        state = jobs.load(root, job_id)
+        info = (state.get('chunks') or {}).get(slot) or {}
+        if info.get('review') or info.get('skipped'):
+            return []
+        if not info.get('candidate'):
+            jobs.put_program_candidate(root, job_id, slot, source_check.frozen_input(settled, packet['source']))
+            state = jobs.load(root, job_id)
+            info = state['chunks'][slot]
+        text = _prompt_only('source_check.md').replace('{job_id}', job_id)
+        if info.get('last_validation_error'):
+            text += '\n## Your previous answer was rejected by the validator\n\n' + info['last_validation_error'] + '\n'
+        try:
+            call_executor(root, job_id, executor, role='reviewer', step='review', prompt_text=text,
+                          packet=jobs.artifact(root, state, 'candidate', slot), output_schema=source_check.SCHEMA,
+                          chunk=slot)
+        except AwaitingSubmission as waiting:
+            return [{**waiting.handoff, 'chunk': slot, 'step': source_check.STEP}]
+        except ExecutorFailure as failure:
+            if failure.code != INVALID_OUTPUT:
+                raise
+            failed = int(info.get('invalid_outputs', 0)) + 1
+            fields = {'invalid_outputs': failed, 'last_validation_error': failure.error.get('message', '')[:8000]}
+            if failed > config.review_policy().max_repair_rounds:
+                fields['skipped'] = (f'the answer failed validation {failed} times; the cards were written as '
+                                     'the chunk reviews left them')
+            _mark_slot(root, job_id, slot, **fields)
+
+
+def _checked(root: Path, state: dict, packet: dict, settled: list[dict]) -> tuple[list[dict], dict | None]:
+    """``(settled, report)`` after the source check's decisions; ``report`` is None when no check was due."""
+    if not source_check.needed(settled):
+        return settled, None
+    info = (state.get('chunks') or {}).get(source_check.SLOT) or {}
+    if info.get('skipped'):
+        return settled, {'status': 'skipped', 'reason': info['skipped']}
+    if not info.get('review'):
+        raise Conflict('The source check is not finished; run `sb job advance`')
+    frozen = jobs.artifact(root, state, 'candidate', source_check.SLOT)
+    try:
+        return source_check.apply(settled, frozen, jobs.artifact(root, state, 'review', source_check.SLOT))
+    except ValueError as exc:
+        raise Conflict(str(exc)) from exc
 
 
 # --------------------------------------------------------------------------
@@ -1599,6 +1665,7 @@ def apply_job(root: Path, job_id: str, settled: list[dict] | None = None) -> dic
                           for c in effective_chunks(packet, state)]
     if not all(o['settled'] for o in settled):
         raise Conflict('Not every chunk is reviewed yet; run `sb job advance`')
+    settled, check = _checked(root, state, packet, settled)
     lay = layouts.of(root)
     settings = packet['settings']
     language = settings['language']
@@ -1657,6 +1724,12 @@ def apply_job(root: Path, job_id: str, settled: list[dict] | None = None) -> dic
     # a target the reviewer judged a duplicate lives on in the existing card it repeats (drill 2, P6)
     duplicate_of = {d['slug']: d['duplicate_of'] for o in settled for d in o['duplicates']
                     if d.get('duplicate_of') in snapshot.cards}
+    # a pending target may be written by a retry, which then adds the link; a dropped one will not be
+    open_slugs = {p.get('slug') for p in pending if p.get('slug')}
+
+    def unwritten(slug):
+        return 'target card was not written' if slug in open_slugs else \
+            'target card was dropped in review; add the link by hand if it still matters'
     for _, slug, card in accepted:
         linked = {r.get('target') for r in card.get('relations') or []}
         for r in card.get('relations') or []:
@@ -1667,11 +1740,13 @@ def apply_job(root: Path, job_id: str, settled: list[dict] | None = None) -> dic
                 tid = ids[target]
             elif target in _written_slugs(packet) and _written_slugs(packet)[target] in snapshot.cards:
                 tid = _written_slugs(packet)[target]
-            elif target in duplicate_of and duplicate_of[target] not in linked:
+            elif target in duplicate_of:
+                if duplicate_of[target] in linked:  # the card links the existing card already
+                    continue
                 tid = duplicate_of[target]
             else:
                 skipped_relations.append({'from': ids[slug], 'type': r['type'], 'target_slug': target,
-                                          'reason': 'target card was not written'})
+                                          'reason': unwritten(target)})
                 continue
             closed = _closed_relation(packet['catalog'], r['type'], card['domain'],
                                       snapshot.cards[tid].domain if tid in snapshot.cards else new_domains.get(tid))
@@ -1683,17 +1758,53 @@ def apply_job(root: Path, job_id: str, settled: list[dict] | None = None) -> dic
                 continue
             rels[slug].append({k: v for k, v in (('type', r['type']), ('target', tid),
                                                  ('note', r.get('note')), ('tier', r.get('tier'))) if v})
-    # links an earlier job of this source could not write because their target was pending: now that this
-    # retry writes the target, the link is added from its side, and the back link reaches the earlier card
-    restored_relations = []
-    for skipped in (packet.get('retry') or {}).get('skipped_relations') or []:
-        slug, source_id, inv = skipped['target_slug'], skipped['from'], inverse.get(skipped['type'])
-        if slug not in ids or source_id not in snapshot.cards or not inv or \
-                any(x['target'] == source_id for x in rels[slug]) or \
-                _closed_relation(packet['catalog'], inv, new_domains[ids[slug]], snapshot.cards[source_id].domain):
+    # links an earlier job of this source could not write because their target was pending. Each gets one
+    # outcome: added now (from the new card's side, so the back link reaches the earlier card), already linked
+    # by the new card, sent to the existing card the target turned out to repeat, still pending (carried to the
+    # next retry), or dropped with its target (listed, for the owner to add by hand)
+    restored_relations, extra_edges = [], []
+    merged_into = (check or {}).get('merged_into') or {}
+    for carried in (packet.get('retry') or {}).get('skipped_relations') or []:
+        kind, source_id = carried['type'], carried['from']
+        slug = merged_into.get(carried['target_slug'], carried['target_slug'])
+        row = {'from': source_id, 'type': kind, 'target_slug': carried['target_slug']}
+        source_card = snapshot.cards.get(source_id)
+        inv = inverse.get(kind)
+        if source_card is None:
+            skipped_relations.append({**row, 'reason': 'the card the link starts from no longer exists'})
             continue
-        rels[slug].append({'type': inv, 'target': source_id})
-        restored_relations.append({'from': source_id, 'type': skipped['type'], 'target': ids[slug]})
+        if slug in ids:
+            tid, target_domain = ids[slug], new_domains[ids[slug]]
+            linked = next((x for x in rels[slug] if x['target'] == source_id), None)
+            if linked:
+                restored_relations.append({**row, 'target': tid,
+                                           'linked_as': {'from': tid, 'type': linked['type'], 'target': source_id}})
+                continue
+        elif slug in duplicate_of:
+            tid = duplicate_of[slug]
+            target_domain = snapshot.cards[tid].domain
+            linked = next(({'from': a, 'type': e.get('type'), 'target': b}
+                           for a, b in ((source_id, tid), (tid, source_id))
+                           for e in snapshot.cards[a].fm.get('relations') or []
+                           if isinstance(e, dict) and e.get('target') == b), None)
+            if tid == source_id or linked:  # the target repeats the earlier card itself, or they are linked
+                restored_relations.append({**row, 'target': tid, 'redirected_from': slug,
+                                           **({'linked_as': linked} if linked else {})})
+                continue
+        else:
+            skipped_relations.append({**row, 'reason': unwritten(slug)})
+            continue
+        closed = _closed_relation(packet['catalog'], kind, source_card.domain, target_domain)
+        if closed:
+            skipped_relations.append({**row, 'reason': closed})
+            continue
+        if slug in ids and inv:
+            rels[slug].append({'type': inv, 'target': source_id})
+        else:  # both cards exist, or the type has no inverse: write the link on the earlier card itself
+            extra_edges.append((source_id, {'type': kind, 'target': tid}))
+            if inv and tid in snapshot.cards:
+                extra_edges.append((tid, {'type': inv, 'target': source_id}))
+        restored_relations.append({**row, 'target': tid, **({'redirected_from': slug} if slug not in ids else {})})
     by_id = {ids[s]: s for s in ids}
     for slug in list(rels):
         for r in list(rels[slug]):
@@ -1735,6 +1846,8 @@ def apply_job(root: Path, job_id: str, settled: list[dict] | None = None) -> dic
                       'pillar': card['pillar'], 'topic': card['topic'], 'source_hash': source['sha256']})
     # inverse edges into existing cards: frontmatter list and related section; other bytes stay
     to_add: dict = {}
+    for target, edge in extra_edges:
+        to_add.setdefault(target, []).append(edge)
     for slug in rels:
         for r in rels[slug]:
             inv = inverse.get(r['type'])
@@ -1813,8 +1926,8 @@ def apply_job(root: Path, job_id: str, settled: list[dict] | None = None) -> dic
             {**c, 'job_id': job_id, 'source_sha256': source['sha256'], 'at': now,
              'with_digest': content_digest(updated.get(c['with']) or snapshot.cards[c['with']])})
             for c in conflicts)))
-    needs_review = [{'id': ids[s], 'title': titles[s], 'overlap_with': c['_overlap_with'], 'reason': c['_overlap_reason']}
-                    for _, s, c in accepted if c.get('_overlap_with')]
+    needs_review = [{'id': ids[s], 'title': titles[s], 'overlap_with': ids.get(c['_overlap_with'], c['_overlap_with']),
+                     'reason': c['_overlap_reason']} for _, s, c in accepted if c.get('_overlap_with')]
     needs_taxonomy = [x for o in settled for x in o['needs_taxonomy']]
     status = 'partial' if (pending or needs_taxonomy) else 'applied'
     progress = None
@@ -1855,8 +1968,10 @@ def apply_job(root: Path, job_id: str, settled: list[dict] | None = None) -> dic
     if affected:
         # last, so its folder table counts the vault as this transaction leaves it
         written, removed = planned_paths(changes)
+        open_now = {(r.get('card') or r.get('slug'), r['with']) for r in open_conflicts(root, projected)}
+        open_now |= {(c['card'] or c['slug'], c['with']) for c in conflicts}  # recorded by this write
         changes.extend(projection_changes(root, entry_projection(projected, current_day(), final_paths=written,
-                                                                 removed_paths=removed)))
+                                                                 removed_paths=removed, conflicts=len(open_now))))
     result = {'status': status, 'new_card_count': len(produced), 'produced': produced,
               'pending': pending, 'needs_taxonomy': needs_taxonomy,
               'duplicates': [d for o in settled for d in o['duplicates']],
@@ -1865,6 +1980,7 @@ def apply_job(root: Path, job_id: str, settled: list[dict] | None = None) -> dic
               'skipped_relations': skipped_relations, 'restored_relations': restored_relations,
               'maintenance': maintenance,
               'needs_review': needs_review, 'conflicts': conflicts,
+              **({'source_check': _check_report(check, ids)} if check else {}),
               'source_record': {'sha256': source['sha256'], 'path': source_rel},
               'inbox_moved': move, 'projection_metrics': projection_metrics,
               'diagrams': [row for row in drawn['report'] if row['ref'] in {p['slug'] for p in produced}],
@@ -1884,6 +2000,19 @@ def apply_job(root: Path, job_id: str, settled: list[dict] | None = None) -> dic
             jobs.release_intent(root, job_id, reason=f'{exc}; run `sb job advance` to rebuild the write plan')
         raise
     return _maybe_commit(root, job_id, done)
+
+
+def _check_report(check: dict, ids: dict) -> dict:
+    """The source check's report for the job result, with written cards named by id."""
+    if check.get('status') != 'checked':
+        return check
+    name = lambda slug: ids.get(slug, slug)  # noqa: E731
+    return {'status': 'checked', 'cards': check['cards'],
+            'merged': [{**m, 'into': name(m['into'])} for m in check['merged']],
+            'overlap': [{**o, 'id': name(o['slug']), 'with': name(o['with'])} for o in check['overlap']],
+            'refiled_topics': check['refiled_topics'],
+            'moved_relations': [{**r, 'from': name(r['from']), 'target': name(r['target'])}
+                                for r in check['moved_relations']]}
 
 
 def _maybe_commit(root: Path, job_id: str, state: dict) -> dict:
@@ -1923,8 +2052,13 @@ def packet_for(root: Path, job_id: str, *, role: str, chunk: str | None, executo
                 return {**waiting.handoff, 'chunk': out['next'][1], 'step': out['next'][0]}
             raise ValueError('The executor finished the step directly; use `sb job advance` instead')
         settled = [chunk_outcome(root, state, packet, c['chunk_id']) for c in effective_chunks(packet, state)]
+        if role == 'reviewer' and all(o['settled'] for o in settled) and (not chunk or source_check.is_slot(chunk)):
+            handoffs = _source_check_stage(root, job_id, packet, settled, executor)
+            if handoffs:
+                return handoffs[0]
         if role == 'producer' and all(o['settled'] for o in settled) and (not chunk or card_diagrams.is_slot(chunk)):
-            _, handoffs = _diagram_stage(root, job_id, packet, settled, executor, only=chunk)
+            checked, _ = _checked(root, jobs.load(root, job_id), packet, settled)
+            _, handoffs = _diagram_stage(root, job_id, packet, checked, executor, only=chunk)
             if handoffs:
                 return handoffs[0]
         raise ValueError(f'No {role} step is due' + (f' for {chunk}' if chunk else ''))

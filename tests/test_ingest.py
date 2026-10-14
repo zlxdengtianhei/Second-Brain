@@ -26,7 +26,7 @@ from tests.helpers import CLOCKS, CUSTOM_LAYOUT, DOMAIN, EXISTING, MOC, PILLAR, 
 from tests.ingest_helpers import (ALL_REASONS, CARDS, DIMMING_IR, FIXED_DIMMING, NEW_TOPIC, OTHER_MOC,
                                   SOURCE_NAME, build_ingest_vault, coverage, diagram_answer, first_candidate,
                                   first_review, packet_in, repair_candidate, repair_review, scripted, tree,
-                                  with_diagrams)
+                                  with_diagrams, with_source_check)
 
 HEADINGS = {'en': ['## Essence', '## Propositions', '## Intuition and contrasts', '## Related', '## Review cards'],
             'zh': ['## 本质', '## 命题', '## 直觉与易混对比', '## 相关', '## 复习卡']}
@@ -472,7 +472,7 @@ def test_chunks_are_produced_in_order_with_earlier_cards_in_context(tmp_path):
                   for t in task.packet['candidate']['new_topics']]
         return {'cards': cards, 'new_topics': topics, 'coverage': {'decision': 'accept', 'reason': 'ok'}}
     producer = FakeExecutor('gpt-test', responder=with_diagrams(produce))
-    reviewer = FakeExecutor('claude-test', responder=review)
+    reviewer = FakeExecutor('claude-test', responder=with_source_check(review))
     prepared = ingest.prepare(root, root / '00_Inbox' / SOURCE_NAME)
     packet = jobs.read_input(root, prepared['job_id'])
     assert len(packet['chunks']) >= 2
@@ -517,7 +517,7 @@ def test_chunk_too_large_is_split_in_halves_and_retried(tmp_path):
                                 'reason': 'ok'} for t in cand['new_topics']],
                 'coverage': {'decision': 'accept', 'reason': 'ok'}}
     producer = FakeExecutor('gpt-test', responder=with_diagrams(produce))
-    reviewer = FakeExecutor('claude-test', responder=review)
+    reviewer = FakeExecutor('claude-test', responder=with_source_check(review))
     prepared = ingest.prepare(root, root / '00_Inbox' / SOURCE_NAME)
     assert prepared['chunks'] == ['c01']
     result = ingest.advance(root, prepared['job_id'], producer=producer, reviewer=reviewer)

@@ -228,8 +228,8 @@ def test_a_link_to_a_card_judged_a_duplicate_goes_to_the_card_it_repeats(tmp_pat
     assert {'type': 'depends_on', 'target': queue.id} in cards[OTHER_CARD].fm['relations']  # back link
 
 
-def test_a_link_to_a_pending_card_is_restored_when_a_retry_writes_it(tmp_path):
-    root = build_ingest_vault(tmp_path / 'vault')
+def pending_link(root):
+    """A partial parent whose lit-marker-cost links marker-dimming, which stays pending; returns (job, cost id, repair)."""
     dimming = {**CARDS['marker-dimming'], 'relations': []}
     cost = {**CARDS['lit-marker-cost'], 'relations': CARDS['lit-marker-cost']['relations'] + [
         {'type': 'similar_to', 'target': 'marker-dimming', 'note': 'both about markers'}]}
@@ -244,21 +244,90 @@ def test_a_link_to_a_pending_card_is_restored_when_a_retry_writes_it(tmp_path):
     assert parent['status'] == 'partial'
     cost_id = next(p['id'] for p in parent['produced'] if p['slug'] == 'lit-marker-cost')
     assert [(r['from'], r['target_slug']) for r in parent['skipped_relations']] == [(cost_id, 'marker-dimming')]
-    child = ingest.retry(root, job['job_id'])
+    return job['job_id'], cost_id, repair
+
+
+def retried(root, job_id, candidates, reviews):
+    child = ingest.retry(root, job_id)
+    produce, respond, _ = scripted(candidates, reviews)
+    return ingest.advance(root, child['job_id'], producer=FakeExecutor('gpt-test', responder=produce),
+                          reviewer=FakeExecutor('claude-test', responder=respond))
+
+
+def verdict(decision, **fields):
+    return {'cards': [{'slug': 'marker-dimming', 'decision': decision, 'reason': 'r', **fields}],
+            'new_topics': [], 'coverage': {'decision': 'accept', 'reason': 'ok'}}
+
+
+def test_a_link_to_a_pending_card_is_restored_when_a_retry_writes_it(tmp_path):
+    root = build_ingest_vault(tmp_path / 'vault')
+    job_id, cost_id, repair = pending_link(root)
+    child = ingest.retry(root, job_id)
     assert jobs.read_input(root, child['job_id'])['retry']['skipped_relations'] == [
         {'from': cost_id, 'type': 'similar_to', 'target_slug': 'marker-dimming'}]
-    produce, respond, _ = scripted([{**repair, 'coverage': repair['coverage']}],
-                                   [{'cards': [{'slug': 'marker-dimming', 'decision': 'accept', 'reason': 'fixed'}],
-                                     'new_topics': [], 'coverage': {'decision': 'accept', 'reason': 'ok'}}])
+    produce, respond, _ = scripted([repair], [verdict('accept')])
     done = ingest.advance(root, child['job_id'], producer=FakeExecutor('gpt-test', responder=produce),
                           reviewer=FakeExecutor('claude-test', responder=respond))
     assert done['status'] == 'applied'
     new_id = next(p['id'] for p in done['produced'] if p['slug'] == 'marker-dimming')
-    assert done['restored_relations'] == [{'from': cost_id, 'type': 'similar_to', 'target': new_id}]
+    assert done['restored_relations'] == [{'from': cost_id, 'type': 'similar_to', 'target_slug': 'marker-dimming',
+                                           'target': new_id}]
     cards = read_snapshot(root).cards
     assert {'type': 'similar_to', 'target': cost_id} in cards[new_id].fm['relations']
     assert {'type': 'similar_to', 'target': new_id} in cards[cost_id].fm['relations']
     assert '[[Marker dimming]]' in cards[cost_id].body  # and in its related section
+
+
+# drill 3: a retry child got 7 carried links and reported none of them, restored or not
+def test_a_carried_link_the_new_card_already_makes_is_reported_as_linked(tmp_path):
+    root = build_ingest_vault(tmp_path / 'vault')
+    job_id, cost_id, repair = pending_link(root)
+    linking = {**repair, 'cards': [{**repair['cards'][0], 'relations': [
+        {'type': 'part_of', 'target': cost_id, 'note': 'dimming acts on the markers it costs'}]}]}
+    done = retried(root, job_id, [linking], [verdict('accept', overlap='distinct')])
+    new_id = next(p['id'] for p in done['produced'] if p['slug'] == 'marker-dimming')
+    assert done['restored_relations'] == [{'from': cost_id, 'type': 'similar_to', 'target_slug': 'marker-dimming',
+                                           'target': new_id,
+                                           'linked_as': {'from': new_id, 'type': 'part_of', 'target': cost_id}}]
+    assert done['skipped_relations'] == []
+    assert [r for r in read_snapshot(root).cards[cost_id].fm['relations'] if r['target'] == new_id] == [
+        {'type': 'part_of', 'target': new_id}]  # one relation per pair
+
+
+def test_a_carried_link_to_a_card_judged_a_duplicate_goes_to_the_card_it_repeats(tmp_path):
+    root = build_ingest_vault(tmp_path / 'vault')
+    job_id, cost_id, repair = pending_link(root)
+    done = retried(root, job_id, [repair], [verdict('duplicate', duplicate_of=OTHER_CARD)])
+    assert done['status'] == 'applied' and done['produced'] == []
+    assert done['restored_relations'] == [{'from': cost_id, 'type': 'similar_to', 'target_slug': 'marker-dimming',
+                                           'target': OTHER_CARD, 'redirected_from': 'marker-dimming'}]
+    cards = read_snapshot(root).cards
+    assert {'type': 'similar_to', 'target': OTHER_CARD} in cards[cost_id].fm['relations']
+    assert {'type': 'similar_to', 'target': cost_id} in cards[OTHER_CARD].fm['relations']
+
+
+def test_a_carried_link_whose_target_is_dropped_is_listed_and_not_carried_again(tmp_path):
+    root = build_ingest_vault(tmp_path / 'vault')
+    job_id, cost_id, _ = pending_link(root)
+    dropped = {'cards': [], 'new_topics': [], 'coverage': [
+        {'source_quote': FIXED_DIMMING['source_quotes'][0], 'disposition': 'out_of_scope', 'reason': 'not needed'}]}
+    done = retried(root, job_id, [dropped], [{'cards': [], 'new_topics': [],
+                                             'coverage': {'decision': 'accept', 'reason': 'ok'}}])
+    assert done['status'] == 'applied' and done['restored_relations'] == []
+    assert done['skipped_relations'] == [{'from': cost_id, 'type': 'similar_to', 'target_slug': 'marker-dimming',
+                                          'reason': 'target card was dropped in review; add the link by hand '
+                                                    'if it still matters'}]
+
+
+def test_a_carried_link_whose_target_is_still_pending_goes_to_the_next_retry(tmp_path):
+    root = build_ingest_vault(tmp_path / 'vault')
+    job_id, cost_id, repair = pending_link(root)
+    done = retried(root, job_id, [repair, repair], [verdict('revise'), verdict('revise')])
+    assert done['status'] == 'partial'
+    row = {'from': cost_id, 'type': 'similar_to', 'target_slug': 'marker-dimming'}
+    assert done['skipped_relations'] == [{**row, 'reason': 'target card was not written'}]
+    grandchild = ingest.retry(root, done['job_id'])
+    assert jobs.read_input(root, grandchild['job_id'])['retry']['skipped_relations'] == [row]
 
 
 # --- prompts --------------------------------------------------------------------------------------

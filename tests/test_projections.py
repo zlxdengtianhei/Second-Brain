@@ -58,3 +58,25 @@ def test_review_links_count_actual_and_same_transaction_home(tmp_path):
     (root / 'HOME.md').write_text('Home')
     with_existing = review_projection(snapshot, date(2026, 9, 7))
     assert json.loads(with_existing.files['_data/projections/kb_review.json'])['broken_links'] == 0
+
+
+def test_the_daily_queue_and_the_maps_count_the_same_cycles(tmp_path):
+    # drill 3: 14 in sb status, 186 "among new cards" in sb daily; none of the cycles involved the new cards
+    from secondbrain import reviews
+    from secondbrain.moc import build_mocs
+    from secondbrain.projections import review_time
+    from secondbrain.service import Service
+    day = date(2026, 9, 7)
+    root = build_vault(tmp_path)
+    folder = root / f"10_Knowledge/{DOMAIN}"
+    for me, other in (('c_a', 'c_b'), ('c_b', 'c_a')):
+        (folder / f'{me}.md').write_text(f'---\nid: {me}\ntitle: {me}\ndomain: {DOMAIN}\n'
+                                         f'relations:\n  - type: depends_on\n    target: {other}\n---\n## 本质\nx\n')
+    snapshot = read_snapshot(root)
+    queue = reviews.queue(root, review_time(day))
+    assert queue['prerequisite_cycles'] == {'groups': 1, 'cards': 2} and queue['cycle_breaks'] == 1
+    [issue] = review_projection(snapshot, day).issues
+    assert (issue['groups'], issue['cards'], issue['queue_breaks']) == (1, 2, 1)
+    assert 'new cards' not in issue['detail'] and 'sb refresh lists the groups' in issue['detail']
+    assert [i['card_ids'] for i in build_mocs(snapshot).issues if i['code'] == 'learning_order_cycle'] == [['c_a', 'c_b']]
+    assert Service(root).status()['map_issues']['learning_order_cycle'] == 1
