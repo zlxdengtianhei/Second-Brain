@@ -620,6 +620,10 @@ def test_v5_back_edge_is_a_flow_rule():
     "误差在反向传播中不断衰减。", "开源项目持续迭代。", "评估后续迭代难度。", "表中的重复记录要合并。",
     "The agent can get stuck in an infinite loop.", "Cache results to avoid repeating the query.",
     "死循环会一直占用 CPU。", "常见失败之一是无限循环。",
+    # V3's Y2: counts, a failure that goes on in the next clause, nouns, a negation a few characters off, lists
+    "ReAct 可能陷入循环，反复执行同样的行动。", "出现资源重复。",
+    "收到 3 次重复ACK 就快速重传。", "摘要不必随每次问答重复执行。", "改模板而不必改循环结构本身。", "留出后续迭代空间。",
+    "工作流能表达分支、循环，以及暂停后恢复。",
 ])
 def test_v5_negations_duplicates_and_names_do_not_ask_for_a_loop(text):
     assert says_repeat(_loop_card(text)) is None
@@ -633,10 +637,19 @@ def test_v5_negations_duplicates_and_names_do_not_ask_for_a_loop(text):
     ("距离信息在节点间不断传递。", "不断"), ("反复迭代直至集合不再增大。", "反复"), ("查询直至就绪。", "直至"),
     ("按时间步递推隐状态。", "递推"), ("客户端轮询任务结果。", "轮询"), ("电压在两个阈值间往复变化。", "往复"),
     ("以行块和列块为循环层级，逐块累加输出。", "循环层级"), ("避免越界；然后重复上一步。", "重复"),
+    ("防止死循环；每轮最多重试 3 次。", "每轮"), ("陷入循环后重启，再反复读取输入。", "反复"),
+    ("反馈含「无需改进」或达到最大迭代次数时终止。", "迭代"),
 ])
 def test_v5_loop_words(text, word):
     ref, quote = says_repeat(_loop_card(text))
     assert ref == "P2" and word in quote
+
+
+def test_v5_when_e_says_it_the_way_out_is_to_skip():
+    """V3's Y2: E has to stay cited, so when E only seems to say the work repeats, the model can only skip."""
+    card = Card(title="t", essence="取样器反复按误差决定是否继续。", propositions=_loop_card("x").propositions)
+    [error] = [str(e) for e in validate(_loop_flow(cite_p2=False), card, FULL).errors if e.code == "V5"]
+    assert error.startswith("V5 E, which the diagram cites") and "If it does not, skip (E stays cited);" in error
 
 
 def test_v12_replacing_a_renderable_old_diagram_needs_e_and_two_propositions():

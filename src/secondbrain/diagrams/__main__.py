@@ -6,8 +6,9 @@
     python -m secondbrain.diagrams audit-extract VAULT OUT_DIR [--language en|zh] [--knowledge-dir DIR]
     python -m secondbrain.diagrams audit-repair OUT_DIR --checker CHECK.mjs [--checker-modules DIR]
     python -m secondbrain.diagrams audit-tier OUT_DIR [--delete-domain D ...]
-    python -m secondbrain.diagrams prune VAULT OUT_DIR [--language en|zh] [--checker CHECK.mjs] [--write]
-    python -m secondbrain.diagrams pool OUT_DIR [--refs REFS.txt] [--out POOL.jsonl]
+    python -m secondbrain.diagrams prune VAULT OUT_DIR [--old-audit FILE ...] [--language en|zh] [--checker CHECK.mjs]
+        [--write]
+    python -m secondbrain.diagrams pool OUT_DIR [--refs REFS.txt] [--out POOL.jsonl] [--delete-tier]
     python -m secondbrain.diagrams old-audit-packets POOL.jsonl OUT_DIR [--outcomes OUTCOMES.jsonl ...]
     python -m secondbrain.diagrams old-audit-apply ANSWER.json ... --out OUT_DIR
     python -m secondbrain.diagrams writeback VAULT OUT_DIR OUTCOMES.jsonl ... [--old-audit FILE ...]
@@ -33,13 +34,25 @@ one statement per line), renders the rewrites and writes repairs.jsonl;
 audit-tier then treats a repaired diagram as one that renders, and prune and
 writeback write the repaired source where the diagram stays.
 
+No old diagram is removed without the old-diagram audit (oldcheck), except
+in a deleted domain or when it does not parse even after audit-repair: prune
+removes a delete-tier diagram, and writeback the diagram of a delete_review
+card the model skips, only when the audit says restates or misleading; until
+there is a verdict nothing changes (prune: pending; writeback: pending,
+rule .../no_audit). `pool --delete-tier` writes the delete-tier cards prune
+handles as rows for old-audit-packets; the packets for the pool cover the
+delete_review cards too.
+
 writeback refuses to run when the rendering old flowcharts in the pool have
-no graph (a tiers.json from before the redraw guard): rerun audit-tier. With
---checker, prune and writeback render the old diagrams they turn TB or
-repair, as they will be written. A diagram that TB would make wider than it
-was is not turned (writeback: keep_old, +wide instead of +tb). writeback adds
-+wide to the rule of those still wider than 700 px; prune names both cases in
-'why' and counts them (not_turned, still_wide).
+no graph (a tiers.json from before the redraw guard): rerun audit-tier.
+pool, prune and writeback refuse a tiers.json made without audit-repair
+results while some old diagrams do not parse. With --checker, prune and
+writeback render the old diagrams they turn TB or repair, as they will be
+written. A diagram that TB would make wider than it was is not turned
+(writeback: keep_old, +wide instead of +tb). writeback adds +wide to the rule
+of those still wider than 700 px; prune names both cases in 'why' and counts
+them (not_turned, still_wide). Without --checker they refuse to write a turn,
+and warn about it on a plan.
 """
 from __future__ import annotations
 
@@ -142,10 +155,36 @@ def cmd_apply(a) -> dict:
     return {**dict(Counter(o.status for o in outcomes)), **summary}
 
 
+def _tiers(a) -> dict:
+    """The cards of DIR/tiers.json; refuses one made without audit-repair results while some old diagrams are
+    broken (an older tiers.json, or audit-tier run before audit-repair): their repairs would be skipped silently."""
+    doc = json.loads((a.dir / "tiers.json").read_text(encoding="utf-8"))
+    cards = doc["cards"]
+    broken = sum(1 for t in cards.values() if not t.get("ok"))
+    read = doc.get("repairs_read", any("repair" in t for t in cards.values()))
+    if broken and not read:
+        raise SystemExit(f"{broken} old diagrams in tiers.json do not parse and it has no audit-repair results: "
+                         f"run audit-repair, then audit-tier")
+    return cards
+
+
+def _turns_need_checker(a, actions: list[dict]) -> None:
+    """Turning a diagram TB is checked against its render (no turn that makes it wider); without --checker,
+    refuse to write any turn and warn on a plan."""
+    turns = sum(1 for x in actions if x["action"] == "direction_tb" or x.get("flip"))
+    if turns and not a.checker:
+        msg = (f"{turns} diagrams would be turned TB without --checker, which drops a turn that makes a diagram "
+               f"wider: pass --checker")
+        if a.write:
+            raise SystemExit(msg)
+        print("warning: " + msg, file=sys.stderr)
+
+
 def _pool(a) -> tuple[list[dict], list[str]]:
-    """Pool rows from the audit tiers, restricted to --refs when given; plus refs not in the pool."""
-    tiers = json.loads((a.dir / "tiers.json").read_text(encoding="utf-8"))["cards"]
-    pool = rejudge.select_pool(tiers)
+    """Pool rows from the audit tiers (with --delete-tier: the delete tier prune handles instead), restricted to
+    --refs when given; plus refs not among them."""
+    tiers = _tiers(a)
+    pool = rejudge.select_delete(tiers) if getattr(a, "delete_tier", False) else rejudge.select_pool(tiers)
     if not a.refs:
         return pool, []
     wanted = [x.strip() for x in a.refs.read_text(encoding="utf-8").splitlines()
@@ -232,15 +271,17 @@ def cmd_audit_tier(a) -> dict:
     repairs = a.dir / "repairs.jsonl"
     report = audit.tier(audit.read_jsonl(a.dir / "cards.jsonl"), audit.read_jsonl(a.dir / "checks.jsonl"),
                         audit.TierRules(delete_domains=tuple(a.delete_domain)),
-                        audit.read_jsonl(repairs) if repairs.is_file() else ())
+                        list(audit.read_jsonl(repairs)) if repairs.is_file() else None)
     (a.dir / "tiers.json").write_text(json.dumps(report.to_dict(), ensure_ascii=False, indent=0), encoding="utf-8")
     return {"counts": dict(report.counts), "why": {t: dict(c) for t, c in report.why.items()},
             **({"repaired": report.repaired} if report.repaired else {})}
 
 
 def cmd_prune(a) -> dict:
-    tiers = json.loads((a.dir / "tiers.json").read_text(encoding="utf-8"))["cards"]
-    actions = prune.plan(tiers, prune.PrunePolicy(width_limit=a.width_limit))
+    tiers = _tiers(a)
+    audits = [v for path in a.old_audit for v in audit.read_jsonl(path)]
+    actions = prune.plan(tiers, prune.PrunePolicy(width_limit=a.width_limit), audits)
+    _turns_need_checker(a, actions)
     fmt = _card_format(a, [x["ref"] for x in actions])
     settled = None
     if a.checker:  # render the diagrams turned TB or repaired as they will be written
@@ -275,6 +316,7 @@ def cmd_writeback(a) -> dict:
         actions = rejudge.plan(pool, outcomes, _writeback_policy(a), audits)
     except ValueError as e:
         raise SystemExit(str(e))
+    _turns_need_checker(a, actions)
     touched = [x["ref"] for x in actions if x["action"] in rejudge.WRITES]
     fmt = _card_format(a, touched)
     if a.checker:  # render the kept old diagrams as they will be written: no turn that widens, +wide if too wide
@@ -323,10 +365,14 @@ def main(argv: list[str] | None = None) -> int:
     s = sub.add_parser("audit-tier", help="cards.jsonl + checks.jsonl (+ repairs.jsonl) -> tiers.json")
     s.add_argument("dir", type=Path)
     s.add_argument("--delete-domain", action="append", default=[])
-    s = sub.add_parser("prune", help="tiers.json -> delete restating diagrams, wide keepers to TB, repaired keepers written")
+    s = sub.add_parser("prune", help="tiers.json (+ old-diagram audit) -> delete restating diagrams, wide keepers "
+                                     "to TB, repaired keepers written")
     s.add_argument("vault", type=Path)
     s.add_argument("dir", type=Path)
     s.add_argument("--width-limit", type=int, default=700)
+    s.add_argument("--old-audit", type=Path, nargs="*", default=[],
+                   help="old_audit_outcomes.jsonl from old-audit-apply: a delete-tier diagram is removed only "
+                        "when the audit says restates or misleading")
     s.add_argument("--checker", type=Path, help="tools/mermaid_check/check.mjs: render the diagrams turned TB or "
                                                 "repaired; those still too wide are counted and named in 'why'")
     s.add_argument("--checker-modules", type=Path, help="directory whose node_modules the checker uses")
@@ -336,6 +382,9 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("dir", type=Path)
     s.add_argument("--refs", type=Path, help="only these card refs (one per line)")
     s.add_argument("--out", type=Path, help="where to write the pool (default: DIR/pool.jsonl)")
+    s.add_argument("--delete-tier", action="store_true",
+                   help="write the delete-tier cards prune handles instead (pool_reason delete), for the "
+                        "old-diagram audit")
     s = sub.add_parser("old-audit-packets", help="pool.jsonl -> old-diagram audit packets")
     s.add_argument("pool", type=Path)
     s.add_argument("out", type=Path)
@@ -356,7 +405,8 @@ def main(argv: list[str] | None = None) -> int:
                    help="old_audit_outcomes.jsonl from old-audit-apply")
     s.add_argument("--refs", type=Path, help="only these card refs (one per line)")
     s.add_argument("--delete-review-on-skip", choices=("remove", "keep"), default="remove",
-                   help="old diagram of a delete_review card the model skips (default: remove)")
+                   help="old diagram of a delete_review card the model skips: remove as the old-diagram audit "
+                        "says (default), or keep")
     s.add_argument("--remove-domain", action="append", default=[],
                    help="also remove old diagrams on skip in this domain (cards the audit tiered "
                         "'domain' are removed anyway)")

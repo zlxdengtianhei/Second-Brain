@@ -1,9 +1,13 @@
 """Apply an audit to a vault: remove restating diagrams, turn wide kept ones upright.
 
-Actions come from audit tiers:
-- delete tier: remove the whole diagram section, except on cards that the
+Actions come from audit tiers and the old-diagram audit (oldcheck):
+- delete tier: remove the whole diagram section when the old-diagram audit
+  says restates or misleading; keep it when the audit keeps it (then it is
+  treated like the keep tier below); without a verdict nothing changes
+  (action pending). The tier alone removes only a card in a deleted domain
+  and a diagram that does not parse even after audit-repair. Cards the
   method should judge again first (by default mechanism cards with three or
-  more propositions), which stay for the review pool;
+  more propositions) stay for the review pool;
 - keep tier: a flowchart wider than the reading width and laid out left to
   right (LR or RL) gets direction TB;
 - keep tier, diagram that only renders after audit-repair: the repaired
@@ -24,9 +28,10 @@ import re
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 from .audit import DEFAULT_FORMAT, CardFormat
+from .oldcheck import REMOVE_CATEGORIES
 
 _HEADER = re.compile(r"^(\s*(?:flowchart|graph)\s+)(LR|RL)\b")
 
@@ -38,21 +43,42 @@ class PrunePolicy:
     width_limit: int = 700
 
 
-def plan(tiers: dict[str, dict[str, Any]], policy: PrunePolicy = PrunePolicy()) -> list[dict[str, Any]]:
-    """Actions for the cards in an audit report's 'cards' map, in ref order."""
+def plan(tiers: dict[str, dict[str, Any]], policy: PrunePolicy = PrunePolicy(),
+         audits: Iterable[dict[str, Any]] = ()) -> list[dict[str, Any]]:
+    """Actions for the cards in an audit report's 'cards' map, in ref order; audits are old-diagram audit outcomes."""
+    verdicts = {v["ref"]: v for v in audits}
     actions = []
     for ref in sorted(tiers):
         t = tiers[ref]
+        row = {"ref": ref, "sha256": t["sha256"]}
+        why = t["why"]
         if t["tier"] == "delete":
             if t["kind"] in policy.review_kinds and t["n_props"] >= policy.review_min_props:
                 continue
-            actions.append({"ref": ref, "action": "delete_section", "why": t["why"], "sha256": t["sha256"]})
-        elif t["tier"] == "keep" and t.get("repair"):
-            wide = t.get("direction") in ("LR", "RL") and (t.get("width") or 0) > policy.width_limit
-            actions.append({"ref": ref, "action": "repair", "why": "repaired: " + ", ".join(t["repair"]["fixes"]),
-                            "sha256": t["sha256"], "mermaid": t["repair"]["text"], "flip": wide})
-        elif t["tier"] == "keep" and t.get("direction") in ("LR", "RL") and (t.get("width") or 0) > policy.width_limit:
-            actions.append({"ref": ref, "action": "direction_tb", "why": f"width {t['width']}", "sha256": t["sha256"]})
+            if why == "domain" or not t.get("ok"):  # deleted domain; broken even after audit-repair
+                actions.append({**row, "action": "delete_section", "why": why})
+                continue
+            v = verdicts.get(ref)
+            if v is None:  # no diagram is removed without the audit
+                actions.append({**row, "action": "pending", "why": f"{why}; no audit"})
+                continue
+            category = v.get("category") if v.get("category") in REMOVE_CATEGORIES + ("useful",) else "unsure"
+            why = f"{why}; audit:{category}"
+            if v.get("verdict") == "remove" and category in REMOVE_CATEGORIES:
+                actions.append({**row, "action": "delete_section", "why": why})
+                continue
+        elif t["tier"] != "keep":
+            continue
+        # the keep tier, and delete-tier diagrams the audit keeps
+        kept = f"{why}; " if t["tier"] == "delete" else ""
+        wide = t.get("direction") in ("LR", "RL") and (t.get("width") or 0) > policy.width_limit
+        if t.get("repair"):
+            actions.append({**row, "action": "repair", "why": kept + "repaired: " + ", ".join(t["repair"]["fixes"]),
+                            "mermaid": t["repair"]["text"], "flip": wide})
+        elif wide:
+            actions.append({**row, "action": "direction_tb", "why": f"{kept}width {t['width']}"})
+        elif kept:
+            actions.append({**row, "action": "keep", "why": why})
     return actions
 
 
@@ -156,7 +182,7 @@ def apply(vault: Path, actions: list[dict[str, Any]], write: bool = False,
     for a in actions:
         path = Path(vault) / a["ref"]
         row = {"ref": a["ref"], "action": a["action"], "why": a["why"]}
-        if a["action"] == "keep":  # a turn settle dropped
+        if a["action"] in ("keep", "pending"):  # kept by the audit or by settle; waiting for the audit
             rows.append({**row, "status": "unchanged"})
             continue
         if not path.is_file():

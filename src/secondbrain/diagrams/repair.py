@@ -86,9 +86,12 @@ class _Scanner:
         self.i = m.end()
         raw = m.group()
         label = None
-        if raw.lower() in _RESERVED:
+        if raw.lower() in _RESERVED:  # renamed; without a shape the node shows its old id, not the new one
             self.fixes.add("keyword id")
-            new = self.renamed.setdefault(raw, f"{raw}_n")
+            if raw not in self.renamed:
+                self.renamed[raw] = f"{raw}_n"
+                label = raw
+            new = self.renamed[raw]
         elif not _SAFE_ID.fullmatch(raw):  # e.g. C₋₁: Mermaid's lexer rejects the subscript
             self.fixes.add("id with symbols")
             if raw not in self.renamed:

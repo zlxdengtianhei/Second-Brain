@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from secondbrain import cards, cli, config, labels
-from secondbrain.diagrams import audit, rejudge
+from secondbrain.diagrams import audit, prune, rejudge
 from secondbrain.diagrams.__main__ import main
 
 FIX = Path(__file__).resolve().parents[1] / "fixtures" / "diagrams"
@@ -106,6 +106,7 @@ def test_wrong_language_stops_before_writing(tmp_path, capsys):
 def _tier(out: Path, tcp_check: dict, bubble_check: dict) -> None:
     rows = [{"id": f"{TCP}#0", **tcp_check}, {"id": f"{BUBBLE}#0", **bubble_check}]
     (out / "checks.jsonl").write_text("".join(json.dumps(c) + "\n" for c in rows), encoding="utf-8")
+    (out / "repairs.jsonl").write_text("", encoding="utf-8")  # audit-repair ran and repaired nothing
     assert main(["audit-tier", str(out)]) == 0
 
 
@@ -125,10 +126,16 @@ def test_prune_on_an_english_vault(tmp_path, capsys):
            "nodes": [{"id": "A", "label": "compare neighbours", "shape": "square"},
                      {"id": "B", "label": "swap if out of order", "shape": "square"}],
            "edges": [{"from": "A", "to": "B", "label": ""}]})
+    verdicts = tmp_path / "old_audit_outcomes.jsonl"
+    verdicts.write_text(json.dumps({"ref": BUBBLE, "verdict": "remove", "category": "restates"}) + "\n",
+                        encoding="utf-8")
     capsys.readouterr()
-    assert main(["prune", str(v), str(out), "--write"]) == 0
+    assert main(["prune", str(v), str(out), "--old-audit", str(verdicts)]) == 0  # plan; writing the turn needs --checker
     summary = json.loads(capsys.readouterr().out)
-    assert summary["actions"] == {"delete_section": 1, "direction_tb": 1} and summary["status"] == {"written": 2}
+    assert summary["actions"] == {"delete_section": 1, "direction_tb": 1} and summary["status"] == {"planned": 2}
+    tiers = json.loads((out / "tiers.json").read_text(encoding="utf-8"))["cards"]
+    actions = prune.plan(tiers, audits=[json.loads(verdicts.read_text(encoding="utf-8"))])
+    assert [r["status"] for r in prune.apply(v, actions, write=True, fmt=audit.card_format(v)[0])] == ["written"] * 2
     bubble = (v / BUBBLE).read_text(encoding="utf-8")
     assert "## Diagram" not in bubble and "## Code" in bubble and "## not a heading inside a code block" in bubble
     assert "flowchart TB" in (v / TCP).read_text(encoding="utf-8")

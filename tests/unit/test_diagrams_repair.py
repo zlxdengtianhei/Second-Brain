@@ -62,6 +62,9 @@ def test_repair_details():
     kw = repair(BROKEN["keyword ids"])
     assert "call_n" in kw.text and "style_n" in kw.text and "graph_n" in kw.text and "end_n" in kw.text
     assert "keyword id" in kw.fixes
+    # V3 Y4: a renamed id with no shape shows its old id, not the new name
+    assert 'end_n["end"]' in kw.text and 'call_n["函数调用"]' in kw.text
+    assert repair('flowchart TD\n  A[开始] --> end\n  end --> B[结束了]').text.count('end_n["end"]') == 1
     assert repair(BROKEN["one line"]).text.splitlines()[0] == "flowchart LR"
     assert len(repair(BROKEN["missing breaks"]).text.splitlines()) == 4
     assert '-->|"超时(30s)"|' in repair(BROKEN["edge text"]).text

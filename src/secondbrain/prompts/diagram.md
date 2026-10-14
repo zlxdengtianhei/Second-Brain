@@ -1,6 +1,6 @@
 # Card diagram: draw or skip, then describe it as IR
 
-Each card has an essence `E` and propositions `P1..Pn`. Start from E: find the relation it states (what splits, merges, repeats, causes or is handed on) and draw only if a diagram shows it better than the text. Code draws the Mermaid and checks these rules.
+Each card has an essence `E` and propositions `P1..Pn`. Start from E: find the relation it states (what splits, merges, repeats, causes or is handed on) and draw only if a diagram shows it better than the text.
 
 ## 1. Draw when E's relation is
 
@@ -12,18 +12,18 @@ Each card has an essence `E` and propositions `P1..Pn`. Start from E: find the r
 ## 2. Skip
 
 Skip (`reason`: the rule) for: a contrast; a single fact, definition, number or formula; a chain of equations; vocabulary; links to other cards; a list of parts, fields, options or checks (unordered checks are a list, and so is a decision whose 3+ exits all end at once); a chain of steps with no decision, loop or merge, at any length (paths that split and never meet are a list too); steps whose order the card does not state.
-An `old_diagram` that `renders` comes with its source `old_mermaid`; replace it only with a diagram that shows E's relation clearly better, citing E and 2+ propositions (all, if fewer); skip if yours would redraw its structure or one formula. If it is `broken`, draw for a loop or several branches. On skip, code handles the old diagram.
+An `old_diagram` that `renders` comes with its source `old_mermaid`; replace it only with a diagram that shows E's relation clearly better, citing E and 2+ propositions (all, if fewer); skip if yours would redraw its structure (the same steps and links) or one formula. On skip, an audit keeps or removes the old diagram.
 
 ## 3. Rules
 
 1. Every node, labelled edge and message cites its own sources in `p`. Over the whole diagram: cite E, and 2+ different sources if the card has 2+ propositions.
 2. Labels use the card's words in its language: half of a label's words occur in the text it cites. A word is an overlapping pair of CJK characters (扫描结束: 扫描, 描结, 结束), an English word, a number or a formula symbol; a one-character label counts that character; a symbols-only label uses cited symbols. Exempt, still cited: 是 否 开始 结束 成功 失败 yes no start end success failure true false. Plain text, no TeX: `x_t`, `x²`, `Σ x_i`.
-3. No fact or step order the card lacks. When text a flow cites says the work repeats (重复 循环 反复 迭代 不断 直到 直至 递推 轮询 往复 每轮 逐个 逐位 repeat loop until iterate), draw the back edge; not when negated, avoided or a failure (不会重复, 避免重复, 死循环), a duplicate (重复项) or a name (循环队列).
+3. No fact or step order the card lacks. When text a flow cites says the work repeats, in any words (重复 循环 反复 迭代 不断 直到 直至 递推 轮询 往复 每轮 逐个 逐位 repeat loop until iterate), draw the back edge; not when negated, avoided or a failure (不会重复, 避免重复, 死循环), a duplicate (重复项) or a name (循环队列).
 4. A `decision` needs a stated condition and 2+ stated outcomes on its exit labels; an "otherwise" exit counts only if the card states its outcome. Paths merge into one outcome only if the cited text credits it to each path. A node fans out to at most 3 leaf nodes (no outgoing edge).
 5. With `"arrows":"data"` the diagram starts at `input` nodes and ends at `output` nodes or a final `store`. Any `input` has outgoing edges only, to nodes whose cited text mentions it; any `output` has incoming edges only. `store` is data kept for later (table, file, buffer, accumulator); a value passed straight on is a step.
 6. Size: flow and structure 4-9 nodes (3 if two paths merge), structure 3+ links unless paths merge; state 3-8 states. Label width at most 20 (decision 10, edge 14), counting CJK and full-width punctuation 1, other characters 0.5.
 7. Code measures the drawn width: at most 700 px (state diagrams scale to fit), with no edge labels overlapping. Usually fits: at most 3 nodes side by side, labels at most 7 wide when 3 are (6 in a group); at most 3 labelled edges side by side; sequence: names at most 8, notes and self-messages 9 wide, and with 3 participants messages 9 wide.
-8. Structure and state edges need labels in the card's words, not relation names; no node per related card; one self-loop per node at most.
+8. Structure and state edges need labels in the card's words, not relation names. An edge label reads from source to target. No node per related card; one self-loop per node at most.
 
 ## 4. Output
 

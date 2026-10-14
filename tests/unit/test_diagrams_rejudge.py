@@ -53,7 +53,7 @@ def test_plan_applies_the_write_back_rule():
                 {"ref": "e.md", "status": "draw", "mermaid": NEW}]
     acts = {a["ref"]: (a["rule"], a["action"]) for a in rejudge.plan(pool, outcomes)}
     assert acts == {"a.md": ("draw", "replace"), "b.md": ("skip:old_broken", "remove"),
-                    "c.md": ("skip:delete_review", "remove"), "e.md": ("not_in_pool", "not_in_pool"),
+                    "c.md": ("skip:delete_review/no_audit", "pending"), "e.md": ("not_in_pool", "not_in_pool"),
                     "g.md": ("pending", "pending"), "h.md": ("pending", "pending")}
     pending = rejudge.plan(pool, [{"ref": "a.md", "status": "rewrite"}])
     assert [a["action"] for a in pending] == ["pending"] * 5
@@ -69,7 +69,7 @@ def test_skip_policy_by_pool_reason_and_domain():
     assert _skips() == {
         "a.md": ("skip:old_parses", "keep_old"),       # (c) review card, old diagram renders
         "b.md": ("skip:old_broken", "remove"),         # (c) redraw card, old diagram broken
-        "c.md": ("skip:delete_review", "remove"),      # (a) already judged a restatement
+        "c.md": ("skip:delete_review/no_audit", "pending"),  # (a) removed only on the old-diagram audit (F4)
         "g.md": ("skip:domain", "remove"),             # (b) the audit tiered the domain for deletion
         "h.md": ("skip:old_parses", "keep_old"),
     }
@@ -91,7 +91,7 @@ def test_summary_counts_rule_per_pool_reason():
                 {"ref": "c.md", "status": "skip"}, {"ref": "g.md", "status": "skip"},
                 {"ref": "e.md", "status": "skip"}]
     assert rejudge.summary(rejudge.plan(pool, outcomes)) == {
-        "delete_review": {"skip:delete_review→remove": 1, "skip:domain→remove": 1},
+        "delete_review": {"skip:delete_review/no_audit→pending": 1, "skip:domain→remove": 1},
         "not_in_pool": {"not_in_pool→not_in_pool": 1},
         "redraw": {"skip:old_broken→remove": 1},
         "review": {"draw→replace": 1, "pending→pending": 1},
@@ -148,6 +148,7 @@ def test_cli_pool_and_writeback(tmp_path, capsys):
               {"id": f"{BUBBLE}#0", "ok": False, "error": "Parse error"}]
     (out / "checks.jsonl").write_text("".join(json.dumps(c, ensure_ascii=False) + "\n" for c in checks),
                                       encoding="utf-8")
+    (out / "repairs.jsonl").write_text("", encoding="utf-8")  # audit-repair ran and repaired nothing
     main(["audit-tier", str(out)])
     capsys.readouterr()
     assert main(["pool", str(out)]) == 0
@@ -205,7 +206,7 @@ def test_weak_draw_follows_the_skip_rules():
     acts = {a["ref"]: (a["rule"], a["action"]) for a in rejudge.plan(pool, weak)}
     assert acts == {"a.md": ("draw", "replace"),                       # one proposition: E and P1 are enough
                     "b.md": ("pending", "pending"),
-                    "c.md": ("draw:weak/skip:delete_review", "remove"),
+                    "c.md": ("draw:weak/skip:delete_review/no_audit", "pending"),
                     "g.md": ("draw:weak/skip:domain", "remove"),
                     "h.md": ("draw:weak/skip:old_parses", "keep_old")}
     keep = rejudge.WritebackPolicy(delete_review_on_skip="keep", remove_domains=("vocab",))
@@ -260,12 +261,15 @@ def test_old_audit_removes_only_old_diagrams_that_would_stay():
 
 def test_audit_candidates_before_and_after_the_draw_step():
     pool = rejudge.select_pool(TIERS)
-    assert [p["ref"] for p in rejudge.audit_candidates(pool)] == ["a.md", "h.md"]
+    # F4: the delete_review card c.md is audited too, its old diagram goes only on the audit's word
+    assert [p["ref"] for p in rejudge.audit_candidates(pool)] == ["a.md", "c.md", "h.md"]
     flipped = rejudge.WritebackPolicy(delete_review_on_skip="keep")
     assert [p["ref"] for p in rejudge.audit_candidates(pool, policy=flipped)] == ["a.md", "c.md", "h.md"]
     after = rejudge.audit_candidates(pool, [{"ref": "a.md", "status": "draw", "mermaid": _marked("E,P1")},
-                                            {"ref": "h.md", "status": "skip"}])
-    assert [p["ref"] for p in after] == ["h.md"]
+                                            {"ref": "c.md", "status": "skip"}, {"ref": "h.md", "status": "skip"}])
+    assert [p["ref"] for p in after] == ["c.md", "h.md"]
+    replaced = rejudge.audit_candidates(pool, [{"ref": "c.md", "status": "draw", "mermaid": _marked("E,P1,P2")}])
+    assert [p["ref"] for p in replaced] == []                         # a new diagram replaces it: nothing to audit
 
 
 def test_cli_holdout_list_with_old_audit(tmp_path, capsys):
@@ -279,6 +283,7 @@ def test_cli_holdout_list_with_old_audit(tmp_path, capsys):
               {"id": f"{BUBBLE}#0", "ok": False, "error": "Parse error"}]
     (out / "checks.jsonl").write_text("".join(json.dumps(c, ensure_ascii=False) + "\n" for c in checks),
                                       encoding="utf-8")
+    (out / "repairs.jsonl").write_text("", encoding="utf-8")  # audit-repair ran and repaired nothing
     main(["audit-tier", str(out)])
     refs = tmp_path / "refs.txt"
     refs.write_text(f"# holdout\n{TCP}\n10_Knowledge/not/in-pool.md\n", encoding="utf-8")
@@ -327,9 +332,9 @@ def test_old_audit_packets_take_the_writeback_policy_flags(tmp_path, capsys):
         capsys.readouterr()
         assert main(["old-audit-packets", str(pool), str(tmp_path / "old"), *flags]) == 0
         return json.loads(capsys.readouterr().out.strip().splitlines()[-1])["audited"]
-    assert audited() == 2                                          # a.md, h.md
-    assert audited("--delete-review-on-skip", "keep") == 3          # and c.md
-    assert audited("--remove-domain", "vocab") == 1                 # h.md's domain is removed on skip
+    assert audited() == 3                                          # a.md, c.md (delete_review: F4), h.md
+    assert audited("--delete-review-on-skip", "keep") == 3          # c.md kept, but still audited
+    assert audited("--remove-domain", "vocab") == 2                 # h.md's domain is removed on skip
 
 
 
@@ -359,11 +364,11 @@ def test_a_redraw_is_not_written_and_follows_the_skip_rules():
     acts = {a["ref"]: (a["rule"], a["action"]) for a in rejudge.plan(pool, draws)}
     assert acts["a.md"] == ("draw:same_as_old/skip:old_parses", "keep_old")
     assert acts["b.md"] == ("draw", "replace")                            # the old one does not render
-    assert acts["c.md"] == ("draw:same_as_old/skip:delete_review", "remove")
+    assert acts["c.md"] == ("draw:same_as_old/skip:delete_review/no_audit", "pending")
     audits = [{"ref": "h.md", "verdict": "remove", "category": "restates"}]
     assert {a["ref"]: a["rule"] for a in rejudge.plan(pool, draws, audits=audits)}["h.md"] == \
         "draw:same_as_old/audit:restates"
-    assert [p["ref"] for p in rejudge.audit_candidates(pool, draws)] == ["a.md", "h.md"]
+    assert [p["ref"] for p in rejudge.audit_candidates(pool, draws)] == ["a.md", "c.md", "h.md"]
 
 
 def test_kept_wide_lr_diagram_is_turned_upright(tmp_path):
@@ -564,3 +569,139 @@ def test_prune_checker_names_kept_diagrams_still_too_wide(tmp_path, capsys):
         runs[old_width] = (summary["actions"], summary["not_turned"], summary["still_wide"], planned["why"])
     assert runs[1500][:3] == ({"direction_tb": 1}, 0, 1) and runs[1500][3].startswith("width 1500; still ")
     assert runs[900][:3] == ({"keep": 1}, 1, 0) and runs[900][3].endswith("is wider than 900 px, not turned")
+
+
+# F4: no diagram is removed without the old-diagram audit ------------------------------------------------
+
+def test_a_delete_review_diagram_goes_only_on_the_audits_word():
+    pool = rejudge.select_pool(TIERS)
+    skip = [{"ref": "c.md", "status": "skip", "reason": "x"}]
+
+    def act(verdict=None):
+        audits = [{"ref": "c.md", **verdict}] if verdict else []
+        a = next(a for a in rejudge.plan(pool, skip, audits=audits) if a["ref"] == "c.md")
+        return a["rule"], a["action"]
+    assert act() == ("skip:delete_review/no_audit", "pending")
+    assert act({"verdict": "remove", "category": "restates"}) == ("audit:restates", "remove")
+    assert act({"verdict": "remove", "category": "misleading"}) == ("audit:misleading", "remove")
+    assert act({"verdict": "keep", "category": "useful"}) == ("audit:useful", "keep_old")
+    assert act({"verdict": "keep", "category": "restates"}) == ("audit:restates", "keep_old")   # only remove removes
+    assert act({"verdict": "remove", "category": "other"}) == ("audit:unsure", "keep_old")
+    wide = rejudge.select_pool({"c.md": {**TIERS["c.md"], "type": "flowchart-v2", "graph": OLD_EVOL,
+                                         "direction": "LR", "width": 900}})
+    [kept] = rejudge.plan(wide, skip, audits=[{"ref": "c.md", "verdict": "keep", "category": "useful"}])
+    assert (kept["rule"], kept["action"]) == ("audit:useful+tb", "direction_tb")  # kept: treated like the rest
+
+
+def test_prune_removes_a_delete_tier_diagram_only_on_the_audits_word():
+    tiers = {
+        "d.md": {**TIERS["d.md"], "kind": "concept"},                                   # delete tier, prune's
+        "w.md": {**TIERS["d.md"], "kind": "concept", "sha256": "w", "direction": "LR", "width": 900},
+        "r.md": {**TIERS["d.md"], "kind": "concept", "sha256": "r",
+                 "repair": {"text": "flowchart TB\n  a --> b", "fixes": ["quoted label"]}},
+        "g.md": {**TIERS["g.md"], "kind": "concept"},                                   # deleted domain
+        "x.md": {**TIERS["d.md"], "kind": "fact", "why": "broken+fact/contrast", "ok": False, "sha256": "x"},
+        "c.md": TIERS["c.md"],                                                          # left for review
+    }
+    assert {a["ref"]: (a["action"], a["why"]) for a in prune.plan(tiers)} == {
+        "d.md": ("pending", "le2_edges; no audit"), "w.md": ("pending", "le2_edges; no audit"),
+        "r.md": ("pending", "le2_edges; no audit"),
+        "g.md": ("delete_section", "domain"), "x.md": ("delete_section", "broken+fact/contrast")}
+    audits = [{"ref": r, "verdict": "keep", "category": "useful"} for r in ("w.md", "r.md")]
+    audits.append({"ref": "d.md", "verdict": "remove", "category": "restates"})
+    acts = {a["ref"]: a for a in prune.plan(tiers, audits=audits)}
+    assert (acts["d.md"]["action"], acts["d.md"]["why"]) == ("delete_section", "le2_edges; audit:restates")
+    assert (acts["w.md"]["action"], acts["w.md"]["why"]) == ("direction_tb", "le2_edges; audit:useful; width 900")
+    assert (acts["r.md"]["action"], acts["r.md"]["flip"]) == ("repair", False)
+    assert acts["r.md"]["why"] == "le2_edges; audit:useful; repaired: quoted label"
+    kept = prune.plan({"d.md": tiers["d.md"]}, audits=[{"ref": "d.md", "verdict": "keep", "category": "useful"}])
+    assert kept == [{"ref": "d.md", "sha256": "4", "action": "keep", "why": "le2_edges; audit:useful"}]
+    assert prune.apply(Path("/nonexistent"), kept)[0]["status"] == "unchanged"
+    assert prune.apply(Path("/nonexistent"), prune.plan({"d.md": tiers["d.md"]}))[0]["status"] == "unchanged"
+
+
+def test_the_delete_tier_reaches_the_old_diagram_audit(tmp_path, capsys):
+    shutil.copytree(VAULT, tmp_path / "v")
+    out = tmp_path / "audit"
+    main(["audit-extract", str(tmp_path / "v"), str(out)])
+    checks = [{"id": f"{TCP}#0", "ok": True, "type": "flowchart-v2", "direction": "TB", "width": 300,
+               "nodes": [{"id": "c", "label": "客户端", "shape": "square"}, {"id": "s", "label": "服务器", "shape": "square"}],
+               "edges": [{"from": "c", "to": "s", "label": ""}]},
+              {"id": f"{BUBBLE}#0", "ok": True, "type": "flowchart-v2", "direction": "TB", "width": 200,
+               "nodes": [{"id": "A", "label": "比较相邻元素", "shape": "square"}, {"id": "B", "label": "逆序则交换", "shape": "square"}],
+               "edges": [{"from": "A", "to": "B", "label": ""}]}]
+    (out / "checks.jsonl").write_text("".join(json.dumps(c, ensure_ascii=False) + "\n" for c in checks), encoding="utf-8")
+    (out / "repairs.jsonl").write_text("", encoding="utf-8")
+    main(["audit-tier", str(out)])
+    tiers = json.loads((out / "tiers.json").read_text(encoding="utf-8"))["cards"]
+    assert {r: (t["tier"], t["why"]) for r, t in tiers.items()} == {TCP: ("delete", "le2_edges"), BUBBLE: ("delete", "le2_edges")}
+    capsys.readouterr()
+    main(["pool", str(out), "--delete-tier", "--out", str(tmp_path / "delete.jsonl")])
+    assert json.loads(capsys.readouterr().out) == {"delete": 1}   # TCP is a mechanism card with 3 propositions: review
+    rows = [json.loads(x) for x in (tmp_path / "delete.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert [(r["ref"], r["pool_reason"], r["old_diagram"]) for r in rows] == [(BUBBLE, "delete", "renders")]
+    main(["old-audit-packets", str(tmp_path / "delete.jsonl"), str(tmp_path / "old")])
+    assert json.loads(capsys.readouterr().out)["audited"] == 1
+    packet = json.loads((tmp_path / "old" / "old-audit-001.json").read_text(encoding="utf-8"))
+    assert packet["input"]["cards"][0]["ref"] == BUBBLE and packet["input"]["cards"][0]["old_mermaid"]
+
+
+def test_a_tiers_file_without_repairs_is_refused_while_diagrams_are_broken(tmp_path, capsys):
+    """V3 Y3: a tiers.json made before audit-repair (or by older code) would skip the repairs silently."""
+    shutil.copytree(VAULT, tmp_path / "v")
+    out = tmp_path / "audit"
+    main(["audit-extract", str(tmp_path / "v"), str(out)])
+    checks = [{"id": f"{TCP}#0", "ok": True, "type": "flowchart-v2", "direction": "TB", "width": 300,
+               "nodes": [{"id": "c", "label": "客户端", "shape": "square"}], "edges": []},
+              {"id": f"{BUBBLE}#0", "ok": False, "error": "Parse error"}]
+    (out / "checks.jsonl").write_text("".join(json.dumps(c, ensure_ascii=False) + "\n" for c in checks), encoding="utf-8")
+    main(["audit-tier", str(out)])                                 # no repairs.jsonl: audit-repair has not run
+    assert json.loads((out / "tiers.json").read_text(encoding="utf-8"))["repairs_read"] is False
+    outcomes = tmp_path / "outcomes.jsonl"
+    outcomes.write_text("", encoding="utf-8")
+    for argv in (["pool", str(out)], ["prune", str(tmp_path / "v"), str(out)],
+                 ["writeback", str(tmp_path / "v"), str(out), str(outcomes)]):
+        with pytest.raises(SystemExit, match="run audit-repair, then audit-tier"):
+            main(argv)
+    doc = json.loads((out / "tiers.json").read_text(encoding="utf-8"))
+    del doc["repairs_read"]                                         # 8914776 and 2e4efed wrote no such key:
+    doc["cards"][TCP]["repair"] = {"text": "flowchart TB", "fixes": []}  # their repairs show they read them
+    (out / "tiers.json").write_text(json.dumps(doc), encoding="utf-8")
+    assert main(["pool", str(out)]) == 0
+    (out / "repairs.jsonl").write_text("", encoding="utf-8")
+    main(["audit-tier", str(out)])
+    assert main(["pool", str(out)]) == 0
+
+
+def test_writeback_writes_no_turn_without_the_checker(tmp_path, capsys):
+    """V3 Z3: a turn is checked against its render, so writing one needs --checker."""
+    shutil.copytree(VAULT, tmp_path / "v")
+    out = tmp_path / "audit"
+    main(["audit-extract", str(tmp_path / "v"), str(out)])
+    sha = hashlib.sha256((tmp_path / "v" / TCP).read_bytes()).hexdigest()
+    (out / "tiers.json").write_text(json.dumps({"repairs_read": True, "cards": {TCP: {
+        "tier": "review", "why": "no_gain", "kind": "mechanism", "n_props": 3, "sha256": sha, "ok": True,
+        "type": "flowchart-v2", "direction": "LR", "width": 900, "graph": {"labels": [], "edges": []}}}}), encoding="utf-8")
+    outcomes = tmp_path / "outcomes.jsonl"
+    outcomes.write_text(json.dumps({"ref": TCP, "status": "skip", "reason": "x"}) + "\n", encoding="utf-8")
+    before = (tmp_path / "v" / TCP).read_bytes()
+    with pytest.raises(SystemExit, match="1 diagrams would be turned TB without --checker"):
+        main(["writeback", str(tmp_path / "v"), str(out), str(outcomes), "--write"])
+    assert (tmp_path / "v" / TCP).read_bytes() == before
+    capsys.readouterr()
+    assert main(["writeback", str(tmp_path / "v"), str(out), str(outcomes)]) == 0
+    assert "warning: 1 diagrams would be turned TB" in capsys.readouterr().err
+
+
+def test_prune_does_not_turn_a_repaired_diagram_that_tb_makes_wider():
+    """V3 Z1 and Z2: the repaired keeper keeps its direction when TB is wider; an equal width still turns."""
+    tiers = {"k.md": {"tier": "keep", "why": "branch", "kind": "mechanism", "n_props": 4, "sha256": "9", "ok": True,
+                      "type": "flowchart-v2", "direction": "LR", "width": 900,
+                      "repair": {"text": "flowchart LR\n  a --> b", "fixes": ["quoted label"]}}}
+    [act] = prune.plan(tiers)
+    assert (act["action"], act["flip"]) == ("repair", True)
+    [wider], n = prune.settle([act], {"k.md": {"ok": True, "width": 1200}}, tiers)
+    assert (wider["action"], wider["flip"]) == ("repair", False) and n == {"not_turned": 1}
+    assert wider["why"].endswith("TB 1200 px is wider than 900 px, not turned")
+    [same], n = prune.settle([act], {"k.md": {"ok": True, "width": 900}}, tiers)
+    assert same["flip"] is True and n == {"still_wide": 1}

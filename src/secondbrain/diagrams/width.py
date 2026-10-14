@@ -20,7 +20,10 @@ when it shares the layer), 15 px more when no edge leaves it (Mermaid then
 lays it out on its own); it widens to fit its title. On the 15 grouped
 diagrams models drew in the trial rounds the error is -10 to +16 px but for
 one; a group whose member hands on to a node beside it can push the layout
-much wider than this (a probe: 691 px, estimated 497). Checked on 3,210 vault flowcharts
+much wider than this (a probe: 691 px, estimated 497). A group with no edge
+to the outside next to a chain with a labelled skip edge runs high (median
++50 px on V3's 56 probes; +6 px without the skip edge); without the 15 px,
+side-by-side groups would run low (median -15 px, 4 of 100 misses). Checked on 3,210 vault flowcharts
 of 4-9 nodes: median error -2 px, 10th percentile -45 px; of 346 wider than
 700 px it misses 36 and it rejects 6 that fit; the batch path measures the
 real width instead. Sequence diagrams follow Mermaid's own margin rule

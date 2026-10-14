@@ -311,10 +311,12 @@ class TierReport:
     why: dict[str, Counter] = field(default_factory=lambda: defaultdict(Counter))
     cards: dict[str, dict[str, Any]] = field(default_factory=dict)
     repaired: int = 0
+    repairs_read: bool = False  # whether audit-repair's results were given (pool, prune, writeback check it)
 
     def to_dict(self) -> dict[str, Any]:
         return {"counts": dict(self.counts), "why": {t: dict(c) for t, c in self.why.items()},
-                **({"repaired": self.repaired} if self.repaired else {}), "cards": self.cards}
+                **({"repaired": self.repaired} if self.repaired else {}), "repairs_read": self.repairs_read,
+                "cards": self.cards}
 
 
 def graph_of_check(check: dict[str, Any]) -> dict[str, Any]:
@@ -327,18 +329,19 @@ def graph_of_check(check: dict[str, Any]) -> dict[str, Any]:
 
 
 def tier(cards: Iterable[dict[str, Any]], checks: Iterable[dict[str, Any]],
-         rules: TierRules = TierRules(), repairs: Iterable[dict[str, Any]] = ()) -> TierReport:
+         rules: TierRules = TierRules(), repairs: Iterable[dict[str, Any]] | None = None) -> TierReport:
     """Tier every card that has a diagram; checks are mermaid_check results keyed '<ref>#<j>'.
 
-    repairs are audit-repair rows ({"id", "text", "fixes", "check"}). A broken
+    repairs are audit-repair rows ({"id", "text", "fixes", "check"}); None
+    means audit-repair has not run (the report says so). A broken
     diagram whose repair renders is tiered by the repaired check, like any
     diagram that renders, and its entry carries the repair ({"text",
     "fixes"}) so the later steps can write it back where it stays.
     """
     by_id = {c["id"]: c for c in checks}
-    fixed = {r["id"]: r for r in repairs if (r.get("check") or {}).get("ok")
+    fixed = {r["id"]: r for r in repairs or () if (r.get("check") or {}).get("ok")
              and not (r.get("check") or {}).get("render_error")}
-    report = TierReport()
+    report = TierReport(repairs_read=repairs is not None)
     for card in cards:
         if not card["blocks"]:
             continue

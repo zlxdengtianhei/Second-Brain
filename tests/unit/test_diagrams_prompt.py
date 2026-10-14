@@ -52,7 +52,10 @@ def _prompt_examples() -> list[tuple[Card, dict]]:
 # cap rose to 2,000 (2,000 o200k, 2,079 cl100k when written). After set D the
 # loop words grew and the old source joined the packet (1,992 o200k, 2,073
 # cl100k). V3's X round added avoided and failed loops and the group rule of thumb (2,000 o200k, 2,086 cl100k,
-# 7,124 bytes). New rules have to replace old text.
+# 7,124 bytes). After set E: the loop words are examples, a redraw is the same steps and links, the audit
+# handles a skipped card's old diagram, edge labels read from source to target; the broken-old-diagram sentence
+# went (F1 left one such card) and so did "Code draws the Mermaid" (2,000 o200k, 2,085 cl100k, 7,118 bytes).
+# New rules have to replace old text.
 TOKEN_CAP = 2000
 BYTE_CAP = 7200  # dependency-free proxy for the same budget (7,099 bytes when written)
 
@@ -67,19 +70,22 @@ def test_prompt_states_the_core_rules():
                    "citing E and 2+ propositions (all, if fewer)", "a decision whose 3+ exits all end at once",
                    "3+ named states and 3+ labelled transitions", "a chain of 3+ links citing 3+ different sources",
                    "structure 3+ links unless paths merge", "no edge labels overlapping", "state diagrams scale to fit",
-                   "On skip, code handles the old diagram", "an overlapping pair of CJK characters",
-                   "even when the text lists them in order", "credits it to each path", "would redraw its structure or one formula",
+                   "On skip, an audit keeps or removes the old diagram", "an overlapping pair of CJK characters",
+                   "even when the text lists them in order", "credits it to each path", "would redraw its structure",
                    "steps whose order the card does not state", "at any length", "accumulator",
                    "Over the whole diagram", "paths that split and never meet are a list",
                    "any `output` has incoming edges only",
                    # after set D: the old source in the packet, and replace only when clearly better
-                   "comes with its source `old_mermaid`", "shows E's relation clearly better"):
+                   "comes with its source `old_mermaid`", "shows E's relation clearly better",
+                   # after set E: P5-draw's questions and J6's edge labels
+                   "says the work repeats, in any words", "(the same steps and links)",
+                   "An edge label reads from source to target"):
         assert phrase in PROMPT, phrase
 
 
 def test_prompt_lists_the_validators_words():
     """One word list for the prompt and the validator: loop words (V5) and exempt labels (V4)."""
-    loop = re.search(r"says the work repeats \(([^)]*)\)", PROMPT).group(1).split()
+    loop = re.search(r"says the work repeats, in any words \(([^)]*)\)", PROMPT).group(1).split()
     assert loop == list(LOOP_WORDS)
     exempt = re.search(r"Exempt, still cited: ([^.]*)\.", PROMPT).group(1).split()
     assert sorted(exempt) == sorted(Limits().exempt_labels)

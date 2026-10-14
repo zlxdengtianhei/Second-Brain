@@ -3,19 +3,24 @@
 Pool (from audit tiers): the review tier, the redraw tier, and delete-tier
 cards that prune leaves for review (by default mechanism cards with three or
 more propositions). Keep-tier cards are never in the pool, and the rest of
-the delete tier and the LR to TB flips belong to prune.
+the delete tier and the LR to TB flips belong to prune. select_delete gives
+that rest of the delete tier as rows of the same form (pool_reason
+"delete"), so the old-diagram audit can read it before prune removes anything.
 
 Write-back rule for a pool card, given its final outcome (each action row
 names the rule that applied):
 - draw: the diagram section is replaced by the new Mermaid block;
 - skip, card in a removed domain (the audit tiered it "domain", or the domain
   is listed in WritebackPolicy.remove_domains): the old diagram is removed;
-- skip, delete_review card: the old diagram is removed, because the
-  deterministic tier already judged it a restatement and the pool only gave
-  the card a chance at a new one (WritebackPolicy.delete_review_on_skip,
-  "remove" by default, "keep" treats these cards like the rest);
+- skip, delete_review card: the old diagram is removed only if the
+  old-diagram audit says restates or misleading; the audit keeping it keeps
+  it, and with no audit verdict yet nothing changes (action pending, rule
+  .../no_audit). The tier is a guess: in sets D and E a fifth of the
+  star_same_label diagrams it sent here were useful
+  (WritebackPolicy.delete_review_on_skip "keep" keeps them all);
 - skip, any other card: an old diagram that parses stays as it is; one that
-  does not parse is removed;
+  does not parse even after audit-repair is removed (with skip:domain, the
+  only removal without an audit);
 - rewrite still pending, or no outcome: nothing changes.
 
 Two refinements after the second pilot:
@@ -65,6 +70,20 @@ from .text import tokens
 from .validate import strong_enough as _strong_refs
 
 
+def _row(ref: str, t: dict[str, Any], reason: str) -> dict[str, Any]:
+    return {"ref": ref, "pool_reason": reason, "domain": t.get("domain"), "tier_why": t.get("why"),
+            "n_props": t.get("n_props", 0), "has_essence": t.get("has_essence", True),
+            "old_parses": bool(t["ok"]), "sha256": t["sha256"],
+            "old_type": t.get("type"), "old_direction": t.get("direction"), "old_width": t.get("width"),
+            "old_graph": t.get("graph"), "old_repair": t.get("repair")}
+
+
+def select_delete(tiers: dict[str, dict[str, Any]], policy: PrunePolicy = PrunePolicy()) -> list[dict[str, Any]]:
+    """The delete-tier cards prune handles (not those left for review), as pool rows with pool_reason "delete"."""
+    return [_row(ref, t, "delete") for ref, t in sorted(tiers.items()) if t["tier"] == "delete"
+            and not (t["kind"] in policy.review_kinds and t["n_props"] >= policy.review_min_props)]
+
+
 def select_pool(tiers: dict[str, dict[str, Any]], policy: PrunePolicy = PrunePolicy()) -> list[dict[str, Any]]:
     """Pool rows in ref order: ref, pool_reason, domain, tier_why, n_props, old_parses, sha256."""
     rows = []
@@ -78,11 +97,7 @@ def select_pool(tiers: dict[str, dict[str, Any]], policy: PrunePolicy = PrunePol
             reason = "delete_review"
         else:
             continue
-        rows.append({"ref": ref, "pool_reason": reason, "domain": t.get("domain"), "tier_why": t.get("why"),
-                     "n_props": t.get("n_props", 0), "has_essence": t.get("has_essence", True),
-                     "old_parses": bool(t["ok"]), "sha256": t["sha256"],
-                     "old_type": t.get("type"), "old_direction": t.get("direction"), "old_width": t.get("width"),
-                     "old_graph": t.get("graph"), "old_repair": t.get("repair")})
+        rows.append(_row(ref, t, reason))
     return rows
 
 
@@ -143,7 +158,7 @@ def replace_section(text: str, mermaid: str, fmt: CardFormat = DEFAULT_FORMAT) -
 class WritebackPolicy:
     """What a skip does to an old diagram, beyond 'keep it if it parses'; when a kept one is turned upright."""
 
-    delete_review_on_skip: str = "remove"  # or "keep"
+    delete_review_on_skip: str = "remove"  # as the old-diagram audit says; "keep": always keep
     remove_domains: tuple[str, ...] = ()
     width_limit: int = 700
     same_words_min: float = 0.3  # share of label words a same-shape redraw keeps (pilots: 0.33-1.0)
@@ -154,12 +169,17 @@ class WritebackPolicy:
 
 
 def _skip_rule(p: dict[str, Any], policy: WritebackPolicy) -> tuple[str, str]:
-    """(action, rule) for a pool card whose final outcome is skip."""
+    """(action, rule) for a pool card whose final outcome is skip.
+
+    Action "audit": the old diagram goes only if the old-diagram audit says restates or misleading.
+    """
     if p.get("tier_why") == "domain" or p.get("domain") in policy.remove_domains:
         return "remove", "skip:domain"
-    if p["pool_reason"] == "delete_review" and policy.delete_review_on_skip == "remove":
-        return "remove", "skip:delete_review"
-    return ("keep_old", "skip:old_parses") if p["old_parses"] else ("remove", "skip:old_broken")
+    if not p["old_parses"]:
+        return "remove", "skip:old_broken"
+    if p["pool_reason"] in ("delete_review", "delete") and policy.delete_review_on_skip == "remove":
+        return "audit", f"skip:{p['pool_reason']}"
+    return "keep_old", "skip:old_parses"
 
 
 def strong_enough(mermaid: str, n_props: int, has_essence: bool = True) -> bool:
@@ -226,16 +246,18 @@ KEPT = ("keep_old", "direction_tb", "repair_old")  # actions that leave the old 
 
 def audit_candidates(pool: list[dict[str, Any]], outcomes: Iterable[dict[str, Any]] | None = None,
                      policy: WritebackPolicy = WritebackPolicy()) -> list[dict[str, Any]]:
-    """Pool rows whose old diagram would stay: the cards the old-diagram audit is for.
+    """Pool rows whose old diagram would stay or waits for the audit to go: the cards the old-diagram audit is for.
 
-    With outcomes: the rows planned as keep_old (or direction_tb, which keeps
-    it upright). Without: every row that a skip would leave as keep_old, so
+    With outcomes: the rows planned to keep it (keep_old, direction_tb,
+    repair_old) or waiting for the audit (pending .../no_audit). Without:
+    every row whose old diagram a skip would keep or leave to the audit, so
     the audit can run beside the draw step.
     """
     if outcomes is not None:
-        keep = {a["ref"] for a in plan(pool, outcomes, policy) if a["action"] in KEPT}
-        return [p for p in pool if p["ref"] in keep]
-    return [p for p in pool if _skip_rule(p, policy)[0] == "keep_old"]
+        wanted = {a["ref"] for a in plan(pool, outcomes, policy)
+                  if a["action"] in KEPT or a["rule"].endswith("/no_audit")}
+        return [p for p in pool if p["ref"] in wanted]
+    return [p for p in pool if _skip_rule(p, policy)[0] in ("keep_old", "audit")]
 
 
 def _require_graphs(pool: list[dict[str, Any]]) -> None:
@@ -282,11 +304,12 @@ def plan(pool: list[dict[str, Any]], outcomes: Iterable[dict[str, Any]],
                 weak = not strong_enough(o.get("mermaid") or "", p.get("n_props", 0), p.get("has_essence", True))
                 prefix = "draw:weak/" if weak else "draw:same_as_old/"
             v = verdicts.get(p["ref"])
-            if action == "keep_old" and v:
+            if action in ("keep_old", "audit") and v:
                 category = v.get("category") if v.get("category") in REMOVE_CATEGORIES + ("useful",) else "unsure"
                 rule = f"audit:{category}"
-                if v.get("verdict") == "remove" and category in REMOVE_CATEGORIES:
-                    action = "remove"
+                action = "remove" if v.get("verdict") == "remove" and category in REMOVE_CATEGORIES else "keep_old"
+            elif action == "audit":  # no diagram is removed without the audit
+                action, rule = "pending", rule + "/no_audit"
             # Obsidian scales state diagrams to fit (width.GATED_FORMS), so only the others can be too wide
             if action == "keep_old" and (p.get("old_width") or 0) > policy.width_limit \
                     and p.get("old_type") not in ("stateDiagram", "state"):

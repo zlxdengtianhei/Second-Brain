@@ -162,10 +162,28 @@ def test_cli_audit_round_trip(tmp_path, capsys):
     tiers = json.loads((out / "tiers.json").read_text(encoding="utf-8"))
     assert tiers["counts"] == {"keep": 1, "delete": 1}
     assert tiers["cards"][TCP]["why"] == "branch"
-    assert main(["prune", str(tmp_path / "v"), str(out), "--write"]) == 0
+    before = {p: p.read_bytes() for p in (tmp_path / "v").rglob("*.md")}
+    with pytest.raises(SystemExit, match="--checker"):  # a TB turn is written only after its render is checked
+        main(["prune", str(tmp_path / "v"), str(out), "--write"])
+    capsys.readouterr()
+    assert main(["prune", str(tmp_path / "v"), str(out)]) == 0  # a plan only warns
+    captured = capsys.readouterr()
+    assert "warning: 1 diagrams would be turned TB without --checker" in captured.err
+    summary = json.loads(captured.out.strip().splitlines()[-1])
+    assert summary["actions"] == {"pending": 1, "direction_tb": 1}  # no delete without the old-diagram audit
+    assert before == {p: p.read_bytes() for p in (tmp_path / "v").rglob("*.md")}
+
+    checks[0]["direction"] = "TB"  # nothing to turn now
+    (out / "checks.jsonl").write_text("".join(json.dumps(c, ensure_ascii=False) + "\n" for c in checks),
+                                      encoding="utf-8")
+    assert main(["audit-tier", str(out)]) == 0
+    verdicts = tmp_path / "old_audit_outcomes.jsonl"
+    verdicts.write_text(json.dumps({"ref": BUBBLE, "verdict": "remove", "category": "restates"}) + "\n",
+                        encoding="utf-8")
+    capsys.readouterr()
+    assert main(["prune", str(tmp_path / "v"), str(out), "--old-audit", str(verdicts), "--write"]) == 0
     summary = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
-    assert summary["actions"] == {"delete_section": 1, "direction_tb": 1}
-    assert summary["status"] == {"written": 2}
+    assert (summary["actions"], summary["status"]) == ({"delete_section": 1}, {"written": 1})
     assert "## 图" not in (tmp_path / "v" / BUBBLE).read_text(encoding="utf-8")
 
 
