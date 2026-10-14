@@ -68,7 +68,8 @@ From the final state report:
 - cards still pending, with the reviewer's reasons (`pending`), and for a retry child whether it made progress (`retry_progress`);
 - material that needs a new pillar or domain (`needs_taxonomy`);
 - duplicates of existing cards (`duplicates`) and skipped passages (`out_of_scope`);
-- cards written as needs-review because they mostly repeat an existing card (`needs_review`, with `overlap_with`);
+- cards written as needs-review because they mostly repeat an existing card (`needs_review`, with `overlap_with`). They stay out of the review queue until the user sets `status: confirmed`; `sb status` counts all such cards and `sb status --needs-review` lists them;
+- links that could not be written (`skipped_relations`: the card, the type and the target), so the user can add them by hand when a retry does not;
 - conflicts with existing cards (`conflicts`): what disagrees and with which card. The user settles them; `sb status` lists them until that card's text changes. Do not edit the existing card yourself;
 - whether reviews were done by the producer's model family (`same_family: true` in `sb job show <job_id>`);
 - inbox items you skipped, with reasons.

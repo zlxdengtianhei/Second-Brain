@@ -246,7 +246,11 @@ def entry_projection(snapshot, today: date, *, final_paths=(), removed_paths=(),
         review_line = T['review_missing'].format(date=today.isoformat())
     else:
         review_line = T['review_no_extra'].format(install=labels.install_hint('review', labels.language()))
-    home = [line.format(inbox=lay.inbox, review_link=review_line) for line in T['home']] + ['']
+    home = [line.format(inbox=lay.inbox, review_link=review_line) for line in T['home']]
+    waiting = sum(c.fm.get('status') == 'needs-review' for c in snapshot.cards.values())
+    if waiting:  # they never reach the review queue unless the owner looks at them
+        home.append(T['needs_review'].format(n=waiting))
+    home.append('')
     if lay.entry_docs:
         home += [' · '.join(f'[[{name[:-3]}]]' for name in lay.entry_docs), '']
     home += [T['domains_title'], '']

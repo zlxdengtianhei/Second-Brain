@@ -48,6 +48,7 @@ class Service:
                 map_issues = Counter(i['code'] for i in build_mocs(s).issues)
         from .pipelines.ingest import open_conflicts
         conflicts = open_conflicts(self.root, s)
+        waiting = self.needs_review()
         return {'cards': len(s.cards), 'missing_classification': sum(missing.values()),
                 'missing_by_domain': dict(sorted(missing.items())), 'issues': issues,
                 'map_issues': dict(sorted(map_issues.items())),
@@ -55,9 +56,19 @@ class Service:
                 'snapshot_fingerprint': s.fingerprint, 'inbox': dict(sorted(inbox_counts.items())),
                 'pending_items': sum(i.get('pending') or 0 for i in items if i['status'] == 'partial'),
                 'conflicts': conflicts,
+                'needs_review': len(waiting),
+                **({'needs_review_hint': 'these cards stay out of the review queue until their status is confirmed; '
+                                         'sb status --needs-review lists them'} if waiting else {}),
+                'state_dir': _state_size(self.root),
                 **({'conflicts_hint': 'new and existing cards disagree here; each stays listed until the existing '
                                       f'card\'s text changes ({layouts.of(self.root).conflicts})'} if conflicts else {}),
                 'review': review, 'jobs': jobs.list_jobs(self.root)}
+
+    def needs_review(self) -> list[dict]:
+        """Every card marked ``status: needs-review``; the review queue leaves them out until they are confirmed."""
+        return [{'id': c.id, 'title': c.title, 'path': c.path}
+                for c in sorted(self.snapshot().cards.values(), key=lambda c: c.path)
+                if c.fm.get('status') == 'needs-review']
 
     def job_show(self, job_id: str) -> dict:
         state = jobs.load(self.root, job_id)
@@ -128,6 +139,25 @@ class Service:
         """Submit a host-mode run output; validated, never written to knowledge."""
         return jobs.submit(self.root, job_id, payload, role=role, run_id=run_id,
                            model_reported=model, attestation='self_reported')
+
+
+def _state_size(root: Path) -> dict:
+    """Where the vault's job records and caches are, and their size."""
+    import os
+    from .store import state_root
+    try:
+        base = state_root(root)
+    except ValueError as exc:
+        return {'error': str(exc)}
+    total = 0
+    for folder, _, names in os.walk(base):
+        for name in names:
+            try:
+                total += os.lstat(os.path.join(folder, name)).st_size
+            except OSError:
+                pass
+    return {'path': str(base), 'mb': round(total / 1e6, 1),
+            'hint': 'rollback journals of old writes take most of it; sb job prune shows which can go'}
 
 
 def initialize(root: Path, catalog: dict, job_id: str = 'initialize-catalog'):

@@ -27,7 +27,7 @@ from pathlib import Path
 from . import config, gates
 from . import layout as layouts
 from .store import (Change, Conflict, _state_dir, apply_changes, digest, job_name,
-                    read_state, relative, vault_lock, write_json)
+                    read_state, relative, remove_state, vault_lock, write_json)
 
 SCHEMA = "secondbrain-job/3"
 RUN_SCHEMA = "secondbrain-run/1"
@@ -452,6 +452,8 @@ def archive(root: Path, job_id: str, *, reason: str) -> dict:
                            'roll it back first: sb recover <job> --rollback')
         if state.get('commit_intent') and journal is None:
             raise Conflict(f'Job {job_id} has a frozen write plan; resume or roll it back first')
+        if state.get('pruned'):
+            raise Conflict(f'Job {job_id} wrote to the vault; its rollback journal was pruned, so it stays')
         stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
         target = job_name(f'{job_id}.reset-{stamp}')
         state.update(job_id=target, status='archived', updated_at=now(),
@@ -518,7 +520,7 @@ def freeze_projection(root: Path, job_id: str, changes: list[Change], *, checks:
 def resume_transaction(root: Path, job_id: str) -> dict | None:
     state = load(root, job_id)
     if not state.get('commit_intent'):
-        return None
+        return None  # never wrote, or wrote and its records were pruned (``pruned``)
     raw = read_state(root, location(job_id, 'commit-intent.json'))
     if raw is None or digest(raw) != state['commit_intent']:
         raise Conflict('The frozen write plan was modified')
@@ -587,3 +589,104 @@ def list_jobs(root: Path) -> list[dict]:
         if statuses.get(entry.get('retried_by')) not in (None, 'rolled_back', 'unreadable'):
             entry['pending'] = []
     return out
+
+
+# --------------------------------------------------------------------------
+# Pruning rollback records
+# --------------------------------------------------------------------------
+#: The files of a finished write that only rollback and resume read: the journal with the
+#: before and after bytes of every changed file, and the frozen write plan.
+PRUNABLE_FILES = ('transaction.json', 'commit-intent.json')
+#: Statuses of a job whose write finished.
+WRITTEN_STATUSES = {'applied', 'partial', 'published'}
+
+
+def _prune_group(state: dict) -> str:
+    """Jobs of one group follow each other; the newest of a group keeps its records.
+
+    An ingest job and its retry children form one group (one source); other
+    jobs group by kind and the operation their id starts with (``moc``,
+    ``daily``, ``classify`` ...).
+    """
+    job_id = state['job_id']
+    if state.get('kind') == 'ingest':
+        return re.sub(r'-retry\d+$', '', job_id)
+    return f"{state.get('kind')}:{job_id.split('-', 1)[0]}"
+
+
+def prune(root: Path, *, days: int = 30, apply: bool = False, now_utc: datetime | None = None) -> dict:
+    """List, or with ``apply`` delete, the rollback records of old finished writes.
+
+    A job qualifies when its write finished (its journal says ``applied``),
+    its last update is more than ``days`` days old, and it is not the newest
+    job of its group (:func:`_prune_group`), so the last write of every source
+    and operation can still be undone. Only :data:`PRUNABLE_FILES` go; the job
+    state, its runs and packets stay, and the state records ``pruned`` so
+    that `sb recover` can say why it cannot roll the job back. Nothing is ever
+    pruned without ``apply``.
+    """
+    if not isinstance(days, int) or days < 0:
+        raise ValueError('days must be 0 or more')
+    moment = now_utc or datetime.now(timezone.utc)
+    states = []
+    for entry in list_jobs(root):
+        if entry.get('kind') in (None, 'transaction') or entry.get('status') == 'unreadable':
+            continue
+        states.append(load(root, entry['job_id']))
+    newest: dict = {}
+    for state in states:
+        if state.get('status') not in WRITTEN_STATUSES:
+            continue  # the newest write of a group keeps its records, not a job that never wrote
+        key = _prune_group(state)
+        stamp = state.get('created_at') or ''
+        if key not in newest or stamp > newest[key][0]:
+            newest[key] = (stamp, state['job_id'])
+    chosen = []
+    for state in states:
+        job_id = state['job_id']
+        if state.get('pruned') or state.get('status') not in WRITTEN_STATUSES or \
+                newest.get(_prune_group(state), ('', ''))[1] == job_id:
+            continue
+        updated = datetime.fromisoformat(state.get('updated_at') or state['created_at'])
+        if (moment - updated).total_seconds() < days * 86400:
+            continue
+        raw = read_state(root, location(job_id, 'transaction.json'))
+        if raw is None or json.loads(raw).get('status') != 'applied':
+            continue
+        sizes = {}
+        for name in PRUNABLE_FILES:
+            data = raw if name == 'transaction.json' else read_state(root, location(job_id, name))
+            if data is not None:
+                sizes[name] = len(data)
+        chosen.append({'job_id': job_id, 'kind': state.get('kind'), 'status': state['status'],
+                       'updated_at': state.get('updated_at'), 'files': sorted(sizes),
+                       'mb': round(sum(sizes.values()) / 1e6, 2)})
+    out = {'apply': apply, 'days': days, 'jobs': chosen, 'mb': round(sum(j['mb'] for j in chosen), 2),
+           'kept_newest': sorted(job for _, job in newest.values())}
+    if not apply:
+        if chosen:
+            out['hint'] = ('sb job prune --apply deletes these rollback journals and write plans; '
+                           'those writes can then no longer be undone with sb recover --rollback')
+        return out
+    with vault_lock(root):
+        for job in chosen:
+            freed = sum(remove_state(root, location(job['job_id'], name)) for name in PRUNABLE_FILES)
+            state = load(root, job['job_id'])
+            state.pop('commit_intent', None)
+            state['pruned'] = {'at': now(), 'files': job['files'], 'bytes': freed}
+            write_json(root, location(job['job_id']), state)
+    return out
+
+
+def pruned_note(root: Path, job_id: str) -> str | None:
+    """Why ``job_id`` cannot be resumed or rolled back because its records were pruned, or None."""
+    try:
+        state = load(root, job_id)
+    except ValueError:
+        return None
+    pruned = state.get('pruned')
+    if not pruned:
+        return None
+    return (f'The rollback journal of {job_id} was pruned on {pruned["at"][:10]} (sb job prune), so its write '
+            'can no longer be undone with sb recover; the cards it wrote stay. Undo them by hand if needed.')
+

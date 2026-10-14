@@ -36,6 +36,7 @@ def parser():
     init = sub.add_parser('init', help='Initialize vault metadata from a reviewed catalog')
     init.add_argument('--catalog', type=Path, required=True)
     stat = sub.add_parser('status'); stat.add_argument('--job')
+    stat.add_argument('--needs-review', action='store_true', help='List every card marked status: needs-review')
     lang = sub.add_parser('language', help="The vault's generated-text language; --set switches it")
     lang.add_argument('--set', choices=['en', 'zh'], dest='set_language',
                       help='Record this language in the catalog (then rewrite pages with refresh and docs)')
@@ -142,6 +143,10 @@ def parser():
     jreset = job_sub.add_parser('reset', help='Set aside a job that left nothing in the vault (never written or '
                                               'rolled back) so its source can be prepared again')
     jreset.add_argument('id'); jreset.add_argument('--reason', required=True)
+    jprune = job_sub.add_parser('prune', help='Rollback journals of old writes that are not the newest of their '
+                                              'source; preview unless --apply')
+    jprune.add_argument('--days', type=int, default=30, help='Only writes older than this (default 30)')
+    jprune.add_argument('--apply', action='store_true', help='Delete them; those writes can no longer be undone')
     jabandon = job_sub.add_parser('abandon', help='Give up a run that will not be submitted')
     jabandon.add_argument('id'); jabandon.add_argument('--run-id', required=True)
     jabandon.add_argument('--reason', required=True)
@@ -209,6 +214,8 @@ def _job(args, root: Path):
         return service.submit(args.id, payload, role=args.role, run_id=args.run_id, model=args.model)
     if args.job_command == 'abandon':
         return jobs.abandon_run(root, args.id, args.run_id, reason=args.reason)
+    if args.job_command == 'prune':
+        return jobs.prune(root, days=args.days, apply=args.apply)
     if args.job_command == 'reset':
         return jobs.archive(root, args.id, reason=args.reason)
     if args.job_command == 'packet':
@@ -400,7 +407,7 @@ def main(argv=None):
             from .service import initialize
             result = initialize(root, json.loads(args.catalog.read_text()))
         elif cmd == 'status':
-            result = service.status(args.job)
+            result = service.needs_review() if args.needs_review else service.status(args.job)
         elif cmd == 'language':
             from .service import set_language
             result = set_language(root, args.set_language) if args.set_language else labels.describe(root)
@@ -425,6 +432,8 @@ def main(argv=None):
             job_id = args.id or args.job
             if not job_id:
                 raise ValueError('recover needs a job id')
+            if jobs.pruned_note(root, job_id):
+                raise ValueError(jobs.pruned_note(root, job_id))
             if args.action == 'rollback':
                 from .pipelines.ingest import check_rollback
                 check_rollback(root, job_id)

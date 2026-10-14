@@ -187,6 +187,23 @@ def read_state(root: Path, rel: str) -> bytes | None:
         return None
 
 
+def remove_state(root: Path, rel: str) -> int:
+    """Delete one file of the vault's external state root; returns the bytes freed (0 when absent)."""
+    try:
+        with _state_parent(root, rel, create=False) as (fd, name):
+            try:
+                st = os.stat(name, dir_fd=fd, follow_symlinks=False)
+            except FileNotFoundError:
+                return 0
+            if not stat.S_ISREG(st.st_mode):
+                raise ValueError(f"refusing to delete a non-regular state file: {rel}")
+            os.unlink(name, dir_fd=fd)
+            os.fsync(fd)
+            return st.st_size
+    except FileNotFoundError:
+        return 0
+
+
 def _atomic_state(root: Path, rel: str, data: bytes) -> None:
     with _state_parent(root, rel, create=True) as (fd, name):
         temporary = f".secondbrain-{uuid.uuid4().hex}.tmp"
