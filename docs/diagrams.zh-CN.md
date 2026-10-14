@@ -37,7 +37,7 @@
 | V2 | 规模：flow 和 structure 4 到 9 个节点（有两条路径汇合时下限为 3 个），state 3 到 8 个状态，sequence 2 到 3 个参与者（第四个参与者会超出笔记宽度） | 每个 IR |
 | V3 | 每个节点、每条带标签的连线和每条消息都引用卡片确有的部分（`E`、`P1`..`Pn`） | 每个 IR |
 | V4 | 每个标签至少一半的词能在被引文字里找到（公式名和符号也算；`yes`、`no`、`start`、`end` 等少数词不受此限） | 每个 IR |
-| V5 | 图要增加结构：flow 里有分支、汇合或循环；structure 里有汇合、循环，或三条及以上连接（单纯的链必须引用三个或更多部分）；state 里有三条或更多状态转换；sequence 里有三条或更多消息；被引文字说明工作会重复时，flow 要画出回边（如 repeat、loop、until、iterate、重复、循环、直到；否定说法如「不会重复」、指重复数据的如「重复项」、名称如「循环队列」都不算） | 每个 IR |
+| V5 | 图要增加结构：flow 里有分支、汇合或循环；structure 里有汇合、循环，或三条及以上连接（单纯的链必须引用三个或更多部分）；state 里有三条或更多状态转换；sequence 里有三条或更多消息；被引文字说明工作会重复时，flow 要画出回边（如 repeat、loop、until、iterate、重复、循环、直到、不断、轮询；否定说法如「不会重复」、被避免的重复或作为故障的循环如「避免重复」「死循环」、指重复数据的如「重复项」、名称如「循环队列」都不算） | 每个 IR |
 | V6 | 标签宽度：节点标签最多 20 个单位，判断节点标签 10，连线标签 14，消息 20（码位在 U+2E80 及以上的字符算 1，例如中日韩字符或全角标点；其他字符算 0.5） | 每个 IR |
 | V7 | structure、state 和 sequence 的连接都有标签；从判断节点出发的连线写明条件；一个判断节点有两个或更多出口 | 每个 IR |
 | V8 | 卡片有两条或更多命题时，它的图要引用两个或更多部分 | 每个 IR |
@@ -79,24 +79,26 @@ flowchart TB
 |---|---|
 | `schema` | 输出 IR 的 JSON Schema |
 | `audit-extract VAULT OUT` | 读取每张卡片（只读），写入 `cards.jsonl`；读取每个 Mermaid 代码块，写入 `blocks.jsonl`（`--language` 选择用哪套卡片小节名） |
-| `audit-tier OUT` | 读取 `cards.jsonl` 和 `checks.jsonl` 里的 `tools/mermaid_check` 结果，把每张图分进一个档：`keep`、`delete`、`review` 或 `redraw`（`--delete-domain` 把整个领域分进 `delete`）。它写出 `tiers.json`，其中还记下每张旧流程图的标签和边，供 `writeback` 的重画规则使用；旧版本做的审计目录要重新运行一次 `audit-tier` |
-| `prune VAULT OUT` | 删除 `delete` 档卡片的图小节（有三条或更多命题的机制卡改为进入复核池），并把保留下来的、从左到右排布且过宽的图改成从上到下 |
+| `audit-repair OUT --checker tools/mermaid_check/check.mjs` | 改写解析失败的旧流程图：给每个标签加引号，把用了 Mermaid 关键字的节点 id 改名，每行只写一条语句，不改标签的内容。它渲染改写结果，写入 `repairs.jsonl` |
+| `audit-tier OUT` | 读取 `cards.jsonl`、`checks.jsonl` 里的 `tools/mermaid_check` 结果，以及存在时的 `repairs.jsonl`（修复后能渲染的图算作能渲染），把每张图分进一个档：`keep`、`delete`、`review` 或 `redraw`（`--delete-domain` 把整个领域分进 `delete`）。它写出 `tiers.json`，其中还记下每张旧流程图的标签和边，供 `writeback` 的重画规则使用。由缺少这些信息的 `tiers.json` 生成的池，`writeback` 会拒绝：重新运行 `audit-tier`，再运行 `pool` |
+| `prune VAULT OUT` | 删除 `delete` 档卡片的图小节（有三条或更多命题的机制卡改为进入复核池），把保留下来的、从左到右排布且过宽的图改成从上到下，并为只在 `audit-repair` 后才能渲染的保留图写入修复后的源码。带 `--checker` 时，它渲染改了方向或修复过的图，并列出仍宽于 700 px 的图 |
 | `pool OUT` | 列出要重新判断的卡片：`review` 和 `redraw` 两档，加上 prune 留待复核的 `delete` 档卡片（`--refs FILE` 只取该文件里的卡片引用） |
-| `packets CARDS OUT` | 按每批十张（`--batch`）生成给模型的请求，并把预筛掉的卡片写入 `pregated.jsonl` |
+| `packets CARDS OUT` | 按每批十张（`--batch`）生成给模型的请求，并把预筛掉的卡片写入 `pregated.jsonl`。旧图能渲染的卡片会附上旧图的源码；说明要求只在新图能明显更好地表达本质里的关系时才画新图 |
 | `apply CARDS ANSWERS... --out OUT` | 读取模型答案，为每张卡做决定：`draw`（附 Mermaid）、`rewrite`（写出一个重写任务文件 `rewrite-NNN.json`）或 `skip`，结果写入 `outcomes.jsonl` 和 `mermaid.jsonl`。每份答案命名为 `X.answer.json`，放在它所回答的任务文件 `X.json` 旁边。`--checker tools/mermaid_check/check.mjs` 渲染每张新图，并按 V9、实测宽度（V14）和 V15 把关 |
 | `old-audit-packets POOL OUT` | 生成请求：对每张会保留旧图的卡片，询问这张旧图是在复述文字、有误导，还是有用 |
 | `old-audit-apply ANSWERS... --out OUT` | 读取这些答案（`old-audit-NNN.answer.json`，放在 `old-audit-NNN.json` 旁边），写入 `old_audit_outcomes.jsonl`；只有带 `restates` 或 `misleading` 的 `remove` 才删除旧图，其他答案都保留旧图 |
-| `writeback VAULT OUT OUTCOMES...` | 为每张池中卡片规划结果（带 `--write` 时则应用结果）。传入 `outcomes.jsonl` 和 `pregated.jsonl`，第一轮的文件放在重写的文件之前：后面的结果替换前面的结果。用 `--old-audit old_audit_outcomes.jsonl` 传入审计结果 |
+| `writeback VAULT OUT OUTCOMES...` | 为每张池中卡片规划结果（带 `--write` 时则应用结果）。传入 `outcomes.jsonl` 和 `pregated.jsonl`，第一轮的文件放在重写的文件之前：后面的结果替换前面的结果。用 `--old-audit old_audit_outcomes.jsonl` 传入审计结果。带 `--checker` 时，它按将要写入的样子，渲染保留但有改动（改了方向或修复过）的旧图 |
 
 池中卡片的写回规则：
 
 - **draw**：新图替换图小节。如果旧图能渲染，新图只有在引用 `E` 和两条命题时（卡片的命题少于两条时，引用全部命题），才替换旧图。否则这张卡按下面的 skip 规则处理，规则名以 `draw:weak/` 开头。只是把旧图重画一遍的新流程图也不写入：它与旧图形状相同（节点数和不重复的边数相同，各节点的入度和出度相同），并且两张图的标签词至少有 30% 相同。这张卡按 skip 规则处理，规则名以 `draw:same_as_old/` 开头。
-- **skip**：在被移除的领域里（由 `--remove-domain` 指定，或在审计中被分档为 `domain`），旧图被删除。因复核而进入池中的 `delete` 档卡片，旧图也被删除（`--delete-review-on-skip keep` 会保留它）。其他情况下，能渲染的旧图保留，不能渲染的删除。
+- **skip**：在被移除的领域里（由 `--remove-domain` 指定，或在审计中被分档为 `domain`），旧图被删除。因复核而进入池中的 `delete` 档卡片，旧图也被删除（`--delete-review-on-skip keep` 会保留它）。其他情况下，能渲染的旧图（包括 `audit-repair` 修复后能渲染的）保留，不能渲染的删除。
 - **旧图审计**：保留下来的旧图，如果审计结果是 `restates` 或 `misleading`，就被删除。
-- **过宽的旧图**：保留下来、渲染宽度超过 700 px 的旧图，方向是 `LR` 或 `RL` 时改为从上到下（动作 `direction_tb`，规则名以 `+tb` 结尾）。不能改方向的保持原样，规则名以 `+wide` 结尾。状态图会被缩放到合适宽度，从不标记。
+- **修复过的旧图**：只在 `audit-repair` 后才能渲染的旧图如果保留，就用修复后的源码替换原来坏掉的源码（动作 `repair_old`，规则名以 `+repaired` 结尾）。
+- **过宽的旧图**：保留下来、渲染宽度超过 700 px 的旧图，方向是 `LR` 或 `RL` 时改为从上到下（动作 `direction_tb`，规则名以 `+tb` 结尾）。不能改方向的保持原样，规则名以 `+wide` 结尾；带 `--checker` 时，改了方向或修复后仍宽于 700 px 的图也以 `+wide` 结尾。状态图会被缩放到合适宽度，从不标记。
 - **重写仍待定，或没有结果**：不做任何改动。只有用 `--old-audit` 传入旧图审计文件时，旧图审计才起作用。
 
-一次典型的运行：先运行 `audit-extract`，再运行 `node tools/mermaid_check/check.mjs OUT/blocks.jsonl OUT/checks.jsonl`，然后依次是 `audit-tier`、`prune`、`pool`、对池运行 `packets`、模型作答、`apply --checker`、重写、`old-audit-packets` 和 `old-audit-apply`；最后先不带 `--write` 运行 `writeback`，查看计划，再带 `--write` 运行。运行 `sb diagrams <command> --help` 查看全部选项。
+一次典型的运行：先运行 `audit-extract`，再运行 `node tools/mermaid_check/check.mjs OUT/blocks.jsonl OUT/checks.jsonl`，然后依次是 `audit-repair --checker`、`audit-tier`、`prune`、`pool`、对池运行 `packets`、模型作答、`apply --checker`、重写、`old-audit-packets` 和 `old-audit-apply`；最后先不带 `--write` 运行 `writeback --checker`，查看计划，再带 `--write` 运行。运行 `sb diagrams <command> --help` 查看全部选项。
 
 读写知识库卡片的命令（`audit-extract`、`prune`、`writeback`）按语言查找卡片小节。给了 `--language en|zh` 就用它；否则用知识库记录的语言（`sb language`）；再否则用配置文件的 `[cards] language`；最后看卡片实际用的小节标题。这些命令把选择结果输出到 stderr。如果卡片用的是另一种语言的小节标题，命令会停止，并指出应传入的 `--language`。`pool` 读取 `cards.jsonl`，所以沿用 `audit-extract` 用过的语言。`audit-extract` 读取 `--knowledge-dir` 下的卡片；没有给出时，用配置文件的 `[layout] knowledge`；再没有就用 `10_Knowledge`。
 
