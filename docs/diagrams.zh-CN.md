@@ -84,7 +84,7 @@ flowchart TB
 | `schema` | 输出 IR 的 JSON Schema |
 | `audit-extract VAULT OUT` | 读取每张卡片（只读），写入 `cards.jsonl`；读取每个 Mermaid 代码块，写入 `blocks.jsonl`（`--language` 选择用哪套卡片小节名） |
 | `audit-repair OUT --checker tools/mermaid_check/check.mjs` | 改写解析失败的旧流程图：给每个标签加引号（标签里的 `"` 写成 `#quot;`），把用了 Mermaid 关键字或符号的节点 id 改名（改了名又没有标签的节点，用旧 id 作标签），把 `A -- 文字 --> B` 改成竖线之间的标签，每行只写一条语句。它不改标签的内容。它渲染改写结果，写入 `repairs.jsonl`；一张也修不了时，这个文件为空 |
-| `audit-tier OUT` | 读取 `cards.jsonl`、`checks.jsonl` 里的 `tools/mermaid_check` 结果和 `repairs.jsonl`（修复后能渲染的图算作能渲染），把每张图分进一个档：`keep`、`delete`、`review` 或 `redraw`（`--delete-domain` 把整个领域分进 `delete`）。方向不是 `LR` 或 `RL`、渲染宽度超过 700 px 的流程图分进 `redraw`，规则为 `wide`，因为改方向不能让它变窄。它写出 `tiers.json`，其中还记下每张旧流程图的标签和边，供 `writeback` 的重画规则使用。有旧图解析失败、而 `tiers.json` 生成时没读 `repairs.jsonl` 的，`pool`、`prune` 和 `writeback` 都会拒绝；缺少流程图结构的，`writeback` 会拒绝。两种情况都先运行 `audit-repair`，再重新运行 `audit-tier` |
+| `audit-tier OUT` | 读取 `cards.jsonl`、`checks.jsonl` 里的 `tools/mermaid_check` 结果和 `repairs.jsonl`（修复后能渲染的图算作能渲染），把每张图分进一个档：`keep`、`delete`、`review` 或 `redraw`（`--delete-domain` 把整个领域分进 `delete`）。方向不是 `LR` 或 `RL`、渲染宽度超过 730 px（700 px 加 30 px 容差）的流程图分进 `redraw`，规则为 `wide`，因为改方向不能让它变窄。超出至多 30 px 的按其他规则分档。新图仍须不宽于 700 px（V14）。它写出 `tiers.json`，其中还记下每张旧流程图的标签和边，供 `writeback` 的重画规则使用。有旧图解析失败、而 `tiers.json` 生成时没读 `repairs.jsonl` 的，`pool`、`prune` 和 `writeback` 都会拒绝；缺少流程图结构的，`writeback` 会拒绝。两种情况都先运行 `audit-repair`，再重新运行 `audit-tier` |
 | `pool OUT` | 列出要重新判断的卡片：`review` 和 `redraw` 两档，加上 `prune` 留待复核的 `delete` 档卡片（默认是有三条或更多命题的机制卡）。`--refs FILE` 只取该文件里的卡片引用。带 `--delete-tier` 时，改为列出其余由 `prune` 处理的 `delete` 档卡片，好先审计它们的旧图；这时用 `--out` 写到另一个文件 |
 | `old-audit-packets POOL OUT` | 生成请求：对每张旧图会保留或可能被删除的卡片，询问这张旧图是在复述文字、有误导，还是有用 |
 | `old-audit-apply ANSWERS... --out OUT` | 读取这些答案（`old-audit-NNN.answer.json`，放在 `old-audit-NNN.json` 旁边），写入 `old_audit_outcomes.jsonl`；只有带 `restates` 或 `misleading` 的 `remove` 才删除旧图，其他答案都保留旧图 |
@@ -101,7 +101,7 @@ flowchart TB
 - **skip**：在被移除的领域里（由 `--remove-domain` 指定，或在审计中被分档为 `domain`），旧图被删除。因复核而进入池中的 `delete` 档卡片，旧图只在审计结果为 `restates` 或 `misleading` 时删除，审计决定保留就保留。还没有审计结果时不写任何东西：动作是 `pending`，规则是 `skip:delete_review/no_audit`（或在 `draw:weak/`、`draw:same_as_old/` 之后接这个规则）。`--delete-review-on-skip keep` 让这些旧图全部保留。其他情况下，能渲染的旧图（包括 `audit-repair` 修复后能渲染的）保留，仍解析失败的删除。
 - **旧图审计**：保留下来的旧图，如果审计结果是 `restates` 或 `misleading`，就被删除。
 - **修复过的旧图**：只在 `audit-repair` 后才能渲染的旧图如果保留，就用修复后的源码替换原来坏掉的源码（动作 `repair_old`，规则名以 `+repaired` 结尾）。
-- **过宽的旧图**：这样宽的竖排流程图已经重新判断过（`redraw` 档，规则 `wide`）。保留下来、渲染宽度超过 700 px 的旧图，方向是 `LR` 或 `RL` 时改为从上到下（动作 `direction_tb`，规则名以 `+tb` 结尾）。不能改方向的保持原样，规则名以 `+wide` 结尾。带 `--checker` 时，改成从上到下后会比原来宽的图不改方向：保持原样（动作 `keep_old`，规则名用 `+wide` 代替 `+tb`；修复过的图不改方向写回，规则名以 `+wide+repaired` 结尾）；改了方向或修复后仍宽于 700 px 的图也以 `+wide` 结尾。状态图会被缩放到合适宽度，从不标记。
+- **过宽的旧图**：宽于 730 px 的竖排流程图已经重新判断过（`redraw` 档，规则 `wide`）。保留下来、渲染宽度超过 700 px 的旧图，方向是 `LR` 或 `RL` 时改为从上到下（动作 `direction_tb`，规则名以 `+tb` 结尾）。不能改方向的保持原样，规则名以 `+wide` 结尾。带 `--checker` 时，改成从上到下后会比原来宽的图不改方向：保持原样（动作 `keep_old`，规则名用 `+wide` 代替 `+tb`；修复过的图不改方向写回，规则名以 `+wide+repaired` 结尾）；改了方向或修复后仍宽于 700 px 的图也以 `+wide` 结尾。状态图会被缩放到合适宽度，从不标记。
 - **重写仍待定，或没有结果**：不做任何改动。只有用 `--old-audit` 传入旧图审计文件时，旧图审计才起作用。
 
 一次典型的运行：
