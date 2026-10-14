@@ -32,14 +32,19 @@ answer is bound to exactly the cards it judged.
 """
 from __future__ import annotations
 
+import re
 from typing import Any, Callable
 
 SLOT = 'xc01'
 STEP = 'source_check'
 DECISIONS = ('keep', 'same')
 TOPIC_DECISIONS = ('keep', 'same')
-#: Limits a card keeps after cards are merged into it (the producer's own limits).
-MAX_PROPOSITIONS, MAX_FLASHCARDS = 12, 4
+#: Limits a card keeps after cards are merged into it: the producer's 12 propositions, and twice its 4
+#: flashcards, so a point carried over keeps its question (J4 on the drill 3 replay: a cap of 4 left 7 points
+#: without any question in the vault).
+MAX_PROPOSITIONS, MAX_FLASHCARDS = 12, 8
+#: ``[[Title]]``, ``[[Title#heading]]`` and ``[[Title|alias]]`` in card text.
+_WIKILINK = re.compile(r'\[\[([^\[\]|#]+)((?:#[^\[\]|]*)?)((?:\|[^\[\]]*)?)\]\]')
 #: Existing cards shown per card as possible link targets (drill 3: the Euclid card was second).
 NEAR_EXISTING = 3
 
@@ -56,7 +61,10 @@ SCHEMA = {
                 'with': _NSTR, 'reason': _NSTR,
                 'carry': {'type': ['object', 'null'], 'properties': {
                     'propositions': {'type': 'array', 'items': _STR},
-                    'flashcards': {'type': 'array', 'items': _FLASHCARD}}},
+                    'flashcards': {'type': 'array', 'items': _FLASHCARD},
+                    'replace': {'type': 'array', 'items': {
+                        'type': 'object', 'required': ['proposition', 'by'],
+                        'properties': {'proposition': _STR, 'by': _STR}}}}},
                 'links': {'type': ['array', 'null'], 'items': {
                     'type': 'object', 'required': ['target', 'type'],
                     'properties': {'target': _STR, 'type': _STR, 'note': _NSTR}}},
@@ -146,6 +154,7 @@ def validate_answer(frozen: dict, payload: Any, closed: Callable[[str, str, str]
                           f'name {merged[into]} instead')
     # what each kept card ends with: its own propositions and flashcards plus what merged cards carry to it
     totals = {s: [len(c['propositions']), len(c['flashcards'])] for s, c in cards.items()}
+    replaced = set()
     for slug, into in merged.items():
         carry = rows[slug].get('carry') or {}
         props, flashcards = carry.get('propositions') or [], carry.get('flashcards') or []
@@ -156,6 +165,19 @@ def validate_answer(frozen: dict, payload: Any, closed: Callable[[str, str, str]
         own = [(f['q'], f['a']) for f in cards[slug]['flashcards']]
         if any(not isinstance(f, dict) or (f.get('q'), f.get('a')) not in own for f in flashcards):
             errors.append(f'cards: {slug}.carry.flashcards must be copied exactly from its flashcards')
+        for i, swap in enumerate(carry.get('replace') or []):
+            at = f'cards: {slug}.carry.replace[{i}]'
+            ref, by = (swap.get('proposition'), swap.get('by')) if isinstance(swap, dict) else (None, None)
+            number = int(ref[1:]) if isinstance(ref, str) and re.fullmatch(r'P[1-9]\d*', ref) else 0
+            if into in cards and not 1 <= number <= len(cards[into]['propositions']):
+                errors.append(f'{at}.proposition must name one of the propositions of {into} (P1–P'
+                              f'{len(cards[into]["propositions"])})')
+            elif (into, number) in replaced:
+                errors.append(f'{at}: {into} {ref} is replaced twice')
+            if by not in cards[slug]['propositions'] or by in props:
+                errors.append(f'{at}.by must be one of its propositions, copied exactly, and not also in '
+                              'carry.propositions')
+            replaced.add((into, number))
         if into in totals:
             totals[into][0] += len(props)
             totals[into][1] += len(flashcards)
@@ -273,15 +295,43 @@ def apply(settled: list[dict], frozen: dict, answer: dict) -> tuple[list[dict], 
             if key in refile:
                 card['domain'], card['pillar'], card['topic'] = refile[key]
             kept[slug] = card
+    carried, repeats, replacements = {}, {}, {}
     for slug, into in merged.items():  # what the merged card adds goes to the card it repeats
         carry = rows[slug].get('carry') or {}
         keep = kept[into]
-        keep['propositions'] = list(keep.get('propositions') or []) + list(carry.get('propositions') or [])
-        keep['flashcards'] = list(keep.get('flashcards') or []) + [
-            f for f in original[slug].get('flashcards') or []
-            if {'q': f.get('q'), 'a': f.get('a')} in (carry.get('flashcards') or [])]
+        props, flashcards = list(keep.get('propositions') or []), list(keep.get('flashcards') or [])
+        new_p, new_f, skipped = [], [], 0
+        for swap in carry.get('replace') or []:  # this card's fuller wording takes the place of the kept one
+            number = int(swap['proposition'][1:])
+            props[number - 1] = swap['by']
+            new_p.append(number)
+        have_p, have_q = {_plain(x) for x in props}, {_plain(f.get('q')) for f in flashcards}
+        for text in carry.get('propositions') or []:
+            if _plain(text) in have_p:  # the kept card says it already, word for word
+                skipped += 1
+                continue
+            have_p.add(_plain(text))
+            props.append(text)
+            new_p.append(len(props))
+        for f in original[slug].get('flashcards') or []:
+            if {'q': f.get('q'), 'a': f.get('a')} not in (carry.get('flashcards') or []):
+                continue
+            if _plain(f.get('q')) in have_q:
+                skipped += 1
+                continue
+            have_q.add(_plain(f.get('q')))
+            flashcards.append(f)
+            new_f.append(len(flashcards))
+        keep['propositions'], keep['flashcards'] = props, flashcards
+        own = (original[slug].get('source_quotes') or [None])[0]
         keep['source_quotes'] = list(dict.fromkeys(list(keep.get('source_quotes') or [])
                                                    + list(original[slug].get('source_quotes') or [])))
+        if (new_p or new_f) and own and own != (keep['source_quotes'] or [None])[0]:
+            # where the carried items stand in the source, so they stay traceable (the write step adds it
+            # to the card's `sources`)
+            keep.setdefault('_carried', []).append({'locator': own, 'propositions': new_p, 'flashcards': new_f})
+        carried[slug], repeats[slug] = (len(new_p), len(new_f)), skipped
+        replacements[slug] = len(carry.get('replace') or [])
     for slug, card in kept.items():  # links to a merged card go to the card it repeats
         own = {r['target'] for r in card['relations']}
         out = [r for r in card['relations'] if r['target'] not in merged]
@@ -315,6 +365,10 @@ def apply(settled: list[dict], frozen: dict, answer: dict) -> tuple[list[dict], 
             card['relations'].append({k: v for k, v in (('type', link['type']), ('target', link['target']),
                                                          ('note', link.get('note'))) if v})
             added.append({'from': slug, 'type': link['type'], 'target': link['target']})
+    # [[links]] in the text of the cards that stay go to the card a merged card went to (J4: a contrast line
+    # still named a merged card); a link that would point at the card itself becomes plain text
+    retitle = {original[s]['title']: kept[into]['title'] for s, into in merged.items()}
+    rewritten = sum(_retitle_card(card, retitle) for card in kept.values()) if retitle else 0
     out = []
     for o in settled:
         accepted = {s: kept[s] for s in o['accepted'] if s in kept}
@@ -323,9 +377,11 @@ def apply(settled: list[dict], frozen: dict, answer: dict) -> tuple[list[dict], 
     report = {
         'status': 'checked', 'cards': len(frozen['cards']),
         'merged': [{'slug': s, 'title': original[s]['title'], 'into': into, 'reason': rows[s]['reason'],
-                    'carried': {'propositions': len((rows[s].get('carry') or {}).get('propositions') or []),
-                                'flashcards': len((rows[s].get('carry') or {}).get('flashcards') or [])}}
+                    'carried': {'propositions': carried[s][0], 'flashcards': carried[s][1]},
+                    **({'replaced': replacements[s]} if replacements[s] else {}),
+                    **({'repeats_skipped': repeats[s]} if repeats[s] else {})}
                    for s, into in merged.items()],
+        'rewritten_links': rewritten,
         'added_links': added,
         'alone': [{'slug': s, 'reason': rows[s]['alone']} for s in kept if rows[s].get('alone')],
         'refiled_topics': [{'from': dict(zip(('domain', 'pillar', 'name'), k)),
@@ -336,3 +392,50 @@ def apply(settled: list[dict], frozen: dict, answer: dict) -> tuple[list[dict], 
         'moved_relations': moved,
         'merged_into': dict(merged)}
     return out, report
+
+
+def _plain(text) -> str:
+    """Text without spaces and punctuation, case folded: what counts as saying the same words."""
+    return re.sub(r'[\W_]+', '', str(text or '')).casefold()
+
+
+def _retitle(text, mapping: dict, own: str):
+    """``text`` with its ``[[links]]`` to a key of ``mapping`` pointing at the mapped title; returns (text, count)."""
+    if not isinstance(text, str):
+        return text, 0
+    count = 0
+
+    def sub(m):
+        nonlocal count
+        title = mapping.get(m.group(1).strip())
+        if title is None:
+            return m.group(0)
+        count += 1
+        if title == own:
+            return m.group(3)[1:] if m.group(3) else title
+        return f'[[{title}{m.group(2)}{m.group(3)}]]'
+    return _WIKILINK.sub(sub, text), count
+
+
+def _retitle_card(card: dict, mapping: dict) -> int:
+    """Rewrite the links in every text field of ``card`` in place; returns how many were changed."""
+    own, total = card.get('title'), 0
+
+    def fix(text):
+        nonlocal total
+        new, n = _retitle(text, mapping, own)
+        total += n
+        return new
+    for key in ('essence', 'intuition'):
+        if key in card:
+            card[key] = fix(card[key])
+    for key in ('propositions', 'confusions'):
+        if isinstance(card.get(key), list):
+            card[key] = [fix(x) for x in card[key]]
+    if isinstance(card.get('flashcards'), list):
+        card['flashcards'] = [{**f, 'q': fix(f.get('q')), 'a': fix(f.get('a'))} if isinstance(f, dict) else f
+                              for f in card['flashcards']]
+    for r in card.get('relations') or []:
+        if r.get('note'):
+            r['note'] = fix(r['note'])
+    return total

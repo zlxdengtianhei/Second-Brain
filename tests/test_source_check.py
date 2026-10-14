@@ -43,7 +43,8 @@ def produce(topics=False):
                 new_topics.append(ORDERING)
             cards += [{**CARDS['lantern-queue'], 'relations': []}, order]
         if ORDER_QUOTE in text:
-            cost = {**CARDS['lit-marker-cost'],
+            cost = {**CARDS['lit-marker-cost'], 'confusions': ['Unlike [[Lantern queues keep arrival order]], it is '
+                                                              'about memory, not order.'],
                     'relations': [{'type': 'depends_on', 'target': 'arrival-order', 'note': 'markers follow the order'}]}
             arrival = dict(ARRIVAL)
             if topics:  # the second chunk names the first chunk's new subject again; the cost card uses Markers
@@ -90,7 +91,8 @@ def run(tmp_path, check, *, topics=False):
 
 def test_a_card_two_chunks_both_write_is_written_once_with_what_it_adds_and_links_follow_it(tmp_path):
     same = {'arrival-order': {'decision': 'same', 'with': 'queue-order', 'reason': 'both say items keep arrival order',
-                              'carry': {'propositions': ['The order holds while markers are lit.']}}}
+                              'carry': {'propositions': CARDS['queue-order']['propositions']  # already there
+                                        + ['The order holds while markers are lit.']}}}
     root, job_id, result, seen = run(tmp_path, lambda packet: keep_all(packet, **same))
     assert result['status'] == 'applied'
     [task] = seen
@@ -103,7 +105,8 @@ def test_a_card_two_chunks_both_write_is_written_once_with_what_it_adds_and_link
     assert result['source_check']['merged'] == [{'slug': 'arrival-order', 'title': 'Lantern queues keep arrival order',
                                                  'into': ids['queue-order'],
                                                  'reason': 'both say items keep arrival order',
-                                                 'carried': {'propositions': 1, 'flashcards': 0}}]
+                                                 'carried': {'propositions': 1, 'flashcards': 0},
+                                                 'repeats_skipped': 1}]
     assert result['skipped_relations'] == []
     cards = read_snapshot(root).cards
     # the link to the merged card goes to the card it repeats, and the merged card's own link moved there
@@ -115,7 +118,16 @@ def test_a_card_two_chunks_both_write_is_written_once_with_what_it_adds_and_link
     assert result['source_check']['moved_relations'] == [{'from': ids['queue-order'], 'type': 'part_of',
                                                           'target': ids['lantern-queue'], 'was_on': 'arrival-order'}]
     assert not any(c.title == 'Lantern queues keep arrival order' for c in cards.values())
-    assert 'The order holds while markers are lit.' in cards[ids['queue-order']].body  # what it added is kept
+    kept = cards[ids['queue-order']]
+    assert '- P2. The order holds while markers are lit.' in kept.body  # what it added, once
+    assert kept.body.count('A lantern queue keeps every item in arrival order.') == 1
+    # where the carried proposition stands in the source (J4 on the drill 3 replay: carried items lost it)
+    assert [(s['locator'], s.get('propositions')) for s in kept.fm['sources']] == [
+        (CARDS['queue-order']['source_quotes'][0], None), (ORDER_QUOTE, ['P2'])]
+    # a [[link]] in another card's text to the merged card goes to the card it repeats
+    cost = cards[ids['lit-marker-cost']].body
+    assert '[[Arrival order in lantern queues]]' in cost and 'Lantern queues keep arrival order' not in cost
+    assert result['source_check']['rewritten_links'] == 1
 
 
 def test_cards_that_belong_together_are_linked_and_an_isolated_card_must_be_settled(tmp_path):
@@ -257,9 +269,12 @@ def links(slug, *rows):
             'T2': {'id': 'T2', 'decision': 'same', 'with': 'T1', 'reason': 'r'}}, 'name the topic that stays'),
     (same('a', 'b', carry={'propositions': ['a one, reworded']}), None, 'copied exactly'),
     (same('a', 'b', carry={'flashcards': [{'q': 'a q1?', 'a': 'another answer'}]}), None, 'copied exactly'),
-    (same('a', 'b', carry={'flashcards': [{'q': 'a q1?', 'a': 'a a1'}, {'q': 'a q2?', 'a': 'a a2'}],
-                           'propositions': ['a one']}) | same('c', 'b', carry={'flashcards': [{'q': 'c q1?', 'a': 'c a1'}]}),
-     None, 'b would have 3 propositions and 5 flashcards'),
+    (same('a', 'b', carry={'replace': [{'proposition': 'P3', 'by': 'a one'}]}), None, 'P1–P2'),
+    (same('a', 'b', carry={'replace': [{'proposition': 'P1', 'by': 'a one, reworded'}]}), None, 'copied exactly'),
+    (same('a', 'b', carry={'replace': [{'proposition': 'P1', 'by': 'a one'}], 'propositions': ['a one']}), None,
+     'not also in carry.propositions'),
+    (same('a', 'b', carry={'replace': [{'proposition': 'P1', 'by': 'a one'}]})
+     | same('c', 'b', carry={'replace': [{'proposition': 'P1', 'by': 'c one'}]}), None, 'replaced twice'),
     (same('a', 'b', links=[{'target': 'c', 'type': 'similar_to'}]), None, 'put its links on b'),
     ({**same('a', 'b'), **links('c', ('a', 'similar_to'))}, None, 'link b'),
     (links('b', ('a', 'similar_to')), None, 'linked already'),
@@ -271,6 +286,16 @@ def test_the_answer_must_settle_every_card_without_chains(cards, topics, message
         return None if kind == 'similar_to' else f'{kind!r} is not open to domain {domain}'
     with pytest.raises(ValueError, match=message):
         source_check.validate_answer(FROZEN, answer(cards, topics), closed=closed)
+
+
+def test_a_card_merged_into_may_hold_twice_the_flashcards_of_a_new_card():
+    big = {**frozen_card('b'), 'flashcards': [{'q': f'b q{i}?', 'a': f'b a{i}'} for i in range(1, 7)]}
+    frozen = {**FROZEN, 'cards': [FROZEN['cards'][0], big, FROZEN['cards'][2]]}
+    two = {'flashcards': [{'q': 'a q1?', 'a': 'a a1'}, {'q': 'a q2?', 'a': 'a a2'}]}
+    assert source_check.validate_answer(frozen, answer(same('a', 'b', carry=two)))  # 6 + 2 = 8
+    with pytest.raises(ValueError, match='b would have 2 propositions and 9 flashcards'):
+        source_check.validate_answer(frozen, answer({**same('a', 'b', carry=two), **same(
+            'c', 'b', carry={'flashcards': [{'q': 'c q1?', 'a': 'c a1'}]})}))
 
 
 def test_every_card_needs_a_decision_and_an_isolated_one_a_link_or_a_reason():
@@ -296,12 +321,14 @@ def test_every_card_needs_a_decision_and_an_isolated_one_a_link_or_a_reason():
 def test_a_merge_carries_what_the_card_adds_and_a_moved_link_never_makes_a_pair_point_both_ways():
     def card(slug, *targets):
         return {'slug': slug, 'title': slug, 'domain': 'd', 'pillar': 'p', 'topic': 't', 'essence': 'e',
-                'propositions': [f'{slug} one'], 'flashcards': [{'q': f'{slug}?', 'a': slug}],
+                'propositions': [f'{slug} one'] + ([f'{slug} two, with an example'] if slug == 'b' else []),
+                'flashcards': [{'q': f'{slug}?', 'a': slug}],
                 'source_quotes': [f'{slug} quote'], 'relations': [{'type': 'similar_to', 'target': t} for t in targets]}
     settled = [{'chunk': 'c01', 'accepted': {'a': card('a'), 'c': card('c', 'a')}, 'topics': {}},
                {'chunk': 'c02', 'accepted': {'b': card('b', 'c', 'a')}, 'topics': {}}]
     frozen = source_check.frozen_input(settled, {'filename': 'f'}, relation_views={})
-    reply = answer(same('b', 'a', carry={'propositions': ['b one'], 'flashcards': [{'q': 'b?', 'a': 'b'}]}))
+    reply = answer(same('b', 'a', carry={'propositions': ['b one'], 'flashcards': [{'q': 'b?', 'a': 'b'}],
+                                         'replace': [{'proposition': 'P1', 'by': 'b two, with an example'}]}))
     reply['new_topics'] = []
     assert source_check.validate_answer(frozen, reply) is reply
     out, report = source_check.apply(settled, frozen, reply)
@@ -309,7 +336,21 @@ def test_a_merge_carries_what_the_card_adds_and_a_moved_link_never_makes_a_pair_
     assert set(kept) == {'a', 'c'}
     assert kept['a']['relations'] == []  # b -> c would be a -> c while c -> a exists; b -> a would be a -> a
     assert kept['c']['relations'] == [{'type': 'similar_to', 'target': 'a'}]
-    assert kept['a']['propositions'] == ['a one', 'b one'] and len(kept['a']['flashcards']) == 2
+    assert kept['a']['propositions'] == ['b two, with an example', 'b one'] and len(kept['a']['flashcards']) == 2
+    assert kept['a']['_carried'] == [{'locator': 'b quote', 'propositions': [1, 2], 'flashcards': [2]}]
+    assert report['merged'][0]['replaced'] == 1
     assert kept['a']['source_quotes'] == ['a quote', 'b quote']
     assert report['moved_relations'] == [] and report['merged_into'] == {'b': 'a'}
     assert settled[0]['accepted']['a']['propositions'] == ['a one']  # nothing changed in place
+
+
+def test_links_to_a_merged_card_follow_it_and_a_link_to_the_card_itself_becomes_text():
+    mapping = {'Old': 'Kept'}
+    assert source_check._retitle('see [[Old]], [[Old|that card]] and [[Old#P2]]', mapping, 'Other') == (
+        'see [[Kept]], [[Kept|that card]] and [[Kept#P2]]', 3)
+    assert source_check._retitle('unlike [[Old]] or [[Old|the twin]]', mapping, 'Kept') == (
+        'unlike Kept or the twin', 2)
+    card = {'title': 'Kept', 'essence': 'e', 'propositions': ['[[Other]] stays'], 'confusions': ['vs [[Old]]'],
+            'flashcards': [{'q': 'Why [[Old]]?', 'a': 'a'}], 'relations': [{'type': 'x', 'target': 't', 'note': '[[Old]]'}]}
+    assert source_check._retitle_card(card, mapping) == 3
+    assert card['confusions'] == ['vs Kept'] and card['propositions'] == ['[[Other]] stays']

@@ -1880,7 +1880,11 @@ def apply_job(root: Path, job_id: str, settled: list[dict] | None = None) -> dic
                 'pillar': card['pillar'], 'topic': card['topic'],
                 'tags': ['review', f'flashcards/{card["domain"]}'],
                 'aliases': list(dict.fromkeys(a for a in card.get('aliases') or [] if a != title)) or None,
-                'sources': [{'path': source_rel, 'sha256': source['sha256'], 'locator': card['source_quotes'][0]}],
+                # a card other cards were merged into names where their carried propositions stand in the source
+                'sources': [{'path': source_rel, 'sha256': source['sha256'], 'locator': card['source_quotes'][0]}] + [
+                    {'path': source_rel, 'sha256': source['sha256'], 'locator': c['locator'],
+                     **({'propositions': [f'P{i}' for i in c['propositions']]} if c['propositions'] else {})}
+                    for c in card.get('_carried') or []],
                 'relations': rels[slug], 'created': today,
                 'status': 'needs-review' if card.get('_overlap_with') else card.get('status', 'confirmed')}
         meta = {k: v for k, v in meta.items() if v is not None}
@@ -2062,6 +2066,7 @@ def _check_report(check: dict, ids: dict) -> dict:
     name = lambda slug: ids.get(slug, slug)  # noqa: E731
     return {'status': 'checked', 'cards': check['cards'],
             'merged': [{**m, 'into': name(m['into'])} for m in check['merged']],
+            'rewritten_links': check.get('rewritten_links', 0),
             'added_links': [{**r, 'from': name(r['from']), 'target': name(r['target'])} for r in check['added_links']],
             'alone': [{**a, 'id': name(a['slug'])} for a in check['alone']],
             'refiled_topics': check['refiled_topics'],
