@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import os
 import random
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -275,3 +276,97 @@ def test_tool_says_when_the_browser_does_not_start(tmp_path):
                           capture_output=True, text=True, timeout=600)
     assert proc.returncode == 2
     assert "could not start the browser" in proc.stderr and "2 attempts" in proc.stderr, proc.stderr
+
+
+# The browser retries (V3's surviving check.mjs mutants) -----------------------------
+
+def _real_browser() -> str | None:
+    cands = [os.environ.get("MERMAID_CHECK_BROWSER"), "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+             "/Applications/Chromium.app/Contents/MacOS/Chromium", "/usr/bin/google-chrome",
+             "/usr/bin/google-chrome-stable", "/usr/bin/chromium", "/usr/bin/chromium-browser"]
+    return next((c for c in cands if c and os.access(c, os.X_OK)), None)
+
+
+_RETRY_READY = _tool_ready() is not None and _real_browser() is not None and os.name == "posix"
+
+
+def _fake_browser(tmp_path: Path, body: str) -> Path:
+    """A browser stand-in: a shell script that counts its starts in tmp_path/starts, then runs body ($REAL is
+    the real browser)."""
+    fake = tmp_path / "chrome"
+    fake.write_text(f'#!/bin/sh\nREAL="{_real_browser()}"\necho x >> "{tmp_path}/starts"\n{body}\n', encoding="utf-8")
+    fake.chmod(0o755)
+    return fake
+
+
+def _starts(tmp_path: Path) -> int:
+    return len((tmp_path / "starts").read_text().splitlines())
+
+
+def _blocks(tmp_path: Path, n: int) -> Path:
+    src = tmp_path / "in.jsonl"
+    src.write_text("".join(json.dumps({"id": i, "text": f"flowchart TB\n  a{i}[甲] --> b{i}[乙]"}) + "\n"
+                           for i in range(n)), encoding="utf-8")
+    return src
+
+
+def _kill_after_first_result(tmp_path: Path, fake: Path, n: int, before_kill=lambda: None):
+    """Run the tool on n blocks one at a time; when the first result is written, kill the browser."""
+    import signal
+    import time
+    node, modules = _tool_ready()
+    out = tmp_path / "out.jsonl"
+    proc = subprocess.Popen([node, str(TOOL), "--modules", str(modules), "--browser", str(fake), "--batch", "1",
+                             str(_blocks(tmp_path, n)), str(out)], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                            text=True)
+    deadline = time.time() + 300
+    while not (out.exists() and out.read_text(encoding="utf-8").count("\n") >= 1):
+        assert proc.poll() is None and time.time() < deadline, proc.stderr.read() if proc.poll() is not None else ""
+        time.sleep(0.05)
+    before_kill()
+    os.kill(int((tmp_path / "pid").read_text()), signal.SIGKILL)
+    _, err = proc.communicate(timeout=600)
+    return proc.returncode, err, out.read_text(encoding="utf-8").splitlines()
+
+
+@pytest.mark.skipif(not _RETRY_READY, reason="tools/mermaid_check dependencies or a browser not installed")
+def test_tool_starts_the_browser_a_second_time(tmp_path):
+    node, modules = _tool_ready()
+    fake = _fake_browser(tmp_path, '[ "$(wc -l < "%s/starts" | tr -d " ")" -le 1 ] && exit 1\nexec "$REAL" "$@"' % tmp_path)
+    out = tmp_path / "out.jsonl"
+    proc = subprocess.run([node, str(TOOL), "--modules", str(modules), "--browser", str(fake),
+                           str(_blocks(tmp_path, 2)), str(out)], capture_output=True, text=True, timeout=600)
+    assert proc.returncode == 0, proc.stderr
+    assert _starts(tmp_path) == 2 and len(out.read_text(encoding="utf-8").splitlines()) == 2
+
+
+@pytest.mark.skipif(not _RETRY_READY, reason="tools/mermaid_check dependencies or a browser not installed")
+def test_tool_waits_for_a_slow_browser(tmp_path):
+    """A browser that takes 32 s to start is still used (the launch timeout is 120 s, not Puppeteer's 30 s)."""
+    node, modules = _tool_ready()
+    fake = _fake_browser(tmp_path, 'sleep 32\nexec "$REAL" "$@"')
+    out = tmp_path / "out.jsonl"
+    proc = subprocess.run([node, str(TOOL), "--modules", str(modules), "--browser", str(fake),
+                           str(_blocks(tmp_path, 1)), str(out)], capture_output=True, text=True, timeout=600)
+    assert proc.returncode == 0, proc.stderr
+    assert _starts(tmp_path) == 1
+
+
+@pytest.mark.skipif(not _RETRY_READY, reason="tools/mermaid_check dependencies or a browser not installed")
+def test_tool_replaces_a_browser_that_dies(tmp_path):
+    fake = _fake_browser(tmp_path, 'echo $$ > "%s/pid"\nexec "$REAL" "$@"' % tmp_path)
+    code, err, lines = _kill_after_first_result(tmp_path, fake, 300)
+    assert code == 0, err
+    assert len(lines) == 300 and all(json.loads(x)["ok"] for x in lines)
+    assert _starts(tmp_path) == 2
+
+
+@pytest.mark.skipif(not _RETRY_READY, reason="tools/mermaid_check dependencies or a browser not installed")
+def test_tool_says_how_far_it_got_when_the_browser_cannot_be_replaced(tmp_path):
+    fake = _fake_browser(tmp_path, '[ -e "%s/dead" ] && exit 1\necho $$ > "%s/pid"\nexec "$REAL" "$@"'
+                         % (tmp_path, tmp_path))
+    code, err, lines = _kill_after_first_result(tmp_path, fake, 300, lambda: (tmp_path / "dead").touch())
+    assert code == 2
+    m = re.search(r"results written for (\d+) of 300 blocks", err)
+    assert m and int(m.group(1)) == len(lines) and 1 <= len(lines) < 300, err
+    assert "the browser stopped responding" in err and "could not start the browser" in err, err

@@ -8,7 +8,8 @@ Used by:
 
 - `tests/unit/test_diagrams_mermaid.py`: the V9 regression corpus (every emitted diagram parses, renders and keeps its label text);
 - `python -m secondbrain.diagrams audit-extract` writes the blocks this tool checks, and `audit-tier` reads its results (parse result, structure, direction, size) to tier existing vault diagrams;
-- after `prune`: confirming that changed diagrams still parse;
+- `python -m secondbrain.diagrams audit-repair --checker check.mjs`: renders the mechanical repairs of old flowcharts that failed to parse, so only repairs that render are used;
+- `prune --checker check.mjs` and `writeback --checker check.mjs`: render the old diagrams they turn TB or repair, as they will be written, and mark those still wider than 700 px;
 - `python -m secondbrain.diagrams apply --checker check.mjs`: the layout gate on new diagrams (width over 700 px, overlapping edge labels).
 
 ## Install

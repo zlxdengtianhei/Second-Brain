@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import shutil
 from pathlib import Path
 
@@ -12,6 +13,7 @@ from secondbrain.diagrams import audit, prune, rejudge
 from secondbrain.diagrams.__main__ import main
 
 VAULT = Path(__file__).resolve().parents[1] / "fixtures" / "diagrams" / "vault"
+TOOL = Path(__file__).resolve().parents[2] / "tools" / "mermaid_check" / "check.mjs"
 TCP = "10_Knowledge/networking/TCP 三次握手.md"
 BUBBLE = "10_Knowledge/algorithms/冒泡排序.md"
 DRINKS = "10_Knowledge/beverages/茶与咖啡的提神方式.md"
@@ -292,7 +294,7 @@ def test_cli_holdout_list_with_old_audit(tmp_path, capsys):
     main(["packets", str(run / "pool.jsonl"), str(run / "draw")])
     draw_packet = json.loads((run / "draw" / "packet-001.json").read_text(encoding="utf-8"))
     assert draw_packet["input"]["cards"][0]["old_diagram"] == "renders"
-    assert "old_mermaid" not in draw_packet["input"]["cards"][0]
+    assert draw_packet["input"]["cards"][0]["old_mermaid"] == pool[0]["old_mermaid"]  # what a redraw would copy
     main(["old-audit-packets", str(run / "pool.jsonl"), str(run / "old")])
     assert json.loads(capsys.readouterr().out.strip().splitlines()[-1])["audited"] == 1
     old_packet = json.loads((run / "old" / "old-audit-001.json").read_text(encoding="utf-8"))
@@ -393,3 +395,135 @@ def test_pool_carries_the_old_diagrams_direction_width_and_graph():
     [row] = rejudge.select_pool(tiers)
     assert (row["old_type"], row["old_direction"], row["old_width"], row["old_graph"]) == (
         "flowchart-v2", "LR", 900, OLD_EVOL)
+
+
+def test_a_pool_without_old_graphs_is_refused(tmp_path, capsys):
+    """V3's X4: a tiers.json from before the same-structure guard has no graphs; write-back must not run on it."""
+    old = {r: {**t, "type": "flowchart-v2"} for r, t in TIERS.items()}         # rendering flowcharts, no graph
+    pool = rejudge.select_pool(old)
+    draws = [{"ref": "a.md", "status": "draw", "mermaid": NEW_EVOL}]
+    with pytest.raises(ValueError, match="no old_graph .*rerun audit-tier"):
+        rejudge.plan(pool, draws)
+    with pytest.raises(ValueError, match="no old_graph"):
+        rejudge.audit_candidates(pool, draws)                                # the after-draw audit packets too
+    graphs = {r: {**t, "graph": OLD_EVOL} for r, t in old.items()}
+    assert rejudge.plan(rejudge.select_pool(graphs), draws)                  # the same pool with graphs runs
+    broken = rejudge.select_pool({"b.md": {**TIERS["b.md"]}})                 # a broken old diagram needs none
+    assert rejudge.plan(broken, [{"ref": "b.md", "status": "skip", "reason": "x"}])
+
+    shutil.copytree(VAULT, tmp_path / "v")
+    out = tmp_path / "audit"
+    main(["audit-extract", str(tmp_path / "v"), str(out)])
+    sha = hashlib.sha256((tmp_path / "v" / TCP).read_bytes()).hexdigest()
+    (out / "tiers.json").write_text(json.dumps({"cards": {TCP: {
+        "tier": "review", "why": "no_gain", "kind": "mechanism", "n_props": 3, "sha256": sha, "ok": True,
+        "type": "flowchart-v2", "direction": "TB", "width": 300}}}), encoding="utf-8")
+    outcomes = tmp_path / "outcomes.jsonl"
+    outcomes.write_text(json.dumps({"ref": TCP, "status": "draw", "mermaid": NEW}) + "\n", encoding="utf-8")
+    capsys.readouterr()
+    with pytest.raises(SystemExit, match="no old_graph"):
+        main(["writeback", str(tmp_path / "v"), str(out), str(outcomes), "--write"])
+    assert not (out / "writeback_manifest.jsonl").exists()
+
+
+def _wide_lr(tmp_path) -> tuple[Path, dict]:
+    """The TCP card with an LR diagram of five long nodes after one: still wide once turned TB."""
+    shutil.copytree(VAULT, tmp_path / "v")
+    path = tmp_path / "v" / TCP
+    fan = "flowchart LR\n" + "".join(f"  a[起] --> b{i}[{'甲乙丙丁戊己庚辛'[i:] + '甲乙丙丁戊己庚辛'[:i]}]\n" for i in range(5))
+    text = path.read_text(encoding="utf-8")
+    old = text.split("```mermaid\n")[1].split("```")[0]
+    path.write_text(text.replace(old, fan), encoding="utf-8")
+    sha = hashlib.sha256(path.read_bytes()).hexdigest()
+    return path, {"ref": TCP, "pool_reason": "review", "tier_why": "no_gain", "n_props": 3, "has_essence": True,
+                  "old_parses": True, "sha256": sha, "old_direction": "LR", "old_width": 900, "old_graph": None}
+
+
+def test_a_kept_diagram_still_too_wide_after_turning_says_so(tmp_path):
+    """V3's X7: the rule name shows a kept old diagram that is still wider than 700 px once turned TB."""
+    path, row = _wide_lr(tmp_path)
+    skip = [{"ref": TCP, "status": "skip", "reason": "x"}]
+    [act] = rejudge.plan([row], skip)
+    assert (act["action"], act["rule"]) == ("direction_tb", "skip:old_parses+tb")
+    [src] = rejudge.kept_sources(tmp_path / "v", [act])
+    assert src["id"] == TCP and src["text"].startswith("flowchart TB\n") and "b4[" in src["text"]
+    wide = rejudge.mark_still_wide([act], {TCP: {"ok": True, "type": "flowchart-v2", "width": 741}})
+    assert wide[0]["rule"] == "skip:old_parses+tb+wide" and wide[0]["action"] == "direction_tb"
+    assert rejudge.mark_still_wide([act], {TCP: {"ok": True, "type": "flowchart-v2", "width": 700}}) == [act]
+    assert rejudge.mark_still_wide([act], {}) == [act]                      # not rendered: unchanged
+    path.write_text(path.read_text(encoding="utf-8") + "\n", encoding="utf-8")
+    assert rejudge.kept_sources(tmp_path / "v", [act]) == []               # changed since the audit: not rendered
+
+
+def _checker():
+    node = shutil.which("node")
+    modules = Path(os.environ.get("MERMAID_CHECK_MODULES") or TOOL.parent)
+    return (node, modules) if node and (modules / "node_modules" / "mermaid").is_dir() else None
+
+
+@pytest.mark.skipif(_checker() is None, reason="tools/mermaid_check dependencies not installed")
+def test_writeback_checker_marks_kept_diagrams_still_too_wide(tmp_path, capsys):
+    _, modules = _checker()
+    path, row = _wide_lr(tmp_path)
+    out = tmp_path / "audit"
+    main(["audit-extract", str(tmp_path / "v"), str(out)])
+    (out / "tiers.json").write_text(json.dumps({"cards": {TCP: {
+        "tier": "review", "why": "no_gain", "kind": "mechanism", "n_props": 3, "sha256": row["sha256"], "ok": True,
+        "type": "flowchart-v2", "direction": "LR", "width": 900, "graph": {"labels": [], "edges": []}}}}),
+        encoding="utf-8")
+    outcomes = tmp_path / "outcomes.jsonl"
+    outcomes.write_text(json.dumps({"ref": TCP, "status": "skip", "reason": "x"}) + "\n", encoding="utf-8")
+    capsys.readouterr()
+    main(["writeback", str(tmp_path / "v"), str(out), str(outcomes), "--checker", str(TOOL),
+          "--checker-modules", str(modules)])
+    plan = json.loads(capsys.readouterr().out)
+    assert plan["by_pool_reason"] == {"review": {"skip:old_parses+tb+wide→direction_tb": 1}}
+    [kept] = [json.loads(x) for x in (out / "kept_checks.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert kept["width"] > 700 and kept["direction"] == "TB"
+
+
+def test_the_redraw_guard_needs_both_the_words_and_the_degrees():
+    """V3's surviving mutants: the word threshold of the default policy, and the degree comparison."""
+    draws = [{"ref": "a.md", "status": "draw", "mermaid": NEW_EVOL}]
+
+    def action(graph):
+        pool = rejudge.select_pool({"a.md": {**TIERS["a.md"], "type": "flowchart-v2", "graph": graph}})
+        return rejudge.plan(pool, draws)[0]["action"]
+
+    assert action(OLD_EVOL) == "keep_old"                                    # same shape, same words: a redraw
+    assert action({**OLD_EVOL, "labels": ["请求", "缓存", "数据库", "响应"]}) == "replace"  # same shape, other words
+    fan = {**OLD_EVOL, "edges": [[0, 1], [0, 2], [0, 3], [1, 2]]}            # 4 nodes, 4 edges, other degrees
+    assert action(fan) == "replace"
+
+
+def test_kept_wide_diagrams_turn_from_701_px_and_from_rl():
+    skip = [{"ref": "a.md", "status": "skip", "reason": "x"}]
+
+    def rule(width, direction="LR"):
+        pool = rejudge.select_pool({"a.md": {**TIERS["a.md"], "type": "flowchart-v2", "graph": OLD_EVOL,
+                                             "direction": direction, "width": width}})
+        a = rejudge.plan(pool, skip)[0]
+        return a["action"], a["rule"]
+
+    assert rule(700) == ("keep_old", "skip:old_parses")
+    assert rule(701) == ("direction_tb", "skip:old_parses+tb")
+    assert rule(744) == ("direction_tb", "skip:old_parses+tb")               # J3's id 14
+    assert rule(850, "RL") == ("direction_tb", "skip:old_parses+tb")
+    assert rule(850, "TB") == ("keep_old", "skip:old_parses+wide")
+
+
+@pytest.mark.skipif(_checker() is None, reason="tools/mermaid_check dependencies not installed")
+def test_prune_checker_names_kept_diagrams_still_too_wide(tmp_path, capsys):
+    _, modules = _checker()
+    path, row = _wide_lr(tmp_path)
+    out = tmp_path / "audit"
+    out.mkdir()
+    (out / "tiers.json").write_text(json.dumps({"cards": {TCP: {
+        "tier": "keep", "why": "branch", "kind": "mechanism", "n_props": 3, "sha256": row["sha256"], "ok": True,
+        "type": "flowchart-v2", "direction": "LR", "width": 900}}}), encoding="utf-8")
+    capsys.readouterr()
+    main(["prune", str(tmp_path / "v"), str(out), "--checker", str(TOOL), "--checker-modules", str(modules)])
+    summary = json.loads(capsys.readouterr().out)
+    assert (summary["actions"], summary["still_wide"]) == ({"direction_tb": 1}, 1)
+    [planned] = [json.loads(x) for x in (out / "prune_plan.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert planned["why"].startswith("width 900; still ") and planned["why"].endswith(" px wide")

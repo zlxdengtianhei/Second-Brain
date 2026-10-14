@@ -589,8 +589,10 @@ def test_v5_back_edge_looks_only_at_the_text_the_diagram_cites():
     card = _loop_card("误差计算要重复到足够小为止。")
     assert "V5" not in codes(_loop_flow(cite_p2=False), card, FULL)
     errors = [str(e) for e in validate(_loop_flow(cite_p2=True), card, FULL).errors]
-    assert len(errors) == 1 and errors[0].startswith("V5 P2, which the diagram cites, says the work repeats")
+    assert len(errors) == 1 and errors[0].startswith("V5 P2, which the diagram cites, may say the work repeats")
     assert "«误差计算要重复到足够小为止。»" in errors[0]  # the message quotes the cited text it asks about
+    # it never pushes a loop onto text that does not state one: the other way out is to cite differently or skip
+    assert "If it does not, cite other text or skip; never add a loop the card does not state" in errors[0]
     looped = _loop_flow(cite_p2=True)
     looped["edges"].append({"from": "f", "to": "a"})
     assert codes(looped, card, FULL) == []
@@ -610,6 +612,14 @@ def test_v5_back_edge_is_a_flow_rule():
     "同一目标已有发现进行时不会重复发起查询。", "避免两路检索返回同一文档造成重复。", "丢弃重复的工具输出与噪声。",
     "去除重复项后再排序。", "推理层应做循环检测。", "循环队列用取模回绕下标。", "高危操作要 human-in-the-loop 确认。",
     "ARQ is Automatic Repeat reQuest.", "The client never repeats the query.", "先判断是否重复再写入。",
+    "Γ 函数满足递推式 Γ(r+1)=rΓ(r)。", "服务器主动推送，客户端不必轮询。",
+    # prevention, failure and names (V3's X1 list), then duplicates and trends seen in vault samples
+    "停止移动时清闩，避免每帧重复 play。", "按钮置灰，以免重复提交。", "条件写错会导致死循环。", "生成时施加重复惩罚。",
+    "设最大步数，防止无限循环。", "等待响应直到超时。", "检测到 Agent 循环后改换工具，而不是继续同一循环。",
+    "直接透传，避免外层 TLS 与内层 HTTPS 的重复处理。", "TCP 保证数据无丢失、失序和重复。", "按 prompt 统计重复率。",
+    "误差在反向传播中不断衰减。", "开源项目持续迭代。", "评估后续迭代难度。", "表中的重复记录要合并。",
+    "The agent can get stuck in an infinite loop.", "Cache results to avoid repeating the query.",
+    "死循环会一直占用 CPU。", "常见失败之一是无限循环。",
 ])
 def test_v5_negations_duplicates_and_names_do_not_ask_for_a_loop(text):
     assert says_repeat(_loop_card(text)) is None
@@ -618,7 +628,11 @@ def test_v5_negations_duplicates_and_names_do_not_ask_for_a_loop(text):
 
 @pytest.mark.parametrize("text, word", [
     ("误差计算要重复到足够小为止。", "重复"), ("逐位相乘并处理进位。", "逐位"), ("每一轮选一个最近的点。", "每一轮"),
-    ("训练迭代直到收敛。", "迭代"), ("Repeat the update until it converges.", "Repeat"), ("无限循环地读取输入。", "循环"),
+    ("训练迭代直到收敛。", "迭代"), ("Repeat the update until it converges.", "Repeat"), ("循环读取输入，读完为止。", "循环"),
+    # added after set D, from vault contexts
+    ("距离信息在节点间不断传递。", "不断"), ("反复迭代直至集合不再增大。", "反复"), ("查询直至就绪。", "直至"),
+    ("按时间步递推隐状态。", "递推"), ("客户端轮询任务结果。", "轮询"), ("电压在两个阈值间往复变化。", "往复"),
+    ("以行块和列块为循环层级，逐块累加输出。", "循环层级"), ("避免越界；然后重复上一步。", "重复"),
 ])
 def test_v5_loop_words(text, word):
     ref, quote = says_repeat(_loop_card(text))

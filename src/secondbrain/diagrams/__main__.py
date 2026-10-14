@@ -4,13 +4,15 @@
     python -m secondbrain.diagrams packets CARDS.jsonl OUT_DIR [--batch 10] [--skip-domain D ...]
     python -m secondbrain.diagrams apply CARDS.jsonl ANSWER.json ... --out OUT_DIR [--checker CHECK.mjs]
     python -m secondbrain.diagrams audit-extract VAULT OUT_DIR [--language en|zh] [--knowledge-dir DIR]
+    python -m secondbrain.diagrams audit-repair OUT_DIR --checker CHECK.mjs [--checker-modules DIR]
     python -m secondbrain.diagrams audit-tier OUT_DIR [--delete-domain D ...]
-    python -m secondbrain.diagrams prune VAULT OUT_DIR [--language en|zh] [--write]
+    python -m secondbrain.diagrams prune VAULT OUT_DIR [--language en|zh] [--checker CHECK.mjs] [--write]
     python -m secondbrain.diagrams pool OUT_DIR [--refs REFS.txt] [--out POOL.jsonl]
     python -m secondbrain.diagrams old-audit-packets POOL.jsonl OUT_DIR [--outcomes OUTCOMES.jsonl ...]
     python -m secondbrain.diagrams old-audit-apply ANSWER.json ... --out OUT_DIR
     python -m secondbrain.diagrams writeback VAULT OUT_DIR OUTCOMES.jsonl ... [--old-audit FILE ...]
-        [--refs REFS.txt] [--delete-review-on-skip remove|keep] [--remove-domain D ...] [--language en|zh] [--write]
+        [--refs REFS.txt] [--delete-review-on-skip remove|keep] [--remove-domain D ...] [--language en|zh]
+        [--checker CHECK.mjs] [--write]
 
 CARDS.jsonl holds one card per line: ref, title, kind, domain, essence,
 propositions (list), related_titles. audit-extract writes this format, so a
@@ -24,6 +26,18 @@ config file, else the headings the cards use. pool
 reads cards.jsonl, so it follows the language audit-extract used.
 audit-extract reads the cards under --knowledge-dir, else [layout] knowledge
 of the config file, else 10_Knowledge.
+
+audit-repair (after tools/mermaid_check has written checks.jsonl) rewrites
+the old flowcharts that fail to parse (quoted labels, keyword ids renamed,
+one statement per line), renders the rewrites and writes repairs.jsonl;
+audit-tier then treats a repaired diagram as one that renders, and prune and
+writeback write the repaired source where the diagram stays.
+
+writeback refuses to run when the rendering old flowcharts in the pool have
+no graph (a tiers.json from before the redraw guard): rerun audit-tier. With
+--checker, prune and writeback render the old diagrams they turn TB or
+repair, as they will be written; writeback adds +wide to the rule of those
+still wider than 700 px, prune names them in 'why' and counts them.
 """
 from __future__ import annotations
 
@@ -37,7 +51,7 @@ import dataclasses
 import shutil
 import subprocess
 
-from . import audit, oldcheck, prune, rejudge
+from . import audit, oldcheck, prune, rejudge, repair
 from .ir import IR_JSON_SCHEMA, Card
 from .pipeline import Policy, build_packet, pregate, process, read_results, render_feedback
 from .validate import DEFAULT_LIMITS
@@ -147,7 +161,10 @@ def cmd_audit_packets(a) -> dict:
     """Old-diagram audit packets for pool cards whose old diagram would stay."""
     rows = _jsonl(a.pool)
     outcomes = [o for path in a.outcomes for o in audit.read_jsonl(path)] if a.outcomes else None
-    cands = rejudge.audit_candidates(rows, outcomes, _writeback_policy(a))
+    try:
+        cands = rejudge.audit_candidates(rows, outcomes, _writeback_policy(a))
+    except ValueError as e:
+        raise SystemExit(str(e))
     a.out.mkdir(parents=True, exist_ok=True)
     n = 0
     for i in range(0, len(cands), a.batch):
@@ -195,22 +212,51 @@ def cmd_audit_extract(a) -> dict:
     return audit.extract(a.vault, a.out, _card_format(a))
 
 
+def cmd_audit_repair(a) -> dict:
+    """Repair the old diagrams that failed to parse, render the repairs, write repairs.jsonl."""
+    checks = {c["id"]: c for c in audit.read_jsonl(a.dir / "checks.jsonl")}
+    broken = [b for b in audit.read_jsonl(a.dir / "blocks.jsonl") if not checks.get(b["id"], {}).get("ok")]
+    fixed = [(b["id"], repair.repair(b["text"])) for b in broken]
+    tried = [(i, r) for i, r in fixed if r is not None]
+    a.out = a.dir
+    results = _run_checker(a, [{"id": i, "text": r.text} for i, r in tried], "repair") if tried else {}
+    rows = [{"id": i, "text": r.text, "fixes": list(r.fixes), "check": results.get(i, {})} for i, r in tried]
+    _write_jsonl(a.dir / "repairs.jsonl", rows)
+    renders = sum(1 for x in rows if x["check"].get("ok") and not x["check"].get("render_error"))
+    return {"broken": len(broken), "rewritten": len(tried), "renders": renders, "unreadable": len(broken) - len(tried)}
+
+
 def cmd_audit_tier(a) -> dict:
+    repairs = a.dir / "repairs.jsonl"
     report = audit.tier(audit.read_jsonl(a.dir / "cards.jsonl"), audit.read_jsonl(a.dir / "checks.jsonl"),
-                        audit.TierRules(delete_domains=tuple(a.delete_domain)))
+                        audit.TierRules(delete_domains=tuple(a.delete_domain)),
+                        audit.read_jsonl(repairs) if repairs.is_file() else ())
     (a.dir / "tiers.json").write_text(json.dumps(report.to_dict(), ensure_ascii=False, indent=0), encoding="utf-8")
-    return {"counts": dict(report.counts), "why": {t: dict(c) for t, c in report.why.items()}}
+    return {"counts": dict(report.counts), "why": {t: dict(c) for t, c in report.why.items()},
+            **({"repaired": report.repaired} if report.repaired else {})}
 
 
 def cmd_prune(a) -> dict:
     tiers = json.loads((a.dir / "tiers.json").read_text(encoding="utf-8"))["cards"]
     actions = prune.plan(tiers, prune.PrunePolicy(width_limit=a.width_limit))
-    rows = prune.apply(a.vault, actions, write=a.write, fmt=_card_format(a, [x["ref"] for x in actions]))
+    fmt = _card_format(a, [x["ref"] for x in actions])
+    still_wide = {}
+    if a.checker:  # render the diagrams turned TB or repaired as they will be written
+        a.out = a.dir
+        kept = rejudge.kept_sources(a.vault, actions, fmt)
+        checks = _run_checker(a, kept, "kept") if kept else {}
+        still_wide = {r: c["width"] for r, c in checks.items() if c.get("ok") and (c.get("width") or 0) > a.width_limit}
+    rows = prune.apply(a.vault, actions, write=a.write, fmt=fmt)
+    for r in rows:
+        if r["ref"] in still_wide:
+            r["why"] += f"; still {still_wide[r['ref']]} px wide"
     _write_jsonl(a.dir / ("prune_manifest.jsonl" if a.write else "prune_plan.jsonl"), rows)
     summary: dict = {"actions": dict(Counter(r["action"] for r in rows)),
                      "status": dict(Counter(r["status"] for r in rows)),
                      "lines_removed": sum(r.get("lines_removed", 0) for r in rows),
                      "lines_added": sum(r.get("lines_added", 0) for r in rows)}
+    if a.checker:
+        summary["still_wide"] = len(still_wide)
     return summary
 
 
@@ -227,12 +273,21 @@ def cmd_writeback(a) -> dict:
     pool, _ = _pool(a)
     outcomes = [o for path in a.outcomes for o in audit.read_jsonl(path)]
     audits = [v for path in a.old_audit for v in audit.read_jsonl(path)]
-    actions = rejudge.plan(pool, outcomes, _writeback_policy(a), audits)
+    try:
+        actions = rejudge.plan(pool, outcomes, _writeback_policy(a), audits)
+    except ValueError as e:
+        raise SystemExit(str(e))
     touched = [x["ref"] for x in actions if x["action"] in rejudge.WRITES]
-    rows = rejudge.apply(a.vault, actions, write=a.write, fmt=_card_format(a, touched))
+    fmt = _card_format(a, touched)
+    if a.checker:  # render the kept old diagrams as they will be written; +wide when still too wide
+        a.out = a.dir
+        kept = rejudge.kept_sources(a.vault, actions, fmt)
+        actions = rejudge.mark_still_wide(actions, _run_checker(a, kept, "kept") if kept else {},
+                                          _writeback_policy(a))
+    rows = rejudge.apply(a.vault, actions, write=a.write, fmt=fmt)
     _write_jsonl(a.dir / ("writeback_manifest.jsonl" if a.write else "writeback_plan.jsonl"), rows)
     _write_jsonl(a.dir / "writeback_mermaid.jsonl",
-                 [{"id": x["ref"], "text": x["mermaid"]} for x in actions if x["action"] == "replace"])
+                 [{"id": x["ref"], "text": x["mermaid"]} for x in actions if x["action"] in ("replace", "repair_old")])
     return {"actions": dict(Counter(r["action"] for r in rows)), "status": dict(Counter(r["status"] for r in rows)),
             "by_pool_reason": rejudge.summary(actions)}
 
@@ -263,13 +318,20 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("--knowledge-dir", help="card folder in the vault (default: [layout] knowledge of the "
                                            f"config file, else {audit.DEFAULT_FORMAT.knowledge_dir})")
     s.add_argument("--language", **lang)
-    s = sub.add_parser("audit-tier", help="cards.jsonl + checks.jsonl -> tiers.json")
+    s = sub.add_parser("audit-repair", help="checks.jsonl -> repairs.jsonl: broken old flowcharts rewritten and rendered")
+    s.add_argument("dir", type=Path)
+    s.add_argument("--checker", type=Path, required=True, help="tools/mermaid_check/check.mjs")
+    s.add_argument("--checker-modules", type=Path, help="directory whose node_modules the checker uses")
+    s = sub.add_parser("audit-tier", help="cards.jsonl + checks.jsonl (+ repairs.jsonl) -> tiers.json")
     s.add_argument("dir", type=Path)
     s.add_argument("--delete-domain", action="append", default=[])
-    s = sub.add_parser("prune", help="tiers.json -> delete restating diagrams, wide keepers to TB")
+    s = sub.add_parser("prune", help="tiers.json -> delete restating diagrams, wide keepers to TB, repaired keepers written")
     s.add_argument("vault", type=Path)
     s.add_argument("dir", type=Path)
     s.add_argument("--width-limit", type=int, default=700)
+    s.add_argument("--checker", type=Path, help="tools/mermaid_check/check.mjs: render the diagrams turned TB or "
+                                                "repaired; those still too wide are counted and named in 'why'")
+    s.add_argument("--checker-modules", type=Path, help="directory whose node_modules the checker uses")
     s.add_argument("--language", **lang)
     s.add_argument("--write", action="store_true", help="write the changes (default: plan only)")
     s = sub.add_parser("pool", help="tiers.json + cards.jsonl -> pool.jsonl, the cards to judge again")
@@ -301,13 +363,16 @@ def main(argv: list[str] | None = None) -> int:
                    help="also remove old diagrams on skip in this domain (cards the audit tiered "
                         "'domain' are removed anyway)")
     s.add_argument("--language", **lang)
+    s.add_argument("--checker", type=Path, help="tools/mermaid_check/check.mjs: render the old diagrams turned TB "
+                                                "or repaired, and mark those still too wide +wide")
+    s.add_argument("--checker-modules", type=Path, help="directory whose node_modules the checker uses")
     s.add_argument("--write", action="store_true", help="write the changes (default: plan only)")
     a = p.parse_args(argv)
     if a.cmd == "schema":
         print(json.dumps(IR_JSON_SCHEMA, ensure_ascii=False, indent=2))
         return 0
     handler = {"packets": cmd_packets, "apply": cmd_apply, "audit-extract": cmd_audit_extract,
-               "audit-tier": cmd_audit_tier, "prune": cmd_prune, "pool": cmd_pool,
+               "audit-repair": cmd_audit_repair, "audit-tier": cmd_audit_tier, "prune": cmd_prune, "pool": cmd_pool,
                "old-audit-packets": cmd_audit_packets, "old-audit-apply": cmd_audit_apply,
                "writeback": cmd_writeback}[a.cmd]
     print(json.dumps(handler(a), ensure_ascii=False))

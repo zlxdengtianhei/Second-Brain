@@ -82,7 +82,28 @@ MEASURED = {
                            {"key": "d", "label": "bcdefghijklmnopqrstuvwxyzabcdefghijklmno"}, {"key": "m", "label": "m"}],
                           [{"from": "a", "to": "b"}, {"from": "a", "to": "d"}, {"from": "b", "to": "m"},
                            {"from": "d", "to": "m"}]), 839, 40),
-    "row2_8_group": (row(2, 8, groups=True), 512, 20),
+    "row2_8_group": (row(2, 8, groups=True), 512, 5),
+    # a group framing a whole layer adds 70 px; its title widens it when wider than the members
+    "row3_7_group": (row(3, 7, groups=True), 702, 5),
+    "row1_2_group_title14": (flow([{"key": "a", "label": "起"}, {"key": "b", "label": "甲乙"}, {"key": "m", "label": "合"}],
+                                  [{"from": "a", "to": "b"}, {"from": "b", "to": "m"}],
+                                  groups=[{"label": c(14, 9), "members": ["b"]}]), 248, 5),
+    # two groups side by side: 55 px each; one inside a layer: 40 px, estimated 55 (its place in the layer is unknown)
+    "row4_4_two_groups": (flow([{"key": "a", "label": "起"}] + [{"key": f"b{i}", "label": c(4, i)} for i in range(4)]
+                               + [{"key": "m", "label": "合"}],
+                               [{"from": "a", "to": f"b{i}"} for i in range(4)] + [{"from": f"b{i}", "to": "m"} for i in range(4)],
+                               groups=[{"label": "甲", "members": ["b0", "b1"]}, {"label": "乙", "members": ["b2", "b3"]}]),
+                          772, 5),
+    "row3_4_middle_group": (flow([{"key": "a", "label": "起"}] + [{"key": f"b{i}", "label": c(4, i)} for i in range(3)]
+                                 + [{"key": "m", "label": "合"}],
+                                 [{"from": "a", "to": f"b{i}"} for i in range(3)] + [{"from": f"b{i}", "to": "m"} for i in range(3)],
+                                 groups=[{"label": "甲", "members": ["b1"]}]), 528, 15),
+    # a group outside the widest layer adds nothing to it
+    "row3_7_group_above": (flow([{"key": "s", "label": "始"}, {"key": "g", "label": c(4, 1)}]
+                                + [{"key": f"b{i}", "label": c(7, i + 2)} for i in range(3)] + [{"key": "m", "label": "合"}],
+                                [{"from": "s", "to": "g"}] + [{"from": "g", "to": f"b{i}"} for i in range(3)]
+                                + [{"from": f"b{i}", "to": "m"} for i in range(3)],
+                                groups=[{"label": "组", "members": ["g"]}]), 632, 5),
     "exits3_8": (exits(3, 8), 440, 15),
     "exits3_14": (exits(3, 14), 656, 15),
     "seq2_msg10": (seq(["A", "B"], [msg(0, 1, c(10))]), 480, 15),
@@ -106,6 +127,22 @@ def _ir(data: dict):
 def test_estimate_matches_the_measured_width(name):
     data, real, tol = MEASURED[name]
     assert abs(estimate_width(_ir(data)) - real) <= tol, (name, estimate_width(_ir(data)), real)
+
+
+def late_inputs() -> dict:
+    """Set D's late-input data path (made-up labels of the same widths and roles): inputs that join deep in the
+    diagram. Measured 587 px; with every input in the top layer the estimate was 786 and rejected it."""
+    n = lambda k, w, off, role="step": {"key": k, "label": c(w, off), "role": role}
+    e = lambda a, b, label=None: {"from": a, "to": b, **({"label": label} if label else {})}
+    return flow([n("k", 9, 0, "input"), n("pub", 5, 1, "input"), n("enc", 7, 2), n("dis", 11, 3), n("old", 3, 4, "input"),
+                 n("hmac", 5, 5), n("priv", 5, 6, "input"), n("dec", 5, 7), n("db", 5, 8, "store")],
+                [e("k", "enc"), e("pub", "enc"), e("enc", "dis"), e("dis", "hmac"), e("old", "hmac"),
+                 e("hmac", "dec", c(7, 9)), e("priv", "dec"), e("dec", "db", c(2, 10))], arrows="data")
+
+
+def test_a_source_sits_just_above_its_successor():
+    """dagre keeps edges short, so an input that joins late does not widen the top layer."""
+    assert estimate_width(_ir(late_inputs())) <= 700
 
 
 def test_inputs_are_estimated_on_the_wide_side():
@@ -137,21 +174,23 @@ def test_v14_draws_the_line_at_700_px():
 
 def _rule7() -> dict[str, int]:
     text = next(line for line in load_prompt().splitlines() if line.startswith("7. "))
-    m = re.search(r"at most 3 nodes side by side, labels at most (\d+) wide when 3 are; at most 3 labelled edges "
-                  r"side by side; sequence: names at most (\d+), notes and self-messages (\d+) wide, and with 3 "
-                  r"participants messages (\d+) wide", text)
+    m = re.search(r"at most 3 nodes side by side, labels at most (\d+) wide when 3 are \((\d+) in a group\); at most 3 "
+                  r"labelled edges side by side; sequence: names at most (\d+), notes and self-messages (\d+) wide, and "
+                  r"with 3 participants messages (\d+) wide", text)
     assert m, text
-    return dict(zip(("node3", "name", "note", "msg3"), map(int, m.groups())))
+    return dict(zip(("node3", "group3", "name", "note", "msg3"), map(int, m.groups())))
 
 
 def rule7_cases() -> dict[str, dict]:
     """The largest diagrams rule 7 allows: each must fit 700 px."""
     r, lim = _rule7(), Limits()
-    n3, name, note, m3 = r["node3"], r["name"], r["note"], r["msg3"]
+    n3, g3, name, note, m3 = r["node3"], r["group3"], r["name"], r["note"], r["msg3"]
     edge, full = int(lim.edge_label_max), int(lim.message_max)
     names2, names3 = [c(name), c(name, 3)], [c(name), c(name, 3), c(name, 6)]
     return {
         "3 nodes, passing back edge": row(3, n3, back=True),
+        "3 nodes in a group": row(3, g3, groups=True),
+        "2 nodes in a group, longest labels": row(2, lim.node_label_max, groups=True),
         "3 inputs": row(3, n3, role="input"),
         "3 decisions": row(3, min(n3, lim.decision_label_max or n3), role="decision"),
         "2 nodes, longest labels": row(2, lim.node_label_max),
@@ -188,6 +227,7 @@ def _tool():
 @pytest.mark.skipif(_tool() is None, reason="tools/mermaid_check dependencies not installed")
 def test_rule_of_thumb_and_pinned_widths_render_as_measured(tmp_path):
     cases = {f"rule7: {k}": v for k, v in rule7_cases().items()}
+    cases["rule7: late inputs"] = late_inputs()
     cases.update({k: v[0] for k, v in MEASURED.items()})
     src, out = tmp_path / "in.jsonl", tmp_path / "out.jsonl"
     src.write_text("".join(json.dumps({"id": k, "text": emit(_ir(v))}, ensure_ascii=False) + "\n"

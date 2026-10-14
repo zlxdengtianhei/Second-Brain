@@ -13,7 +13,13 @@ layers by longest path after breaking cycles; a labelled edge puts its label
 in the layer between its ends; an edge passing a layer adds a dummy of no
 width; nodes sit 50 px apart, edge labels and dummies 20 px (dagre's
 edgesep), 35 px between a node and an edge item; the widest layer sets the
-width. Unbroken Latin words do not wrap. Checked on 3,210 vault flowcharts
+width. Unbroken Latin words do not wrap. A group is a box as wide as its
+widest layer plus 40 px (dagre's border nodes), standing in every layer it
+spans; 15 px more for each end of the layer it reaches (we assume one end
+when it shares the layer); it widens to fit its title. On the 15 grouped
+diagrams models drew in the trial rounds the error is -10 to +16 px but for
+one; a group whose member hands on to a node beside it can push the layout
+much wider than this (a probe: 691 px, estimated 497). Checked on 3,210 vault flowcharts
 of 4-9 nodes: median error -2 px, 10th percentile -45 px; of 346 wider than
 700 px it misses 36 and it rejects 6 that fit; the batch path measures the
 real width instead. Sequence diagrams follow Mermaid's own margin rule
@@ -32,7 +38,9 @@ EDGE_GAP = 20     # dagre edgesep: between edge labels and edges passing a layer
 DUMMY = 0.0       # an edge passing a layer (dagre's dummy node has no width)
 MARGIN = 16       # SVG margin, both sides
 WRAP = 200        # Mermaid wraps label text at this width, between words or CJK characters
-GROUP = 55        # subgraph frame and title
+GROUP = 40        # a group's box: its widest layer plus this
+GROUP_END = 15    # more when the box reaches an end of the layer
+GROUP_TITLE = 8   # box around its title, ends included
 _PAD = {"step": 60, "actor": 60, "data": 60, "decision": 54, "store": 31, "input": 70, "output": 70,
         "start": 41, "end": 41}
 _WRAP = {"decision": 224}
@@ -55,8 +63,11 @@ def _node_px(label: str, role: str) -> float:
     return wrapped_px(label, _WRAP.get(role, WRAP)) + _PAD.get(role, 60)
 
 
-def _layers(ir: DiagramIR) -> dict[int, list[tuple[float, bool]]]:
-    """Items per layer as (width, is_node): node layers at even indexes, the layers between at odd ones.
+Item = tuple[float, "str | tuple[str, str]"]  # (width, node key) or (width, (from, to)) for an edge label or dummy
+
+
+def _layers(ir: DiagramIR) -> dict[int, list[Item]]:
+    """Items per layer: node layers at even indexes, the layers between at odd ones.
 
     An edge label sits in the middle layer of its edge; an edge passing a
     layer adds an item of no width (dagre's dummy node).
@@ -87,9 +98,16 @@ def _layers(ir: DiagramIR) -> dict[int, list[tuple[float, bool]]]:
         for v in outs[u]:
             if (u, v) not in back and u != v:
                 rank[v] = max(rank[v], rank[u] + 1)
-    layer: dict[int, list[tuple[float, bool]]] = defaultdict(list)
+    # dagre keeps edges short: a node with no incoming edge sits just above its nearest successor,
+    # not in the top row with every other source
+    has_in = {v for u in keys for v in outs[u] if (u, v) not in back and u != v}
+    for u in keys:
+        succ = [rank[v] for v in outs[u] if (u, v) not in back and u != v]
+        if u not in has_in and succ:
+            rank[u] = min(succ) - 1
+    layer: dict[int, list[Item]] = defaultdict(list)
     for n in ir.nodes:
-        layer[2 * rank[n.key]].append((_node_px(n.label, n.role), True))
+        layer[2 * rank[n.key]].append((_node_px(n.label, n.role), n.key))
     for e in ir.edges:
         if e.src == e.dst:
             continue
@@ -99,19 +117,45 @@ def _layers(ir: DiagramIR) -> dict[int, list[tuple[float, bool]]]:
         lo, hi = 2 * a, 2 * b
         mid = (lo + hi) // 2 if hi > lo else lo + 1
         if clean_text(e.label):
-            layer[mid].append((wrapped_px(e.label), False))
+            layer[mid].append((wrapped_px(e.label), (e.src, e.dst)))
         for r in range(lo + 1, hi):
             if r != mid or not clean_text(e.label):
-                layer[r].append((DUMMY, False))
+                layer[r].append((DUMMY, (e.src, e.dst)))
     return layer
 
 
-def _row_px(items: list[tuple[float, bool]]) -> float:
+def _row_px(items: list[Item]) -> float:
     """Width of one layer: dagre puts nodesep between nodes, edgesep between edge items, the mean between a pair."""
-    nodes = sum(1 for _, is_node in items if is_node)
+    nodes = sum(1 for _, key in items if isinstance(key, str))
     edges = len(items) - nodes
     seps = GAP * max(nodes - 1, 0) + EDGE_GAP * max(edges - 1, 0) + (GAP + EDGE_GAP) / 2 * (nodes > 0 < edges)
     return sum(w for w, _ in items) + seps
+
+
+def _with_groups(ir: DiagramIR, layers: dict[int, list[Item]]) -> dict[int, float]:
+    """Width of each layer with every group drawn as one box in the layers it spans (measured in Mermaid 11:
+    a group adds 40 px inside a layer, 55 at one end, 70 around a whole layer)."""
+    where = {key: i for i, items in layers.items() for _, key in items if isinstance(key, str)}
+
+    def member(g, key) -> bool:
+        return key in g.members if isinstance(key, str) else key[0] in g.members and key[1] in g.members
+
+    rows = {i: list(items) for i, items in layers.items()}
+    ends: dict[int, float] = defaultdict(float)
+    for n, g in enumerate(ir.groups):
+        spans = [where[m] for m in g.members if m in where]
+        if not spans:
+            continue
+        span = range(min(spans), max(spans) + 1)
+        box = max(_row_px([it for it in layers.get(i, []) if member(g, it[1])]) for i in span) + GROUP
+        box = max(box, text_px(g.label) + GROUP_TITLE - 2 * GROUP_END)
+        for i in span:
+            rows[i] = [it for it in rows.get(i, []) if not member(g, it[1])] + [(box, f"group {n}")]
+    for i, items in rows.items():
+        boxes = sum(1 for _, key in items if isinstance(key, str) and key.startswith("group "))
+        if boxes:
+            ends[i] = GROUP_END * (2 if len(items) == 1 else boxes)
+    return {i: _row_px(items) + ends[i] for i, items in rows.items()}
 
 
 def _sequence(ir: DiagramIR) -> float:
@@ -168,5 +212,4 @@ def estimate_width(ir: DiagramIR) -> float | None:
         return None
     if ir.form == "sequence":
         return _sequence(ir)
-    width = max(_row_px(v) for v in _layers(ir).values())
-    return width + MARGIN + (GROUP if ir.groups else 0)
+    return max(_with_groups(ir, _layers(ir)).values()) + MARGIN

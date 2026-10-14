@@ -116,6 +116,8 @@ def card_payload(card: Card) -> dict[str, Any]:
         "propositions": {f"P{i}": p for i, p in enumerate(card.propositions, 1)},
         "related_titles": list(card.related_titles),
         **({"old_diagram": card.old_diagram} if card.old_diagram else {}),
+        # the source lets the model see what it would replace, and skip a mere redraw
+        **({"old_mermaid": card.old_mermaid} if card.old_diagram == "renders" and card.old_mermaid else {}),
     }
 
 

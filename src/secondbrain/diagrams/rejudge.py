@@ -40,6 +40,11 @@ Two more after the third pilot:
   (action direction_tb, rule ...+tb); one that stays wide but cannot be
   turned is marked ...+wide (state diagrams never are: Obsidian scales them).
 
+After set D: an old diagram that only renders after audit-repair counts as
+rendering everywhere (the pool, the draw and audit packets, the guards).
+Where it stays, the repaired source is written in its place (action
+repair_old, rule ...+repaired, turned TB too when it is wide and LR).
+
 Only the diagram section changes, byte for byte. Every write is guarded by the
 file hash recorded at audit time, and nothing is written without write=True.
 """
@@ -52,9 +57,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
 
-from .audit import DEFAULT_FORMAT, CardFormat
+from .audit import DEFAULT_FORMAT, FENCE, CardFormat, sections, split_frontmatter
 from .oldcheck import REMOVE_CATEGORIES
-from .prune import PrunePolicy, _diffstat, delete_section, direction_tb
+from .prune import PrunePolicy, _diffstat, delete_section, direction_tb, replace_block
 from .staleness import read_marker
 from .text import tokens
 from .validate import strong_enough as _strong_refs
@@ -77,21 +82,23 @@ def select_pool(tiers: dict[str, dict[str, Any]], policy: PrunePolicy = PrunePol
                      "n_props": t.get("n_props", 0), "has_essence": t.get("has_essence", True),
                      "old_parses": bool(t["ok"]), "sha256": t["sha256"],
                      "old_type": t.get("type"), "old_direction": t.get("direction"), "old_width": t.get("width"),
-                     "old_graph": t.get("graph")})
+                     "old_graph": t.get("graph"), "old_repair": t.get("repair")})
     return rows
 
 
 def pool_cards(pool: list[dict[str, Any]], cards: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
     """Card records (the packets input format) for the pool, in pool order.
 
-    old_diagram ("renders" or "broken") goes to the draw packet; old_mermaid
-    is only for the old-diagram audit packet.
+    old_diagram ("renders" or "broken") and, when it renders, old_mermaid go
+    to the draw packet; old_mermaid also to the old-diagram audit packet. A
+    repaired old diagram is shown as repaired.
     """
     by_ref = {c["ref"]: c for c in cards}
     fields = ("ref", "title", "kind", "domain", "essence", "propositions", "related_titles")
     return [{**p, **{k: by_ref[p["ref"]][k] for k in fields},
              "old_diagram": "renders" if p["old_parses"] else "broken",
-             "old_mermaid": (by_ref[p["ref"]].get("blocks") or [""])[0]} for p in pool]
+             "old_mermaid": (p.get("old_repair") or {}).get("text") or (by_ref[p["ref"]].get("blocks") or [""])[0]}
+            for p in pool]
 
 
 def _section_bounds(lines: list[str], heading: str) -> tuple[int, int] | None:
@@ -214,6 +221,9 @@ def same_structure(mermaid: str, old_graph: dict[str, Any] | None, min_words: fl
     return bool(a | b) and len(a & b) / len(a | b) >= min_words
 
 
+KEPT = ("keep_old", "direction_tb", "repair_old")  # actions that leave the old diagram in the card
+
+
 def audit_candidates(pool: list[dict[str, Any]], outcomes: Iterable[dict[str, Any]] | None = None,
                      policy: WritebackPolicy = WritebackPolicy()) -> list[dict[str, Any]]:
     """Pool rows whose old diagram would stay: the cards the old-diagram audit is for.
@@ -223,9 +233,20 @@ def audit_candidates(pool: list[dict[str, Any]], outcomes: Iterable[dict[str, An
     the audit can run beside the draw step.
     """
     if outcomes is not None:
-        keep = {a["ref"] for a in plan(pool, outcomes, policy) if a["action"] in ("keep_old", "direction_tb")}
+        keep = {a["ref"] for a in plan(pool, outcomes, policy) if a["action"] in KEPT}
         return [p for p in pool if p["ref"] in keep]
     return [p for p in pool if _skip_rule(p, policy)[0] == "keep_old"]
+
+
+def _require_graphs(pool: list[dict[str, Any]]) -> None:
+    """Refuse a pool whose rendering flowcharts lack old_graph: without it the same-structure guard
+    would pass every redraw. Such a pool comes from a tiers.json older than the guard."""
+    missing = [p["ref"] for p in pool
+               if p.get("old_parses") and p.get("old_type") == "flowchart-v2" and p.get("old_graph") is None]
+    if missing:
+        raise ValueError(f"{len(missing)} pool cards with a rendering flowchart have no old_graph (first: "
+                         f"{missing[0]}); the tiers.json predates the same-structure guard: rerun audit-tier, "
+                         f"then pool")
 
 
 def plan(pool: list[dict[str, Any]], outcomes: Iterable[dict[str, Any]],
@@ -237,6 +258,7 @@ def plan(pool: list[dict[str, Any]], outcomes: Iterable[dict[str, Any]],
     before the rewrite round. audits are old-diagram audit outcomes; they only
     act on cards whose old diagram would otherwise stay.
     """
+    _require_graphs(pool)
     final: dict[str, dict[str, Any]] = {}
     for o in outcomes:
         final[o["ref"]] = o
@@ -272,7 +294,12 @@ def plan(pool: list[dict[str, Any]], outcomes: Iterable[dict[str, Any]],
                     action, rule = "direction_tb", rule + "+tb"
                 else:
                     rule += "+wide"
-            actions.append({**row, "action": action, "rule": prefix + rule, "reason": (v or o).get("reason", "")})
+            extra = {}
+            if action in ("keep_old", "direction_tb") and p.get("old_repair"):
+                extra = {"mermaid": p["old_repair"]["text"], "flip": action == "direction_tb"}
+                action, rule = "repair_old", rule + "+repaired"
+            actions.append({**row, "action": action, "rule": prefix + rule, "reason": (v or o).get("reason", ""),
+                            **extra})
     for ref in sorted(set(final) - in_pool):
         actions.append({"ref": ref, "action": "not_in_pool", "rule": "not_in_pool",
                         "status_in": final[ref].get("status")})
@@ -287,7 +314,53 @@ def summary(actions: list[dict[str, Any]]) -> dict[str, dict[str, int]]:
     return {reason: dict(sorted(c.items())) for reason, c in sorted(out.items())}
 
 
-WRITES = ("replace", "remove", "direction_tb")  # actions that change a card
+WRITES = ("replace", "remove", "direction_tb", "repair_old")  # actions that change a card
+KEPT_CHANGED = ("direction_tb", "repair_old", "repair")  # the old diagram stays, rewritten
+
+
+def _after(before: str, a: dict[str, Any], fmt: CardFormat) -> str:
+    """The card text after a write action; ValueError when the card does not have the section or block."""
+    if a["action"] == "replace":
+        return replace_section(before, a["mermaid"], fmt)
+    if a["action"] == "remove":
+        return delete_section(before, fmt.diagram)
+    if a["action"] in ("repair_old", "repair"):  # repair: prune's name for it
+        return replace_block(before, a["mermaid"], fmt.diagram, a.get("flip", False))
+    return direction_tb(before, fmt.diagram)
+
+
+def kept_sources(vault: Path, actions: list[dict[str, Any]], fmt: CardFormat = DEFAULT_FORMAT) -> list[dict[str, str]]:
+    """{"id": ref, "text": source} of each old diagram that stays changed (direction_tb, repair_old, and prune's
+    repair), as it will be written, for rendering before the write; cards that changed since the audit are left out."""
+    out = []
+    for a in actions:
+        path = Path(vault) / a["ref"]
+        if a["action"] not in KEPT_CHANGED or not path.is_file():
+            continue
+        before = path.read_bytes().decode("utf-8")
+        if hashlib.sha256(before.encode("utf-8")).hexdigest() != a["sha256"]:
+            continue
+        try:
+            after = _after(before, a, fmt)
+        except ValueError:
+            continue
+        blocks = FENCE.findall(sections(split_frontmatter(after)[1]).get(fmt.diagram, ""))
+        if blocks:
+            out.append({"id": a["ref"], "text": blocks[0]})
+    return out
+
+
+def mark_still_wide(actions: list[dict[str, Any]], checks: dict[str, dict[str, Any]],
+                    policy: WritebackPolicy = WritebackPolicy()) -> list[dict[str, Any]]:
+    """Add +wide to the rule of a kept old diagram whose new source (kept_sources) still renders too wide."""
+    out = []
+    for a in actions:
+        c = checks.get(a["ref"]) or {}
+        if a["action"] in KEPT_CHANGED and c.get("ok") and (c.get("width") or 0) > policy.width_limit \
+                and c.get("type") not in ("stateDiagram", "state") and "+wide" not in a["rule"]:
+            a = {**a, "rule": a["rule"] + "+wide"}
+        out.append(a)
+    return out
 
 
 def apply(vault: Path, actions: list[dict[str, Any]], write: bool = False,
@@ -308,12 +381,7 @@ def apply(vault: Path, actions: list[dict[str, Any]], write: bool = False,
             rows.append({**row, "status": "conflict"})
             continue
         try:
-            if a["action"] == "replace":
-                after = replace_section(before, a["mermaid"], fmt)
-            elif a["action"] == "remove":
-                after = delete_section(before, fmt.diagram)
-            else:
-                after = direction_tb(before, fmt.diagram)
+            after = _after(before, a, fmt)
         except ValueError as e:
             rows.append({**row, "status": "error", "error": str(e)})
             continue

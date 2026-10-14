@@ -5,7 +5,9 @@ Actions come from audit tiers:
   method should judge again first (by default mechanism cards with three or
   more propositions), which stay for the review pool;
 - keep tier: a flowchart wider than the reading width and laid out left to
-  right (LR or RL) gets direction TB.
+  right (LR or RL) gets direction TB;
+- keep tier, diagram that only renders after audit-repair: the repaired
+  source replaces the broken one (turned TB as well when it is wide and LR).
 
 Every write is guarded by the file hash recorded at audit time: a card edited
 since the audit is reported as conflict and left alone. Without apply=True
@@ -41,9 +43,30 @@ def plan(tiers: dict[str, dict[str, Any]], policy: PrunePolicy = PrunePolicy()) 
             if t["kind"] in policy.review_kinds and t["n_props"] >= policy.review_min_props:
                 continue
             actions.append({"ref": ref, "action": "delete_section", "why": t["why"], "sha256": t["sha256"]})
+        elif t["tier"] == "keep" and t.get("repair"):
+            wide = t.get("direction") in ("LR", "RL") and (t.get("width") or 0) > policy.width_limit
+            actions.append({"ref": ref, "action": "repair", "why": "repaired: " + ", ".join(t["repair"]["fixes"]),
+                            "sha256": t["sha256"], "mermaid": t["repair"]["text"], "flip": wide})
         elif t["tier"] == "keep" and t.get("direction") in ("LR", "RL") and (t.get("width") or 0) > policy.width_limit:
             actions.append({"ref": ref, "action": "direction_tb", "why": f"width {t['width']}", "sha256": t["sha256"]})
     return actions
+
+
+def replace_block(text: str, source: str, heading: str, flip: bool = False) -> str:
+    """Put source into the first Mermaid block of the section, keeping the fence lines and everything else."""
+    lines = text.split("\n")
+    in_section = False
+    for i, line in enumerate(lines):
+        if line.startswith("## "):
+            in_section = line[3:].strip() == heading
+            continue
+        if in_section and line.startswith("```mermaid"):
+            for j in range(i + 1, len(lines)):
+                if lines[j].startswith("```"):
+                    out = "\n".join(lines[:i + 1] + source.strip("\n").split("\n") + lines[j:])
+                    return direction_tb(out, heading) if flip else out
+            raise ValueError(f"unclosed Mermaid block in '## {heading}'")
+    raise ValueError(f"no Mermaid block in '## {heading}'")
 
 
 def delete_section(text: str, heading: str) -> str:
@@ -113,7 +136,10 @@ def apply(vault: Path, actions: list[dict[str, Any]], write: bool = False,
             rows.append({**row, "status": "conflict"})
             continue
         try:
-            after = (delete_section if a["action"] == "delete_section" else direction_tb)(before, fmt.diagram)
+            if a["action"] == "repair":
+                after = replace_block(before, a["mermaid"], fmt.diagram, a.get("flip", False))
+            else:
+                after = (delete_section if a["action"] == "delete_section" else direction_tb)(before, fmt.diagram)
         except ValueError as e:
             rows.append({**row, "status": "error", "error": str(e)})
             continue

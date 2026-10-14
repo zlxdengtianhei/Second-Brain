@@ -49,15 +49,17 @@ def _prompt_examples() -> list[tuple[Card, dict]]:
 # because missed structure diagrams were pilot 1's main recall loss (1,677).
 # The fourth round (V3's K1-K8 and the third pilot's questions) states every
 # rule the validator enforces as it enforces it, and adds one skip example; the
-# cap rose to 2,000 (2,000 o200k, 2,079 cl100k when written). New rules have to
-# replace old text.
+# cap rose to 2,000 (2,000 o200k, 2,079 cl100k when written). After set D the
+# loop words grew and the old source joined the packet (1,992 o200k, 2,073
+# cl100k). V3's X round added avoided and failed loops and the group rule of thumb (2,000 o200k, 2,086 cl100k,
+# 7,124 bytes). New rules have to replace old text.
 TOKEN_CAP = 2000
-BYTE_CAP = 7200  # dependency-free proxy for the same budget (7,118 bytes when written)
+BYTE_CAP = 7200  # dependency-free proxy for the same budget (7,099 bytes when written)
 
 
 def test_prompt_states_the_core_rules():
     for phrase in ("in its language", "Plain text, no TeX", "Start from E", "cite E", "2+ stated outcomes",
-                   "draw the back edge", "Parallel options are not a decision", "fans out to at most 3",
+                   "draw the back edge", "fans out to at most 3",
                    "to nodes whose cited text mentions it", "a final `store`", "at most 700 px",
                    "a one-character label counts that character", "`old_diagram`", "unordered checks are a list",
                    "an \"otherwise\" exit counts only if the card states", '{"from","to","text","p"}',
@@ -69,7 +71,9 @@ def test_prompt_states_the_core_rules():
                    "even when the text lists them in order", "credits it to each path", "would redraw its structure or one formula",
                    "steps whose order the card does not state", "at any length", "accumulator",
                    "Over the whole diagram", "paths that split and never meet are a list",
-                   "any `output` has incoming edges only"):
+                   "any `output` has incoming edges only",
+                   # after set D: the old source in the packet, and replace only when clearly better
+                   "comes with its source `old_mermaid`", "shows E's relation clearly better"):
         assert phrase in PROMPT, phrase
 
 

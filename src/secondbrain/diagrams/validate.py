@@ -36,20 +36,34 @@ from .width import estimate_width
 
 # Words that say the work repeats. The prompt lists exactly these (a test compares them);
 # the English ones match their inflections (repeats, looping, iteration).
-LOOP_WORDS = ("重复", "循环", "反复", "迭代", "直到", "每轮", "逐个", "逐位", "repeat", "loop", "until", "iterate")
-_LOOP_FORMS = {"每轮": "每一?轮", "repeat": r"\brepeat\w*", "loop": r"\bloop(?:s|ed|ing)?\b",
+LOOP_WORDS = ("重复", "循环", "反复", "迭代", "不断", "直到", "直至", "递推", "轮询", "往复", "每轮", "逐个", "逐位",
+              "repeat", "loop", "until", "iterate")
+_LOOP_FORMS = {"每轮": "每一?轮", "逐位": "逐位(?!置)", "repeat": r"\brepeat\w*", "loop": r"\bloop(?:s|ed|ing)?\b",
                "until": r"\buntil\b", "iterate": r"\biterat\w*"}
 _LOOP = re.compile("|".join(_LOOP_FORMS.get(w, re.escape(w)) for w in LOOP_WORDS), re.I)
-# Uses of those words that do not say this work repeats, cut out first: names of things
-# (循环队列, Automatic Repeat reQuest, human-in-the-loop), a loop as a failure or its guard
-# (陷入循环, 循环检测), negations and questions (不会重复, 避免重复, 是否重复, without
-# repeating) and duplicates (重复项, 重复的, 去重复, 造成重复).
+# Uses of those words that do not say this work repeats, cut out first:
+# - names of things and formulas (循环队列, 循环群, 双重循环, 循环检测, 递推式, Automatic Repeat reQuest,
+#   human-in-the-loop, 持续迭代, 迭代难度);
+# - a loop as a failure, or repetition that is prevented or replaced (死循环, 无限循环, 陷入循环, 检测到 Agent 循环,
+#   避免每帧重复, 以免重复提交, 防止重复入队, 而不是继续同一循环, 直到超时);
+# - negations and questions (不会重复, 是否重复, 不必轮询, without repeating);
+# - duplicates and repetition as a noun in a list (重复项, 重复的, 重复惩罚, 去重复, 造成重复, 如重复、不通顺,
+#   失序和重复。, 重复率);
+# - 不断 for a trend rather than a step (不断衰减, 不断增大).
 _NOT_LOOPS = re.compile(
-    r"循环(?:神经网络|队列|冗余|移位|[左右]移|卷积|小数|层|链表|依赖|引用|赛|检测|上限)|陷入死?循环"
-    r"|(?:不|没有?|未|无(?!限)|勿|别|避免|防止|禁止|是否)(?:会|要|必|再|需|用|能|可|应|该|必要)?(?:重复|循环|反复|迭代)"
-    r"|重复(?:的|项|值|元素|数据|记录|内容|条目|样本)|(?:去|去除|删除|丢弃|过滤|消除|剔除|造成|完全)重复"
-    r"|\brepeat\s+request|\bin[- ]the[- ]loop\b"
-    r"|\b(?:not|no|never|without|avoid\w*|don't|doesn't|won't)\s+(?:\w+\s+)?(?:repeat\w*|loop\w*|iterat\w*)",
+    r"循环(?:神经网络|队列|冗余|移位|[左右]移|卷积|小数|层(?!级)|链表|依赖|引用|赛|检测|上限|群)|[双多]重循环|嵌套循环"
+    r"|(?:持续|快速|敏捷|版本|产品)迭代|迭代(?:难度|速度|周期|版本)"
+    r"|递推(?:式|公式|关系)"
+    r"|死循环|无限?循环|(?:避免|以免|防止|禁止|免得|陷入|导致|出现|检测到|而不是|不是)[^。；;，,]{0,20}?"
+    r"(?:重复|循环|反复|迭代|轮询|递推)"
+    r"|直[到至]超时"
+    r"|(?:不|没有?|未|无(?!限)|勿|别|是否)(?:会|要|必|再|需|用|能|可|应|该|必要)?(?:重复|循环|反复|迭代|轮询|递推)"
+    r"|重复(?:的|项|值|元素|数据|记录|内容|条目|样本|信息|模板|行|惩罚|劳动|提交|入队|问题|(?=[、）)]))"
+    r"|(?:去|去除|删除|丢弃|过滤|消除|剔除|造成|完全)重复|[的、和与及或]重复(?=[。；;，,、）)]|$)|重复(?:率|度|部件)"
+    r"|不断(?:衰减|减小|减少|下降|降低|增大|增加|增长|上升|升高|提高|扩大|缩小|变化|发展|演进|演化|加深|加剧|膨胀)"
+    r"|\brepeat\s+request|\bin[- ]the[- ]loop\b|\binfinite\s+loops?\b"
+    r"|\b(?:not|no|never|without|avoid\w*|prevent\w*|detect\w*|don't|doesn't|won't)\s+(?:\w+\s+){0,2}?"
+    r"(?:repeat\w*|loop\w*|iterat\w*)",
     re.I)
 
 # Words that name the role, not the data; they do not show where an input is used.
@@ -273,8 +287,10 @@ def check(ir: DiagramIR, card: Card, limits: Limits = DEFAULT_LIMITS) -> tuple[l
     all_cited = [r for r in cited_refs(ir) if r in valid]
     repeat = says_repeat(card, all_cited) if form == "flow" and limits.require_back_edge else None
     if repeat and not shape.loop:
-        errors.append(Issue("V5", f"{repeat[0]}, which the diagram cites, says the work repeats («{repeat[1]}»); "
-                                  f"draw that back edge, from where one round ends to the step that repeats"))
+        errors.append(Issue("V5", f"{repeat[0]}, which the diagram cites, may say the work repeats («{repeat[1]}»). "
+                                  f"If it describes this work repeating, draw that back edge, from where one round "
+                                  f"ends to the step that repeats. If it does not, cite other text or skip; never add "
+                                  f"a loop the card does not state"))
 
     if form in limits.labeled_links:
         for i, e in enumerate(ir.links):

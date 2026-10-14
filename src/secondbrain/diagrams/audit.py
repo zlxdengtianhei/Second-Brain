@@ -310,31 +310,46 @@ class TierReport:
     counts: Counter = field(default_factory=Counter)
     why: dict[str, Counter] = field(default_factory=lambda: defaultdict(Counter))
     cards: dict[str, dict[str, Any]] = field(default_factory=dict)
+    repaired: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         return {"counts": dict(self.counts), "why": {t: dict(c) for t, c in self.why.items()},
-                "cards": self.cards}
+                **({"repaired": self.repaired} if self.repaired else {}), "cards": self.cards}
 
 
 def graph_of_check(check: dict[str, Any]) -> dict[str, Any]:
     """A flowchart's node labels and edges (as node positions), for comparing it with a new diagram."""
-    index = {n["id"]: i for i, n in enumerate(check["nodes"])}
-    return {"labels": [n.get("label") or "" for n in check["nodes"]],
+    nodes = check.get("nodes") or []
+    index = {n["id"]: i for i, n in enumerate(nodes)}
+    return {"labels": [n.get("label") or "" for n in nodes],
             "edges": [[index[e["from"]], index[e["to"]]] for e in check.get("edges") or []
                       if e.get("from") in index and e.get("to") in index]}
 
 
 def tier(cards: Iterable[dict[str, Any]], checks: Iterable[dict[str, Any]],
-         rules: TierRules = TierRules()) -> TierReport:
-    """Tier every card that has a diagram; checks are mermaid_check results keyed '<ref>#<j>'."""
+         rules: TierRules = TierRules(), repairs: Iterable[dict[str, Any]] = ()) -> TierReport:
+    """Tier every card that has a diagram; checks are mermaid_check results keyed '<ref>#<j>'.
+
+    repairs are audit-repair rows ({"id", "text", "fixes", "check"}). A broken
+    diagram whose repair renders is tiered by the repaired check, like any
+    diagram that renders, and its entry carries the repair ({"text",
+    "fixes"}) so the later steps can write it back where it stays.
+    """
     by_id = {c["id"]: c for c in checks}
+    fixed = {r["id"]: r for r in repairs if (r.get("check") or {}).get("ok")
+             and not (r.get("check") or {}).get("render_error")}
     report = TierReport()
     for card in cards:
         if not card["blocks"]:
             continue
-        check = by_id.get(f"{card['ref']}#0")
+        bid = f"{card['ref']}#0"
+        check = by_id.get(bid)
         if check is None:
-            raise KeyError(f"no mermaid_check result for {card['ref']}#0")
+            raise KeyError(f"no mermaid_check result for {bid}")
+        repair = None
+        if not check.get("ok") and bid in fixed:
+            repair = {"text": fixed[bid]["text"], "fixes": list(fixed[bid].get("fixes") or [])}
+            check = fixed[bid]["check"]
         t, why = tier_one(card, check, rules)
         report.counts[t] += 1
         report.why[t][why] += 1
@@ -343,7 +358,10 @@ def tier(cards: Iterable[dict[str, Any]], checks: Iterable[dict[str, Any]],
                  "sha256": card["sha256"], "ok": bool(check.get("ok"))}
         if check.get("ok"):
             entry.update({k: check.get(k) for k in ("type", "direction", "width", "height")})
-            if check.get("type") == "flowchart-v2" and check.get("nodes"):
+            if check.get("type") == "flowchart-v2":  # writeback refuses a rendering flowchart without one
                 entry["graph"] = graph_of_check(check)
+        if repair:
+            entry["repair"] = repair
+            report.repaired += 1
         report.cards[card["ref"]] = entry
     return report
