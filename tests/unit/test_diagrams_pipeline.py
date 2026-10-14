@@ -150,6 +150,10 @@ def test_render_feedback_turns_back_wide_overlapping_or_broken_diagrams():
     drawn = process(SEARCH, ir_data)
     assert render_feedback(drawn, {"ok": True, "width": 600, "label_overlaps": 0}, SEARCH, ir_data) is drawn
     assert render_feedback(drawn, None, SEARCH, ir_data) is drawn
+    # apply --checker measures against the note's 700 px, like the estimate (V3's H1)
+    assert render_feedback(drawn, {"ok": True, "width": 700, "label_overlaps": 0}, SEARCH, ir_data) is drawn
+    assert render_feedback(drawn, {"ok": True, "width": 701}, SEARCH, ir_data).errors[0].startswith(
+        "V14 renders 701 px wide, limit 700:")
     wide = render_feedback(drawn, {"ok": True, "width": 812}, SEARCH, ir_data)
     assert wide.status == "rewrite" and wide.errors[0].startswith("V14 renders 812 px")
     assert wide.rewrite["input"]["cards"][0]["previous"] == ir_data

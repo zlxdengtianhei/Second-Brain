@@ -490,6 +490,27 @@ def test_a_turn_that_makes_the_diagram_wider_is_dropped():
                                                         "status": "unchanged"}]
     acts, n = prune.settle(prune.plan(tiers), {"k.md": {"ok": True, "width": 741}}, tiers)
     assert acts[0]["action"] == "direction_tb" and acts[0]["why"].endswith("; still 741 px wide") and n == {"still_wide": 1}
+    # both limits are the note's 700 px, as in writeback (V3's H1)
+    for width, actions in ((700, []), (701, ["direction_tb"])):
+        assert [x["action"] for x in prune.plan({"k.md": {**tiers["k.md"], "width": width}})] == actions
+    assert prune.settle(prune.plan(tiers), {"k.md": {"ok": True, "width": 701}}, tiers)[1] == {"still_wide": 1}
+    assert prune.settle(prune.plan(tiers), {"k.md": {"ok": True, "width": 700}}, tiers)[1] == {}
+
+
+def test_prune_command_turns_left_to_right_diagrams_wider_than_700_px(tmp_path):
+    """V3's H1: --width-limit defaults to the note's 700 px."""
+    _, row = _wide_lr(tmp_path)
+    out = tmp_path / "audit"
+    out.mkdir()
+    planned = {}
+    for width in (700, 701):
+        (out / "tiers.json").write_text(json.dumps({"cards": {TCP: {
+            "tier": "keep", "why": "branch", "kind": "mechanism", "n_props": 3, "sha256": row["sha256"], "ok": True,
+            "type": "flowchart-v2", "direction": "LR", "width": width}}}), encoding="utf-8")
+        assert main(["prune", str(tmp_path / "v"), str(out)]) == 0
+        planned[width] = [json.loads(x)["action"] for x in
+                          (out / "prune_plan.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert planned == {700: [], 701: ["direction_tb"]}
 
 
 def _checker():
