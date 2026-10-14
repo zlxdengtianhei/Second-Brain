@@ -463,3 +463,26 @@ def test_links_to_a_merged_card_follow_it_and_a_link_to_the_card_itself_becomes_
             'flashcards': [{'q': 'Why [[Old]]?', 'a': 'a'}], 'relations': [{'type': 'x', 'target': 't', 'note': '[[Old]]'}]}
     assert source_check._retitle_card(card, mapping) == 3
     assert card['confusions'] == ['vs Kept'] and card['propositions'] == ['[[Other]] stays']
+
+
+def test_a_carried_question_the_kept_card_already_asks_word_for_word_is_skipped():
+    # V1 on 83de981: a mutant that kept such a repeat survived, as no test carried one
+    def card(slug, flashcards):
+        return {'slug': slug, 'title': slug, 'domain': 'd', 'pillar': 'p', 'topic': 't', 'essence': 'e',
+                'propositions': [f'{slug} one'], 'flashcards': flashcards, 'source_quotes': [f'{slug} quote'],
+                'relations': []}
+    asked = [{'q': 'What does x hold?', 'a': 'one'}]
+    again = [{'q': 'What does x hold ?', 'a': 'the number one'}, {'q': 'Why is y kept?', 'a': 'y'}]
+    settled = [{'chunk': 'c01', 'accepted': {'a': card('a', asked)}, 'topics': {}},
+               {'chunk': 'c02', 'accepted': {'b': card('b', again)}, 'topics': {}}]
+    frozen = source_check.frozen_input(settled, {'filename': 'f'}, relation_views={})
+    reply = {'cards': [{'slug': 'a', 'decision': 'keep', 'alone': 'a fact of its own'},
+                       {'slug': 'b', 'decision': 'same', 'with': 'a', 'reason': 'r', 'carry': {'flashcards': again}}],
+             'new_topics': []}
+    assert source_check.validate_answer(frozen, reply) is reply
+    out, report = source_check.apply(settled, frozen, reply)
+    kept = out[0]['accepted']['a']
+    assert [f['q'] for f in kept['flashcards']] == ['What does x hold?', 'Why is y kept?']
+    assert report['merged'][0]['carried'] == {'propositions': 0, 'flashcards': 1}
+    assert report['merged'][0]['repeats_skipped'] == 1
+    assert kept['_carried'] == [{'locator': 'b quote', 'propositions': [], 'flashcards': [2]}]
