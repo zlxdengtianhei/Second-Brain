@@ -87,12 +87,15 @@ def test_an_upright_flowchart_too_wide_for_the_note_is_redrawn():
     restating = _check(GROUNDED[:3], BRANCH[:2])
     for check in (keep, restating):  # whatever the other rules say
         for direction in ("TB", "TD", "BT"):
-            assert audit.tier_one(_card(), {**check, "direction": direction, "width": 701}, rules) == ("redraw", "wide")
-        assert audit.tier_one(_card(), {**check, "width": 700}, rules) != ("redraw", "wide")
+            assert audit.tier_one(_card(), {**check, "direction": direction, "width": 731}, rules) == ("redraw", "wide")
+        # up to 30 px over is left alone: J9a's six redraws of diagrams 4-20 px over gained nothing
+        assert audit.tier_one(_card(), {**check, "width": 730}, rules) != ("redraw", "wide")
+        assert audit.tier_one(_card(), {**check, "width": 717}, rules) != ("redraw", "wide")
         assert audit.tier_one(_card(), {**check, "direction": "LR", "width": 900}, rules) != ("redraw", "wide")
     assert audit.tier_one(_card(domain="english"), {**keep, "width": 900}, rules) == ("delete", "domain")
     assert audit.tier_one(_card(), {"ok": True, "type": "sequence", "width": 900}, rules) == ("keep", "sequence/state")
     assert audit.tier_one(_card(), {**keep, "width": 900}, audit.TierRules(max_width=1000)) == ("keep", "branch")
+    assert audit.tier_one(_card(), {**keep, "width": 701}, audit.TierRules(wide_tolerance=0)) == ("redraw", "wide")
 
 
 def test_shapes():

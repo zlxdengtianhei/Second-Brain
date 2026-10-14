@@ -13,9 +13,10 @@ Three stages, so the browser-based parse can sit in the middle:
      keep    - shows a branch, a merge, a loop, or is a sequence/state diagram,
                and its node labels are grounded in the card;
      review  - neither: judge again with the draw-or-skip method;
-     redraw  - does not parse, or a flowchart wider than the note that is
-               already upright (a left-to-right one is turned first): judge
-               again and draw (rule "wide": a narrower redraw is the point).
+     redraw  - does not parse, or a flowchart more than 30 px wider than the
+               note that is already upright (a left-to-right one is turned
+               first): judge again and draw (rule "wide": a narrower redraw
+               is the point).
 
 The rules are the mechanical tiering from the method write-up; they are a
 screen, not a verdict on each diagram.
@@ -274,6 +275,10 @@ class TierRules:
     max_short_chain_nodes: int = 4
     min_grounding: float = 0.5
     max_width: int = 700  # px, the note's reading width; applied to old flowcharts (rule wide)
+    # px an upright old flowchart may run over max_width and still not be redrawn: of the 17 redraws judge J9a
+    # read, the 6 whose old diagram ran over by 4-20 px came out 4 worse, 2 the same, none better (they lost
+    # content to become narrower); the width gate for new diagrams stays max_width
+    wide_tolerance: int = 30
 
 
 def tier_one(card: dict[str, Any], check: dict[str, Any], rules: TierRules = TierRules()) -> tuple[str, str]:
@@ -282,7 +287,7 @@ def tier_one(card: dict[str, Any], check: dict[str, Any], rules: TierRules = Tie
         return "delete", "domain"
     if not check.get("ok"):
         return ("delete", "broken+fact/contrast") if card["kind"] in rules.weak_kinds else ("redraw", "broken")
-    if check.get("type") == "flowchart-v2" and (check.get("width") or 0) > rules.max_width \
+    if check.get("type") == "flowchart-v2" and (check.get("width") or 0) > rules.max_width + rules.wide_tolerance \
             and check.get("direction") not in ("LR", "RL"):
         return "redraw", "wide"  # turning cannot narrow it; kept as it is, it stays too wide (J8)
     m = metrics(card, check)

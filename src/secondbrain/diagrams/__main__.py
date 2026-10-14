@@ -43,9 +43,9 @@ rule .../no_audit). `pool --delete-tier` writes the delete-tier cards prune
 handles as rows for old-audit-packets; the packets for the pool cover the
 delete_review cards too.
 
-An upright old flowchart wider than 700 px is tiered redraw (rule wide): the
-model sees it as old_diagram "too_wide", and a narrower redraw replaces it even
-with the same steps. writeback --replace-only writes new diagrams only, so a
+An upright old flowchart wider than 730 px (700 px and a 30 px tolerance) is
+tiered redraw (rule wide): the model sees it as old_diagram "too_wide", and a
+narrower redraw (at most 700 px) replaces it even with the same steps. writeback --replace-only writes new diagrams only, so a
 redraw set leaves every skipped card as it is.
 
 writeback refuses to run when the rendering old flowcharts in the pool have

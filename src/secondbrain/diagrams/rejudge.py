@@ -50,8 +50,9 @@ rendering everywhere (the pool, the draw and audit packets, the guards).
 Where it stays, the repaired source is written in its place (action
 repair_old, rule ...+repaired, turned TB too when it is wide and LR).
 
-After the vault batch: an upright flowchart wider than the reading width is
-tiered redraw (rule wide) and goes to the model as old_diagram "too_wide";
+After the vault batch: an upright flowchart more than 30 px wider than the
+reading width (audit.TierRules.wide_tolerance) is tiered redraw (rule wide)
+and goes to the model as old_diagram "too_wide";
 a narrower redraw of the same steps is what it is for, so the same-structure
 guard does not apply to it (a new diagram still passes the width gate V14).
 replace_only() turns a plan into one that writes new diagrams only, for a
