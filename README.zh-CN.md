@@ -93,7 +93,7 @@ flowchart TD
 5. **闸门。** 只有被接受的卡继续往下走。被退回的卡有一轮返修；仍不通过的留作待定，附复核理由。`sb ingest --retry <job>` 再试一次某份来源的待定卡。
 6. **画图。** 对描述过程或结构的已接受卡片，模型用数据描述一张图。程序校验后生成 Mermaid（见[卡内图](#卡内图)）。
 7. **写入。** 一个事务写入卡片，给已有卡片补上反向关系，把批准的新主题加进分类体系，把来源复制到 `40_Sources/`，更新登记表，重新生成受影响的地图页和 `HOME.md`，并把文件移出收件箱。
-8. **每日复习。** 新卡在复习队列里以新卡出现，不需要另外登记。标为 `needs-review` 的卡，要等你把它的 `status` 改成 `confirmed` 才会排入。
+8. **每日复习。** 新卡在复习队列里以新卡出现，不需要另外登记。标为 `needs-review` 的卡，要等你把它的 `status` 改成 `confirmed` 才会排入；`sb status --needs-review` 列出这些卡。
 
 细节：[docs/ingest.zh-CN.md](docs/ingest.zh-CN.md)。
 
@@ -183,7 +183,7 @@ diagrams = true
 - **独立复核。** 生产者和复核者是两次独立运行，复核者看不到生产者的理由。用 API 端点时，两者必须来自不同模型家族。
 - **过闸门之前什么都不写。** `sb job submit` 只保存答案。只有 `sb job advance`（或 API 执行器下的 `sb ingest`）会写入，而且只写复核通过的卡。
 - **一个事务。** 每次写入都把文件当前字节与计划时的字节比对，记日志，并持锁，保证同一知识库同时只有一个写者。`sb recover <job> --rollback` 逐字节还原所有改动过的文件；`sb recover <job> --resume` 完成被打断的写入。
-- **处理状态放在库外**：`~/.local/state/secondbrain` 或 `$SECONDBRAIN_STATE_DIR`，包括冻结的输入、任务文件、答案、运行记录。被打断的任务从停下的地方继续。
+- **处理状态放在库外**：`~/.local/state/secondbrain` 或 `$SECONDBRAIN_STATE_DIR`，包括冻结的输入、任务文件、答案、运行记录，以及每次写入的回滚日志。被打断的任务从停下的地方继续。`sb job prune` 列出旧的回滚日志，加 `--apply` 才删除。
 - **key 不进文件。** 配置里只写环境变量名或命令；把 key 直接写进配置文件会被拒绝。
 - **可选 git 提交。** 设 `[git] commit = true` 后，工具只提交它写过的路径。
 

@@ -60,7 +60,7 @@ sb ingest --retry <job>             # try the pending cards of a partial job aga
 
 In one transaction:
 
-- each accepted card, as `10_Knowledge/<domain>/<title>.md`, rendered by code from the reviewed fields. A card the reviewer marked `needs_review` gets `status: needs-review` and is listed in the result as `needs_review`; the review queue does not offer it as a new card until that status changes;
+- each accepted card, as `10_Knowledge/<domain>/<title>.md`, rendered by code from the reviewed fields. A card the reviewer marked `needs_review` gets `status: needs-review` and is listed in the result as `needs_review`; the review queue does not offer it as a new card until that status changes. `sb status` counts these cards (`needs_review`), `sb status --needs-review` lists them, and `HOME.md` names the count under "What to do now";
 - inverse relations on existing cards, in the front matter and in the related section (the rest of the card stays as it is);
 - accepted new topics in the taxonomy file;
 - a copy of the source in `40_Sources/<first 16 hex of sha256>/<file name>`;
@@ -84,11 +84,14 @@ sb job advance <job_id> --executor host
 sb recover <job_id> --rollback      # restore every file the job wrote, byte for byte
 sb recover <job_id> --resume        # finish a write that was interrupted
 sb job reset <job_id> --reason "<why>"   # set aside a stuck job that never wrote
+sb job prune --days 30              # preview old rollback journals; --apply deletes them
 ```
 
 Before writing, the transaction compares each file with the bytes it planned against. If another program changed a file in between, the job stops as `needs_attention`, and the next `sb job advance` plans the write again from the same reviewed cards. Several sources can be in progress at the same time; writes to one vault happen one at a time under a lock.
 
 A rolled-back source can be ingested again.
+
+`sb recover <job> --rollback` needs the job's rollback journal (`transaction.json` in the job's state folder), and the tool never deletes it on its own. `sb job prune` previews, with sizes, the journals that may go: finished writes older than `--days` (default 30) that are not the newest write of their source or operation. A source's parent and retry jobs count as one source; other jobs are grouped by operation, such as refresh or daily. `sb job prune --apply` deletes those journals and their write plans; such a write can no longer be undone, and its cards stay. `sb status` shows the state folder and its size under `state_dir`.
 
 `sb ingest --retry <job>` runs the pending cards of a partial job as a child job, `<job>-retry1` and so on, with its own transaction. Roll back a retry child before its parent: while the child's writes are in the vault, `sb recover <parent> --rollback` refuses and names the child. A child that was rolled back or reset does not block a new `sb ingest --retry <parent>`; the new child takes its id.
 

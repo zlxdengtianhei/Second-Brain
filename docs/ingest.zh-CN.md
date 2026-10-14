@@ -60,7 +60,7 @@ sb ingest --retry <job>             # 再试一次部分完成的任务里的待
 
 在一个事务里写入：
 
-- 每张已接受的卡片，存为 `10_Knowledge/<domain>/<title>.md`，由程序根据复核过的字段生成。复核者标为 `needs_review` 的卡片写成 `status: needs-review`，并在结果的 `needs_review` 里列出；这个状态改掉之前，复习队列不会把它当新卡排入；
+- 每张已接受的卡片，存为 `10_Knowledge/<domain>/<title>.md`，由程序根据复核过的字段生成。复核者标为 `needs_review` 的卡片写成 `status: needs-review`，并在结果的 `needs_review` 里列出；这个状态改掉之前，复习队列不会把它当新卡排入。`sb status` 统计这类卡片（`needs_review`），`sb status --needs-review` 逐张列出，`HOME.md` 在「现在做什么」下给出数量；
 - 已有卡片上的反向关系，写进 front matter 和相关小节（卡片其余部分不变）；
 - 已接受的新主题，写进分类体系文件；
 - 来源副本，存为 `40_Sources/<first 16 hex of sha256>/<file name>`；
@@ -84,11 +84,14 @@ sb job advance <job_id> --executor host
 sb recover <job_id> --rollback      # 逐字节还原这个任务写过的每个文件
 sb recover <job_id> --resume        # 完成被打断的写入
 sb job reset <job_id> --reason "<why>"   # 搁置一个卡住且从未写入的任务
+sb job prune --days 30              # 预览旧的回滚日志；加 --apply 才删除
 ```
 
 写入之前，事务把每个文件与计划时所依据的字节比对。如果期间有别的程序改了某个文件，任务停下，状态为 `needs_attention`；下一次 `sb job advance` 用同一批复核过的卡片重新规划写入。多份来源可以同时处理；对同一个知识库的写入在锁的保护下逐个进行。
 
 回滚过的来源可以再次入库。
+
+`sb recover <job> --rollback` 要用任务的回滚日志（任务状态目录里的 `transaction.json`），工具从不自行删除它。`sb job prune` 预览可以删除的日志并给出大小：已完成、早于 `--days` 天（默认 30）、且不是其来源或操作最新一次写入的日志。同一来源的父任务和重试子任务算一个来源；其他任务按操作分组，例如 refresh 或 daily。`sb job prune --apply` 删除这些日志和它们的写入计划；这些写入从此不能撤销，写入的卡片保留。`sb status` 在 `state_dir` 下给出状态目录和它的大小。
 
 `sb ingest --retry <job>` 把部分完成的任务里的待定卡作为子任务运行。子任务名为 `<job>-retry1`，依此类推，各有自己的事务。先回滚重试子任务，再回滚父任务：子任务写入的内容还在知识库里时，`sb recover <parent> --rollback` 会拒绝执行，并指出是哪个子任务。已回滚或已重置的子任务不妨碍新的 `sb ingest --retry <parent>`；新的子任务沿用它的 id。
 

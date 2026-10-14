@@ -93,7 +93,7 @@ flowchart TD
 5. **Gate.** Only accepted cards go on. Rejected cards get one repair round; if they still fail, they stay pending with the reviewer's reasons. `sb ingest --retry <job>` tries the pending cards of a source again.
 6. **Diagram.** For accepted cards that describe a process or a structure, the model describes a diagram as data. Code checks it and generates Mermaid (see [Card diagrams](#card-diagrams)).
 7. **Write.** One transaction writes the cards, adds inverse relations to existing cards, adds approved new topics to the taxonomy, copies the source to `40_Sources/`, updates the registries, regenerates the affected maps and `HOME.md`, and removes the file from the inbox.
-8. **Review daily.** New cards appear as new in the review queue. Nothing else is needed to register them. A card marked `needs-review` waits until you set its `status` to `confirmed`.
+8. **Review daily.** New cards appear as new in the review queue. Nothing else is needed to register them. A card marked `needs-review` waits until you set its `status` to `confirmed`; `sb status --needs-review` lists these cards.
 
 Details: [docs/ingest.md](docs/ingest.md).
 
@@ -183,7 +183,7 @@ Optional extras: `pip install -e ".[api]"` for the API executor, `".[mcp]"` for 
 - **Independent review.** Producer and reviewer are separate runs. The reviewer does not see the producer's reasons. With API endpoints, they must come from different model families.
 - **Nothing is written before the gate.** `sb job submit` only stores an answer. Only `sb job advance` (or `sb ingest` with the API executor) writes, and only cards that passed review.
 - **One transaction.** Every write compares the current bytes with the bytes it planned against, keeps a journal, and holds a lock so that only one writer works on a vault. `sb recover <job> --rollback` restores every touched file byte for byte; `sb recover <job> --resume` finishes an interrupted write.
-- **Processing state lives outside the vault**, in `~/.local/state/secondbrain` or `$SECONDBRAIN_STATE_DIR`: frozen inputs, task files, answers, run records. An interrupted job continues where it stopped.
+- **Processing state lives outside the vault**, in `~/.local/state/secondbrain` or `$SECONDBRAIN_STATE_DIR`: frozen inputs, task files, answers, run records, and the rollback journal of each write. An interrupted job continues where it stopped. `sb job prune` lists old journals and `--apply` deletes them.
 - **Keys stay out of files.** The config names an environment variable or a command; a key written into the config file is refused.
 - **Optional git commit.** With `[git] commit = true`, the tool commits exactly the paths it wrote.
 
