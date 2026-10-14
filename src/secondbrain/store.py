@@ -76,7 +76,7 @@ def _allowed(root: Path, value: str) -> bool:
             or lay.is_source(value) or lay.is_inbox_file(value) or lay.is_review_page(value)
             or lay.is_projection_json(value)
             or value in {lay.registry, lay.manifest, lay.ingested, lay.catalog,
-                         lay.inbox_registry, lay.review_events, *lay.standalone_files})
+                         lay.inbox_registry, lay.conflicts, lay.review_events, *lay.standalone_files})
 
 
 def _root(root: Path) -> Path:

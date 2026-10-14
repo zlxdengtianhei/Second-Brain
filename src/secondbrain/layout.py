@@ -74,6 +74,11 @@ class VaultLayout:
         return f'{self.data}/secondbrain/inbox_registry.jsonl'
 
     @property
+    def conflicts(self) -> str:
+        """Disagreements between new and existing cards that ingest found and left to the owner."""
+        return f'{self.data}/secondbrain/conflicts.jsonl'
+
+    @property
     def review_events(self) -> str:
         return f'{self.data}/review_events.jsonl'
 

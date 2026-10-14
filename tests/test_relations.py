@@ -83,11 +83,11 @@ def test_a_contrast_relation_needs_the_contrast_written_out(tmp_path):
     packet['catalog'] = {**packet['catalog'], 'relation_types': ['similar_to', 'part_of', 'depends_on',
                                                                   'contrasts_with']}
     candidate = json.loads(json.dumps(first_candidate()))  # the helper's cards are shared
-    candidate['cards'][0]['relations'] = [{'type': 'contrasts_with', 'target': candidate['cards'][1]['slug']}]
+    candidate['cards'][0]['relations'] = [{'type': 'contrasts_with', 'target': candidate['cards'][3]['slug']}]
     candidate['cards'][0]['confusions'] = []
     with pytest.raises(ingest.IngestError, match='states the contrast in confusions'):
         check(root, packet, candidate)
-    candidate['cards'][0]['confusions'] = ['A lantern queue keeps arrival order; a cost card does not.']
+    candidate['cards'][0]['confusions'] = ['A lantern queue lets readers skip ahead; the order card only keeps order.']
     check(root, packet, candidate)
 
 
@@ -99,7 +99,7 @@ def test_the_reviewer_is_asked_to_check_examples_links_and_better_domains():
     review = task_text('review_cards.md')
     assert 'every flashcard question and answer against the text' in review
     assert 'Check each example on its own' in review
-    assert 'name the existing card id with the relation type to add, or say that the two cards should be merged' in review
+    assert 'name the existing card id with the relation type to add' in review
     assert 'also when it is not among `taxonomies`: `domains` lists every domain' in review
 
 

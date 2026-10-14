@@ -47,7 +47,7 @@ def test_body_sections_in_order_and_diagram_slot(language):
     order = [h['essence'], h['propositions'], h['intuition'], h['related'], h['flashcards']]
     positions = [body.index(f'## {name}\n') for name in order]
     assert positions == sorted(positions) and f'## {h["diagram"]}' not in body
-    assert 'One sentence only.' in body and '- P2. Second.' in body
+    assert 'One  sentence only.' in body and '- P2. Second.' in body  # a line break joins; spaces stay
     assert body.rstrip().endswith('Q2?::A2.')
     with_diagram = cards.render_body(FIELDS, [], language=language,
                                      diagram='```mermaid\nflowchart LR\n  A --> B\n```\n')
@@ -55,6 +55,20 @@ def test_body_sections_in_order_and_diagram_slot(language):
     assert block in with_diagram
     assert with_diagram.index(block) > with_diagram.index(f'## {h["propositions"]}')
     assert with_diagram.index(block) < with_diagram.index(f'## {h["intuition"]}')
+
+
+def test_runs_of_spaces_in_card_text_survive_rendering():
+    """Drill 1 card 49 and drill 2 card 39: the source's `3  10 -2` came out as `3 10 -2`."""
+    fields = {**FIELDS, 'essence': 'split() reads `3  10 -2` as three numbers.',
+              'propositions': ['Input `3  10 -2`\n  sums to 11.', "split(' ') keeps an empty item for `a  b`."],
+              'intuition': None, 'confusions': [],
+              'flashcards': [{'q': 'What does split() make of `3  10 -2`?', 'a': "['3', '10', '-2']"},
+                             {'q': "And split(' ')?", 'a': "['3', '', '10', '-2']"}]}
+    body = cards.render_body(fields, [rel('depends_on', 'kc_a', 'Card A', 'note  with  spaces')], language='en')
+    assert 'split() reads `3  10 -2` as three numbers.' in body
+    assert '- P1. Input `3  10 -2` sums to 11.' in body and "empty item for `a  b`." in body
+    assert 'What does split() make of `3  10 -2`?::' in body and '（' not in body
+    assert '(note  with  spaces)' in body
 
 
 def test_rendered_card_parses_back_with_the_contract_fields():

@@ -71,7 +71,12 @@ class Relation:
 
 
 def _one_line(text: str) -> str:
-    return ' '.join(str(text).split())
+    """``text`` on one Markdown line: each line break, with the blanks around it, becomes one space.
+
+    Runs of spaces inside a line stay: they can be the point of the card (a
+    string literal, or input such as ``3  10 -2`` read with ``split()``).
+    """
+    return re.sub(r'[ \t]*(?:\r\n|\r|\n)+[ \t]*', ' ', str(text)).strip()
 
 
 def render_body(fields: dict, relations: list[Relation], *, language: str = 'en',

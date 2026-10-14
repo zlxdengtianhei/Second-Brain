@@ -53,6 +53,9 @@ DOMAIN_CREATE = {'type': 'object',
                                 'boundary_reason': _STR, 'difference_reason': _STR, 'impact_reason': _STR}}
 
 _QA = {'type': 'object', 'required': ['q', 'a'], 'properties': {'q': _STR, 'a': _STR}}
+#: A disagreement on a fact with an existing card: its id, and what differs.
+_CONFLICTS = {'type': 'array', 'items': {'type': 'object', 'required': ['with', 'detail'],
+                                         'properties': {'with': _STR, 'detail': _STR}}}
 _REL = {'type': 'object', 'required': ['type', 'target'],
         'properties': {'type': _STR, 'target': _STR, 'note': _NSTR,
                        'tier': {'type': ['string', 'null'], 'enum': ['extension', None]}}}
@@ -72,7 +75,7 @@ CARDS = {
                 'intuition': _NSTR, 'confusions': {'type': 'array', 'items': _STR},
                 'flashcards': {'type': 'array', 'items': _QA},
                 'relations': {'type': 'array', 'items': _REL},
-                'source_quotes': {'type': 'array', 'items': _STR}, 'reason': _STR}}},
+                'source_quotes': {'type': 'array', 'items': _STR}, 'reason': _STR, 'conflicts': _CONFLICTS}}},
         'new_topics': {'type': 'array', 'items': {
             'type': 'object', 'required': ['domain', 'pillar', 'name', 'boundary', 'reason'],
             'properties': {'domain': _STR, 'pillar': _STR, 'name': _STR, 'boundary': _STR, 'reason': _STR}}},
@@ -90,7 +93,9 @@ REVIEW_CARDS = {
         'cards': {'type': 'array', 'items': {
             'type': 'object', 'required': ['slug', 'decision', 'reason'],
             'properties': {'slug': _STR, 'decision': {'type': 'string', 'enum': ['accept', 'revise', 'duplicate']},
-                           'duplicate_of': _NSTR, 'suggested_domain': _NSTR, 'reason': _STR}}},
+                           'duplicate_of': _NSTR, 'suggested_domain': _NSTR, 'reason': _STR,
+                           'overlap': {'type': ['string', 'null'], 'enum': ['distinct', 'needs_review', None]},
+                           'overlap_with': _NSTR, 'conflicts': _CONFLICTS}}},
         'new_topics': {'type': 'array', 'items': {
             'type': 'object', 'required': ['domain', 'pillar', 'name', 'decision', 'reason'],
             'properties': {'domain': _STR, 'pillar': _STR, 'name': _STR, 'decision': _DECISION, 'reason': _STR}}},

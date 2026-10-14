@@ -118,8 +118,10 @@ def repair_candidate():
 
 
 def first_review():
-    return {'cards': [{'slug': 'lantern-queue', 'decision': 'accept', 'reason': 'faithful and atomic'},
-                      {'slug': 'lit-marker-cost', 'decision': 'accept', 'reason': 'numbers match the text'},
+    return {'cards': [{'slug': 'lantern-queue', 'decision': 'accept', 'reason': 'faithful and atomic',
+                       'overlap': 'distinct'},  # both link the existing card, so the reviewer must say this
+                      {'slug': 'lit-marker-cost', 'decision': 'accept', 'reason': 'numbers match the text',
+                       'overlap': 'distinct'},
                       {'slug': 'marker-dimming', 'decision': 'revise',
                        'reason': 'the text says dimmed rather than deleted; the card says deleted'},
                       {'slug': 'queue-order', 'decision': 'duplicate', 'duplicate_of': EXISTING,

@@ -31,7 +31,7 @@ import yaml
 from .. import cards as cardfmt
 from .. import config, inbox, jobs, schemas
 from .. import layout as layouts
-from ..catalog import category_pairs, relation_meanings, taxonomy_packet, validate_catalog
+from ..catalog import category_pairs, open_relation_types, relation_meanings, taxonomy_packet, validate_catalog
 from ..classification import projection_changes, snapshot_checks, taxonomy_fingerprint, writable_snapshot
 from ..evidence import check_verbatim
 from ..executors.base import CHUNK_TOO_LARGE, INVALID_OUTPUT, ExecutorFailure
@@ -515,6 +515,33 @@ def _relation_types(catalog: dict) -> list:
     return relation_types(catalog)
 
 
+def _relation_views(catalog: dict, domains) -> dict:
+    """The relation types a packet shows: ``relation_types`` with the types open to every domain, and
+    ``domain_relation_types`` with the extra types each of ``domains`` may use (only domains that have some)."""
+    general = list(catalog.get('relation_types') or [])
+    extra = {}
+    for domain in dict.fromkeys(d for d in domains if isinstance(d, str)):
+        own = [t for t in open_relation_types(catalog, domain) if t not in general]
+        if own:
+            extra[domain] = relation_meanings(catalog, types=own)
+    return {'relation_types': relation_meanings(catalog, types=general), 'domain_relation_types': extra}
+
+
+def _closed_relation(catalog: dict, kind: str, domain, target_domain) -> str | None:
+    """Why a ``kind`` link from a ``domain`` card to a ``target_domain`` card may not be written, or None.
+
+    A type in ``domain_relations`` is open only to the domains listed there, and
+    the target gets the inverse type as its back link, so that must be open to
+    the target's domain.
+    """
+    if kind not in open_relation_types(catalog, domain):
+        return f'{kind!r} is not open to domain {domain}'
+    inverse = (catalog.get('inverse_relations') or {}).get(kind)
+    if inverse and target_domain and inverse not in open_relation_types(catalog, target_domain):
+        return f'its back link {inverse!r} is not open to the target\'s domain {target_domain}'
+    return None
+
+
 def _candidate_taxonomies(packet: dict, domains: list) -> dict:
     out = {}
     counts = packet.get('topic_counts', {})
@@ -565,7 +592,7 @@ def producer_packet(root: Path, state: dict, packet: dict, slot: str) -> dict:
                      'total': len(order), 'text': _chunk_text(packet, base)},
            'domains': domains,
            'candidate_taxonomies': _candidate_taxonomies(packet, chunk['candidate_domains']),
-           'relation_types': relation_meanings(packet['catalog']),
+           **_relation_views(packet['catalog'], chunk['candidate_domains']),
            'neighbors': chunk['neighbors'],
            'other_chunks_cards': _other_cards(root, state, packet, base),
            'rules': {'new_topics_per_source': packet['settings']['new_topics_per_source'],
@@ -589,6 +616,7 @@ def producer_packet(root: Path, state: dict, packet: dict, slot: str) -> dict:
             if domain in packet['catalog']['domains'] and domain not in wanted:
                 wanted.append(domain)
         out['candidate_taxonomies'] = _candidate_taxonomies(packet, wanted)
+        out['domain_relation_types'] = _relation_views(packet['catalog'], wanted)['domain_relation_types']
     return out
 
 
@@ -610,8 +638,9 @@ def _findings(review: dict) -> dict:
             'coverage': review.get('coverage') if (review.get('coverage') or {}).get('decision') != 'accept' else None}
 
 
-#: Existing cards shown to the reviewer per candidate card, to judge duplicates.
-NEAR_DUPLICATES_PER_CARD = 3
+#: Existing cards shown to the reviewer per candidate card, to judge duplicates and missing links
+#: (in drill 2, 10 of 16 old cards a judge said should have been linked were in the top 5, 5 in the top 3).
+NEAR_DUPLICATES_PER_CARD = 5
 #: Bytes of propositions the reviewer packet carries for those cards in all; past it, the
 #: lower-ranked neighbours are shown by title and essence only (the drill source's 66 cards
 #: once made an 813 KB packet, 80% of it whole neighbour bodies).
@@ -691,7 +720,7 @@ def review_packet(root: Path, state: dict, packet: dict, slot: str) -> dict:
            'taxonomies': _candidate_taxonomies(packet, domains),
            'domains': [{'slug': d, 'question': m.get('question')}
                        for d, m in sorted(packet['catalog']['domains'].items())],
-           'relation_types': relation_meanings(packet['catalog']),
+           **_relation_views(packet['catalog'], domains),
            'other_chunks_cards': _other_cards(root, state, packet, base)}
     if rnd:
         kept = _accepted_so_far(root, state, base, rnd)
@@ -736,15 +765,22 @@ def _text_fields(card: dict) -> list[str]:
     return [x for x in out if isinstance(x, str)]
 
 
-def _vault_ids_titles(root) -> tuple[set, set]:
+def _vault_ids_titles(root) -> tuple[set, set, dict]:
+    """Existing card ids, folded titles, and ``{id: domain}``."""
     snap = read_snapshot(root)
-    return set(snap.cards), {c.title.casefold() for c in snap.cards.values() if c.title}
+    return (set(snap.cards), {c.title.casefold() for c in snap.cards.values() if c.title},
+            {cid: c.domain for cid, c in snap.cards.items()})
 
 
 def validate_candidate(packet: dict, payload: dict, *, slot: str, other_cards: list[dict],
                        kept_slugs: set, existing_ids: set, existing_titles: set,
-                       known_topics: set = frozenset()) -> dict:
-    """Raise :class:`IngestError` listing every problem; return the payload."""
+                       known_topics: set = frozenset(), target_domains: dict | None = None) -> dict:
+    """Raise :class:`IngestError` listing every problem; return the payload.
+
+    ``target_domains`` maps the ids and slugs a relation may point to (existing
+    cards, cards of other chunks and rounds) to their domain, so a relation
+    whose back link the target's domain does not use is refused.
+    """
     errors: list[str] = []
     base = _base(slot)
     text = _chunk_text(packet, base)
@@ -763,6 +799,8 @@ def validate_candidate(packet: dict, payload: dict, *, slot: str, other_cards: l
         raise IngestError('coverage must list how every part of the chunk is handled')
     other_slugs = {c['slug'] for c in other_cards}
     other_titles = {str(c.get('title') or '').casefold() for c in other_cards}
+    domain_of = dict(target_domains or {})
+    domain_of.update({c['slug']: c.get('domain') for c in cards if isinstance(c, dict) and isinstance(c.get('slug'), str)})
     proposed = {}
     for i, t in enumerate(topics):
         where = f'new_topics[{i}]'
@@ -878,11 +916,18 @@ def validate_candidate(packet: dict, payload: dict, *, slot: str, other_cards: l
         if not isinstance(rels, list):
             errors.append(f'{where}.relations must be a list')
             rels = []
+        open_types = open_relation_types(catalog, domain) if domain in catalog['domains'] else relation_types
         for r in rels:
-            if not isinstance(r, dict) or r.get('type') not in relation_types:
-                errors.append(f'{where}.relations: type must be one of {sorted(relation_types)}')
+            if not isinstance(r, dict) or r.get('type') not in open_types:
+                got = r.get('type') if isinstance(r, dict) else r
+                errors.append(f'{where}.relations: type must be one of {sorted(open_types)} (the types open to '
+                              f'{domain}; got {got!r})')
                 continue
             target = r.get('target')
+            closed = _closed_relation(catalog, r['type'], domain, domain_of.get(target))
+            if closed:
+                errors.append(f'{where}.relations: {r["type"]} to {target!r}: {closed}; choose a type both '
+                              'domains use')
             if not isinstance(target, str) or target == slug or not (
                     target in existing_ids or target in other_slugs or target in kept_slugs
                     or target in _written_slugs(packet)
@@ -893,6 +938,7 @@ def validate_candidate(packet: dict, payload: dict, *, slot: str, other_cards: l
                 errors.append(f'{where}.relations: tier must be null or "extension"')
             if r.get('note') is not None and not isinstance(r.get('note'), str):
                 errors.append(f'{where}.relations: note must be a string')
+        errors += _conflict_errors(where, c.get('conflicts'), existing_ids)
         if any(isinstance(r, dict) and r.get('type') == 'contrasts_with' for r in rels) and not conf:
             errors.append(f'{where}: a card with a contrasts_with relation states the contrast in confusions')
         if bare_id:
@@ -906,6 +952,7 @@ def validate_candidate(packet: dict, payload: dict, *, slot: str, other_cards: l
     for key in sorted(unused):
         errors.append(f'new topic {key[2]!r} is not used by any card')
     errors += _reversed_relations(catalog, cards)
+    errors += _repeated_targets(catalog, cards)
     covered = set()
     for i, row in enumerate(coverage):
         where = f'coverage[{i}]'
@@ -970,11 +1017,64 @@ def _reversed_relations(catalog: dict, cards: list) -> list[str]:
     return errors
 
 
+#: What a reviewer says about an accepted card that links existing cards (see validate_review).
+OVERLAPS = ('distinct', 'needs_review')
+
+
+def _conflict_errors(where: str, rows, existing_ids: set) -> list[str]:
+    if rows is None:
+        return []
+    if not isinstance(rows, list):
+        return [f'{where}.conflicts must be a list']
+    return [f'{where}.conflicts[{i}] needs "with" (an existing card id) and "detail" (what differs)'
+            for i, row in enumerate(rows)
+            if not isinstance(row, dict) or row.get('with') not in existing_ids
+            or not isinstance(row.get('detail'), str) or not row['detail'].strip()]
+
+
+def _repeated_targets(catalog: dict, cards: list) -> list[str]:
+    """Two cards joined by more than one relation, counting the back link the program writes.
+
+    "A has_part B" with "A depends_on B", or with "B required_by A", leave both
+    cards with two links to each other (drill 2, cards 12 and 14); one is kept.
+    """
+    inverse = catalog.get('inverse_relations') or {}
+    slugs = {c['slug'] for c in cards if isinstance(c, dict) and isinstance(c.get('slug'), str)}
+    pairs: dict = {}
+    for c in cards:
+        if not (isinstance(c, dict) and c.get('slug') in slugs and isinstance(c.get('relations'), list)):
+            continue
+        for r in c['relations']:
+            if isinstance(r, dict) and isinstance(r.get('type'), str) and isinstance(r.get('target'), str):
+                pairs.setdefault((c['slug'], r['target']), set()).add(r['type'])
+                if r['target'] in slugs and inverse.get(r['type']):
+                    pairs.setdefault((r['target'], c['slug']), set()).add(inverse[r['type']])
+    errors = []
+    for (a, b), kinds in sorted(pairs.items()):
+        if a not in slugs or (b in slugs and b < a) or len(kinds) < 2:
+            continue
+        if len(kinds) == 2 and inverse.get(min(kinds)) == max(kinds):
+            continue  # opposite directions: _reversed_relations says so
+        errors.append(f'cards[{a}].relations: {len(kinds)} relations between {a!r} and {b!r} '
+                      f'({", ".join(sorted(kinds))}, counting the back links); keep the one that fits best')
+    return errors
+
+
 def validate_review(candidate: dict, review: dict, existing_ids: set, domains=()) -> dict:
+    """Shape checks of a review, and the decisions the program requires.
+
+    An accepted card that links existing cards needs ``overlap``: ``distinct``
+    (it holds a recallable unit of its own) or ``needs_review`` with
+    ``overlap_with`` naming the linked card it mostly repeats. Such a card is
+    written as needs-review, the owner's rule for possible merges (drill 2
+    wrote six near-duplicates as confirmed). No word-overlap score separated
+    those six from the other cards, so the reviewer decides, every time.
+    """
     errors = []
     if not isinstance(review, dict):
         raise IngestError('review must be a JSON object')
     slugs = [c['slug'] for c in candidate.get('cards', [])]
+    by_slug = {c['slug']: c for c in candidate.get('cards', []) if isinstance(c, dict)}
     rows = review.get('cards')
     if not isinstance(rows, list):
         raise IngestError('review.cards must be a list')
@@ -992,6 +1092,19 @@ def validate_review(candidate: dict, review: dict, existing_ids: set, domains=()
             errors.append(f'{row["slug"]}: suggested_domain must be one of {", ".join(sorted(domains))}')
         if not isinstance(row.get('reason'), str) or not row['reason'].strip():
             errors.append(f'{row["slug"]}: every decision needs a concrete reason')
+        linked = sorted({r.get('target') for r in by_slug[row['slug']].get('relations') or []
+                         if isinstance(r, dict) and r.get('target') in existing_ids})
+        overlap = row.get('overlap')
+        if overlap is not None and overlap not in OVERLAPS:
+            errors.append(f'{row["slug"]}: overlap must be distinct or needs_review')
+        elif row.get('decision') == 'accept' and linked and overlap is None:
+            errors.append(f'{row["slug"]}: the card links existing cards ({", ".join(linked)}); set overlap: distinct '
+                          'if it holds a recallable unit of its own, or needs_review with overlap_with if it mostly '
+                          'repeats one of them')
+        if overlap == 'needs_review' and row.get('decision') == 'accept' and row.get('overlap_with') not in linked:
+            errors.append(f'{row["slug"]}: overlap_with must name the existing card it repeats, one it links '
+                          f'({", ".join(linked) or "none"}); for another card, revise and ask for the link')
+        errors += _conflict_errors(row['slug'], row.get('conflicts'), existing_ids)
     if sorted(seen) != sorted(slugs):
         errors.append('the review must judge every candidate card exactly once')
     keys = [(t.get('domain'), t.get('pillar'), t.get('name')) for t in candidate.get('new_topics', [])]
@@ -1021,16 +1134,17 @@ def validate_submission(packet: dict, payload: dict, *, role: str, candidate=Non
         raise IngestError('ingest runs are always bound to a chunk slot')
     if card_diagrams.is_slot(chunk):
         return card_diagrams.validate_answer(payload)
-    existing_ids, existing_titles = _vault_ids_titles(root)
+    existing_ids, existing_titles, existing_domains = _vault_ids_titles(root)
     if role == 'reviewer':
         return validate_review(candidate, payload, existing_ids, packet['catalog']['domains'])
     base, rnd = _base(chunk), _round(chunk)
     kept = _accepted_so_far(root, state, base, rnd) if rnd else {}
-    return validate_candidate(packet, payload, slot=chunk,
-                              other_cards=_other_cards(root, state, packet, base),
-                              kept_slugs=set(kept),
+    others = _other_cards(root, state, packet, base)
+    domains = {**existing_domains, **{s: existing_domains.get(i) for s, i in _written_slugs(packet).items()},
+               **{c['slug']: c.get('domain') for c in others}, **{s: c.get('domain') for s, c in kept.items()}}
+    return validate_candidate(packet, payload, slot=chunk, other_cards=others, kept_slugs=set(kept),
                               existing_ids=existing_ids, existing_titles=existing_titles,
-                              known_topics=_known_topics(root, state, chunk, payload, kept))
+                              known_topics=_known_topics(root, state, chunk, payload, kept), target_domains=domains)
 
 
 def _known_topics(root, state, slot: str, payload, kept: dict) -> set:
@@ -1101,7 +1215,7 @@ def chunk_outcome(root: Path, state: dict, packet: dict, base: str) -> dict:
     max_rounds = config.review_policy().max_repair_rounds
     used = int(info0.get('invalid_outputs', 0)) + sum(1 for _, i in slots[1:] if i.get('candidate'))
     out = {'chunk': base, 'settled': False, 'next': None, 'accepted': {}, 'pending': [],
-           'duplicates': [], 'topics': {}, 'needs_taxonomy': [], 'skipped': []}
+           'duplicates': [], 'topics': {}, 'needs_taxonomy': [], 'skipped': [], 'conflicts': []}
     if not slots or not slots[0][1].get('candidate'):
         if used > max_rounds:
             out.update(settled=True, pending=[{'scope': 'chunk', 'chunk': base, 'reason':
@@ -1116,6 +1230,7 @@ def chunk_outcome(root: Path, state: dict, packet: dict, base: str) -> dict:
     open_coverage = None
     dups: dict = {}
     needs_tax, skipped = [], []
+    conflicts: dict = {}
     merged_rounds = 0
     for slot, info in slots:
         if not info.get('candidate'):
@@ -1138,8 +1253,17 @@ def chunk_outcome(root: Path, state: dict, packet: dict, base: str) -> dict:
             d = decisions[c['slug']]
             accepted.pop(c['slug'], None)
             dups.pop(c['slug'], None)
+            # the producer's flags are kept even when the reviewer does not repeat them: a conflict is only shown
+            # to the owner, never acted on, and must not pass silently; the reviewer's word wins on the same pair
+            for by, rows in (('producer', c.get('conflicts')), ('reviewer', d.get('conflicts'))):
+                for row in rows or []:
+                    conflicts[(c['slug'], row['with'])] = {'slug': c['slug'], 'title': c.get('title'),
+                                                          'with': row['with'], 'detail': row['detail'],
+                                                          'by': by, 'chunk': base}
             if d['decision'] == 'accept':
                 accepted[c['slug']] = {**c, '_slot': slot}
+                if d.get('overlap') == 'needs_review':
+                    accepted[c['slug']].update(_overlap_with=d.get('overlap_with'), _overlap_reason=d['reason'])
             elif d['decision'] == 'duplicate':
                 dups[c['slug']] = {'slug': c['slug'], 'title': c.get('title'), 'duplicate_of': d.get('duplicate_of'),
                                    'reason': d['reason'], 'chunk': base}
@@ -1180,7 +1304,7 @@ def chunk_outcome(root: Path, state: dict, packet: dict, base: str) -> dict:
                                       f'{topic_state[key]["review_reason"]}'})
     out.update(settled=True, accepted=accepted, pending=pending, duplicates=list(dups.values()),
                topics={k: v for k, v in topic_state.items() if v['decision'] == 'accept'},
-               needs_taxonomy=needs_tax, skipped=skipped)
+               needs_taxonomy=needs_tax, skipped=skipped, conflicts=list(conflicts.values()))
     return out
 
 
@@ -1412,6 +1536,24 @@ def _unique_title(title: str, taken: set) -> str:
     return candidate
 
 
+def content_digest(card) -> str:
+    """Digest of a card's text apart from its related section (which back links change) and front matter."""
+    related = {h['related'] for h in cardfmt.HEADINGS.values()}
+    parts = {k: v for k, v in _card_sections(card.body).items() if k not in related}
+    return digest(json.dumps(parts, ensure_ascii=False, sort_keys=True).encode('utf-8'))
+
+
+def open_conflicts(root: Path, snapshot) -> list[dict]:
+    """Recorded conflicts whose existing card is unchanged since (``sb status``); the latest record per pair."""
+    rows = {}
+    for row in inbox._jsonl(root, layouts.of(root).conflicts):
+        card = snapshot.cards.get(row.get('with'))
+        if card is not None and row.get('with_digest') == content_digest(card):
+            rows[(row.get('card') or row.get('slug'), row['with'])] = {
+                k: row.get(k) for k in ('with', 'with_title', 'card', 'title', 'detail', 'by', 'job_id', 'at')}
+    return list(rows.values())
+
+
 def _merge_topics(tax: dict, additions: list[tuple[str, str]]) -> dict:
     merged = json.loads(json.dumps(tax))
     for pillar, name in additions:
@@ -1499,6 +1641,7 @@ def apply_job(root: Path, job_id: str, settled: list[dict] | None = None) -> dic
     # relations: resolve slugs, drop links to cards that are not written
     rels: dict = {s: [] for _, s, _ in accepted}
     skipped_relations = []
+    new_domains = {ids[s]: c['domain'] for _, s, c in accepted}
     for _, slug, card in accepted:
         for r in card.get('relations') or []:
             target = r['target']
@@ -1511,6 +1654,12 @@ def apply_job(root: Path, job_id: str, settled: list[dict] | None = None) -> dic
             else:
                 skipped_relations.append({'from': ids[slug], 'type': r['type'], 'target_slug': target,
                                           'reason': 'target card was not written'})
+                continue
+            closed = _closed_relation(packet['catalog'], r['type'], card['domain'],
+                                      snapshot.cards[tid].domain if tid in snapshot.cards else new_domains.get(tid))
+            if closed:  # refused at submit too; this also covers answers checked before that rule
+                skipped_relations.append({'from': ids[slug], 'type': r['type'], 'target_slug': target,
+                                          'reason': closed})
                 continue
             if any(x['type'] == r['type'] and x['target'] == tid for x in rels[slug]):
                 continue
@@ -1539,7 +1688,8 @@ def apply_job(root: Path, job_id: str, settled: list[dict] | None = None) -> dic
                 'tags': ['review', f'flashcards/{card["domain"]}'],
                 'aliases': list(dict.fromkeys(a for a in card.get('aliases') or [] if a != title)) or None,
                 'sources': [{'path': source_rel, 'sha256': source['sha256'], 'locator': card['source_quotes'][0]}],
-                'relations': rels[slug], 'status': card.get('status', 'confirmed'), 'created': today}
+                'relations': rels[slug], 'created': today,
+                'status': 'needs-review' if card.get('_overlap_with') else card.get('status', 'confirmed')}
         meta = {k: v for k, v in meta.items() if v is not None}
         raw = cardfmt.render_card(meta, card, relations, language=language,
                                   diagram=drawn['diagrams'].get(slug))
@@ -1616,6 +1766,26 @@ def apply_job(root: Path, job_id: str, settled: list[dict] | None = None) -> dic
         changes.append(inbox.appended(root, lay.manifest, (json.dumps(
             {'original': source['filename'], 'vault_path': source_rel, 'sha256': source['sha256'],
              'collected_at': now, 'job_id': job_id}, ensure_ascii=False) + '\n').encode('utf-8')))
+    # conflicts with existing cards: recorded for the owner, never merged (a row stays open until that card's text
+    # changes); the digest is taken from the card as this write leaves it, back links included
+    conflicts = []
+    by_slug = {s: c for _, s, c in accepted}
+    for o in settled:
+        for row in o['conflicts']:
+            other = updated.get(row['with']) or snapshot.cards.get(row['with'])
+            if other is None:
+                continue
+            conflicts.append({'card': ids.get(row['slug']) if row['slug'] in by_slug else None, 'slug': row['slug'],
+                              'title': titles.get(row['slug'], row['title']), 'with': row['with'],
+                              'with_title': other.title, 'detail': row['detail'], 'by': row['by'],
+                              'chunk': row['chunk']})
+    if conflicts:
+        changes.append(inbox.appended(root, lay.conflicts, b''.join(inbox.registry_line(
+            {**c, 'job_id': job_id, 'source_sha256': source['sha256'], 'at': now,
+             'with_digest': content_digest(updated.get(c['with']) or snapshot.cards[c['with']])})
+            for c in conflicts)))
+    needs_review = [{'id': ids[s], 'title': titles[s], 'overlap_with': c['_overlap_with'], 'reason': c['_overlap_reason']}
+                    for _, s, c in accepted if c.get('_overlap_with')]
     needs_taxonomy = [x for o in settled for x in o['needs_taxonomy']]
     status = 'partial' if (pending or needs_taxonomy) else 'applied'
     progress = None
@@ -1664,6 +1834,7 @@ def apply_job(root: Path, job_id: str, settled: list[dict] | None = None) -> dic
               'out_of_scope': [x for o in settled for x in o['skipped']],
               'new_topics': [{'domain': d, 'pillar': p, 'name': n} for d, p, n in topics],
               'skipped_relations': skipped_relations, 'maintenance': maintenance,
+              'needs_review': needs_review, 'conflicts': conflicts,
               'source_record': {'sha256': source['sha256'], 'path': source_rel},
               'inbox_moved': move, 'projection_metrics': projection_metrics,
               'diagrams': [row for row in drawn['report'] if row['ref'] in {p['slug'] for p in produced}],

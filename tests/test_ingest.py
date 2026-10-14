@@ -466,7 +466,8 @@ def test_chunks_are_produced_in_order_with_earlier_cards_in_context(tmp_path):
         return {'cards': cards, 'new_topics': topics, 'coverage': rows}
 
     def review(task):
-        cards = [{'slug': c['slug'], 'decision': 'accept', 'reason': 'ok'} for c in task.packet['candidate']['cards']]
+        cards = [{'slug': c['slug'], 'decision': 'accept', 'reason': 'ok', 'overlap': 'distinct'}
+                 for c in task.packet['candidate']['cards']]
         topics = [{**{k: t[k] for k in ('domain', 'pillar', 'name')}, 'decision': 'accept', 'reason': 'ok'}
                   for t in task.packet['candidate']['new_topics']]
         return {'cards': cards, 'new_topics': topics, 'coverage': {'decision': 'accept', 'reason': 'ok'}}
@@ -510,7 +511,8 @@ def test_chunk_too_large_is_split_in_halves_and_retried(tmp_path):
 
     def review(task):
         cand = task.packet['candidate']
-        return {'cards': [{'slug': c['slug'], 'decision': 'accept', 'reason': 'ok'} for c in cand['cards']],
+        return {'cards': [{'slug': c['slug'], 'decision': 'accept', 'reason': 'ok', 'overlap': 'distinct'}
+                          for c in cand['cards']],
                 'new_topics': [{**{k: t[k] for k in ('domain', 'pillar', 'name')}, 'decision': 'accept',
                                 'reason': 'ok'} for t in cand['new_topics']],
                 'coverage': {'decision': 'accept', 'reason': 'ok'}}

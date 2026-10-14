@@ -37,7 +37,7 @@ def run(root, producer_outputs, reviewer_outputs):
 
 
 def accept(*slugs, coverage_decision='accept', topics=()):
-    return {'cards': [{'slug': s, 'decision': 'accept', 'reason': 'fine'} for s in slugs],
+    return {'cards': [{'slug': s, 'decision': 'accept', 'reason': 'fine', 'overlap': 'distinct'} for s in slugs],
             'new_topics': [{**{k: t[k] for k in ('domain', 'pillar', 'name')}, 'decision': 'accept', 'reason': 'ok'}
                            for t in topics],
             'coverage': {'decision': coverage_decision, 'reason': 'checked against the chunk'}}

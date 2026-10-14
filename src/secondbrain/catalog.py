@@ -190,6 +190,15 @@ def relation_types(catalog: dict) -> list:
     return rels
 
 
+def open_relation_types(catalog: dict, domain) -> list:
+    """The relation types a card of ``domain`` may hold: ``relation_types`` (open to every domain)
+    plus the words ``domain_relations`` opens to that domain only."""
+    rels = list(catalog.get('relation_types') or [])
+    extra = (catalog.get('domain_relations') or {}).get(domain) if isinstance(domain, str) else None
+    rels += [w for w in extra or [] if isinstance(w, str) and w not in rels]
+    return rels
+
+
 def relation_meanings(catalog: dict, types=None, language: str | None = None) -> dict:
     """``{type: meaning}`` in the form "A <type> B ...", where A holds the relation and B is its target.
 

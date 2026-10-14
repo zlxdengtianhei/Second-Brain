@@ -46,12 +46,17 @@ class Service:
                 issues.append({'code': 'catalog_invalid', 'path': layouts.of(self.root).catalog, 'detail': str(exc)})
             else:  # what `sb refresh` reports about the maps (counts only; it lists each one)
                 map_issues = Counter(i['code'] for i in build_mocs(s).issues)
+        from .pipelines.ingest import open_conflicts
+        conflicts = open_conflicts(self.root, s)
         return {'cards': len(s.cards), 'missing_classification': sum(missing.values()),
                 'missing_by_domain': dict(sorted(missing.items())), 'issues': issues,
                 'map_issues': dict(sorted(map_issues.items())),
                 **({'map_issues_hint': 'sb refresh lists each one'} if map_issues else {}),
                 'snapshot_fingerprint': s.fingerprint, 'inbox': dict(sorted(inbox_counts.items())),
                 'pending_items': sum(i.get('pending') or 0 for i in items if i['status'] == 'partial'),
+                'conflicts': conflicts,
+                **({'conflicts_hint': 'new and existing cards disagree here; each stays listed until the existing '
+                                      f'card\'s text changes ({layouts.of(self.root).conflicts})'} if conflicts else {}),
                 'review': review, 'jobs': jobs.list_jobs(self.root)}
 
     def job_show(self, job_id: str) -> dict:
