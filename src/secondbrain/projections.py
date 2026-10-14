@@ -245,7 +245,7 @@ def entry_projection(snapshot, today: date, *, final_paths=(), removed_paths=(),
     elif reviews_available():
         review_line = T['review_missing'].format(date=today.isoformat())
     else:
-        review_line = T['review_no_extra']
+        review_line = T['review_no_extra'].format(install=labels.install_hint('review', labels.language()))
     home = [line.format(inbox=lay.inbox, review_link=review_line) for line in T['home']] + ['']
     if lay.entry_docs:
         home += [' · '.join(f'[[{name[:-3]}]]' for name in lay.entry_docs), '']
@@ -332,7 +332,7 @@ def _projection_files(snapshot, today, *, reviews, entries, refresh_mocs=False, 
         # `sb daily` without the review extra: write HOME and the docs, say why the review page is missing.
         reviews = False
         skipped.append({'code': 'review_extra_missing',
-                        'detail': 'The daily review page needs the review extra: pip install "secondbrain[review]"'})
+                        'detail': f'The daily review page needs the review extra: {labels.install_hint("review")}'})
     moc = build_mocs(snapshot) if refresh_mocs else None
     review_targets = ({review_page(lay, today),
                        f'{lay.projections}/review_state_{today}.json',

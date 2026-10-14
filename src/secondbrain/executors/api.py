@@ -71,7 +71,8 @@ class ApiExecutor:
         try:
             import httpx
         except ImportError as exc:  # pragma: no cover - depends on the install
-            raise RuntimeError('The API executor needs httpx: pip install "secondbrain[api]"') from exc
+            from ..labels import install_hint
+            raise RuntimeError(f'The API executor needs httpx: {install_hint("api")}') from exc
         return httpx.Client(timeout=self.endpoint.timeout_s, transport=self._transport)
 
     def run(self, task: Task) -> Result:

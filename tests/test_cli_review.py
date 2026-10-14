@@ -11,6 +11,7 @@ from secondbrain import cli  # noqa: E402
 from secondbrain import layout as layouts  # noqa: E402
 from secondbrain.review_registry import question_id  # noqa: E402
 from secondbrain.vault import read_snapshot  # noqa: E402
+from tests.helpers import CLOCKS, pin_clock, without_review_extra  # noqa: E402
 from tests.ingest_helpers import build_ingest_vault  # noqa: E402
 from tests.test_ingest import run_default  # noqa: E402
 
@@ -115,9 +116,13 @@ def sb_commands(text):
     return [shlex.split(c)[1:] for c in re.findall(r'`(sb [^`]+)`', text)]
 
 
-def test_the_command_homes_hint_names_makes_the_page_and_links_it(vault, capsys):
-    from secondbrain import labels, projections, reviews
-    day = reviews.learning_date()
+@pytest.mark.parametrize('moment, review_day, calendar_day', CLOCKS)
+def test_the_command_homes_hint_names_makes_the_page_and_links_it(vault, capsys, monkeypatch, moment, review_day,
+                                                                  calendar_day):
+    from datetime import date
+    from secondbrain import labels, projections
+    pin_clock(monkeypatch, moment)
+    day = date.fromisoformat(review_day)
     page = projections.review_page(layouts.of(vault), day)
     assert not (vault / page).exists()
     code, _, err = run(capsys, vault, 'docs', '--apply')
@@ -132,40 +137,41 @@ def test_the_command_homes_hint_names_makes_the_page_and_links_it(vault, capsys)
     assert (vault / page).is_file() and f'[[{page[:-3]}|Open the review page of {day}]]' in home and hint not in home
 
 
-def test_a_page_made_after_midnight_is_the_review_day_of_sb_review_queue(vault, capsys, monkeypatch):
+@pytest.mark.parametrize('moment, review_day, calendar_day', CLOCKS)
+def test_the_daily_page_by_default_is_the_review_day_of_sb_review_queue(vault, capsys, monkeypatch, moment, review_day,
+                                                                       calendar_day):
     import re
-    from datetime import datetime
-    from secondbrain import reviews
-    night = datetime.fromisoformat('2026-10-14T01:00:00+02:00')  # before the 04:00 start of the next review day
-    real = reviews.now_local
-    monkeypatch.setattr(reviews, 'now_local', lambda value=None: night if value is None else real(value))
+    night = pin_clock(monkeypatch, moment)  # after midnight the review day is still the day before
     code, queue, err = run(capsys, vault, 'review', 'queue', '--now', night.isoformat())
-    assert code == 0 and queue['today'] == '2026-10-13', err
+    assert code == 0 and queue['today'] == review_day, err
     studied = queue['cards'][0]['id']
     run(capsys, vault, 'review', 'log', '--card', studied, '--rating', '1', '--device', 'cli-test',
-        '--now', '2026-10-13T21:00:00+02:00')
+        '--now', '2030-01-01T21:00:00+01:00')
     code, queue, _ = run(capsys, vault, 'review', 'queue', '--now', night.isoformat())
     code, result, err = run(capsys, vault, 'daily', '--apply')  # no --date: the current review day
-    assert code == 0 and result['date'] == '2026-10-13', err
-    page = (vault / '50_Reviews/Daily review 2026-10-13.md').read_text(encoding='utf-8')
+    assert code == 0 and result['date'] == review_day, err
+    page = (vault / f'50_Reviews/Daily review {review_day}.md').read_text(encoding='utf-8')
     listed = re.findall(r'^- \[\[([^|\]]+)\|', page, re.M)
     assert listed == [c['path'][:-3] for c in queue['cards']]
-    assert 'review day 2026-10-13 (days start at 04:00)' in page
+    assert f'review day {review_day} (days start at 04:00)' in page
 
 
 def test_without_the_review_extra_daily_writes_home_and_today_explains(vault, capsys, monkeypatch):
-    from secondbrain import reviews
-
-    def missing():
-        raise reviews.ReviewExtraMissing('Review commands need the review extra: pip install "secondbrain[review]"')
-    monkeypatch.setattr(reviews, '_registry', missing)
+    from secondbrain import labels
+    without_review_extra(monkeypatch)
+    pin_clock(monkeypatch, '2030-01-02T01:00:00+01:00')
+    install = labels.install_hint('review')
+    assert install == 'run `pip install -e ".[review]"` in your Second-Brain folder (the one `sb` was installed from)'
     code, _, err = run(capsys, vault, 'today', '--apply')
-    assert code == 2 and 'secondbrain[review]' in err
+    assert code == 2 and install in json.loads(err)['error']
     (vault / 'HOME.md').write_text('# old home\n', encoding='utf-8')  # the ingest left HOME current
     code, result, err = run(capsys, vault, 'daily', '--apply')
     assert code == 0, err
     assert 'HOME.md' in result['applied_paths'] and not any('50_Reviews' in p for p in result['applied_paths'])
-    assert [i['code'] for i in result['issues']] == ['review_extra_missing']
+    assert [i['code'] for i in result['issues']] == ['review_extra_missing'] and install in result['issues'][0]['detail']
+    home = (vault / 'HOME.md').read_text(encoding='utf-8')
+    assert labels.pages('en')['review_no_extra'].format(install=install) in home
+    assert 'Counted on 2030-01-02:' in home  # without the review registry there is no review day: the calendar date
 
 
 def test_import_spaced_repetition_schedules(vault, capsys):

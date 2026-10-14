@@ -83,3 +83,29 @@ def submit_as(root: Path, job_id: str, payload: dict, role: str, *, chunk: str |
 def submit_reviewed(root: Path, job_id: str, proposal: dict, review: dict, **kwargs):
     submit_as(root, job_id, proposal, "producer", **kwargs)
     return submit_as(root, job_id, review, "reviewer", **kwargs)
+
+
+def pin_clock(monkeypatch, moment: str):
+    """Fix the clock that review days and calendar dates are read from (``reviews.now_local``).
+
+    Use far-off dates, so a stray ``date.today()`` in the code cannot match by chance.
+    """
+    from datetime import datetime
+    from secondbrain import reviews
+    fixed = datetime.fromisoformat(moment)
+    real = reviews.now_local
+    monkeypatch.setattr(reviews, 'now_local', lambda value=None: fixed if value is None else real(value))
+    return fixed
+
+
+#: (clock, review day, calendar day): in the day, and after midnight but before the 04:00 day start.
+CLOCKS = [('2030-01-02T10:00:00+01:00', '2030-01-02', '2030-01-02'),
+          ('2030-01-02T01:00:00+01:00', '2030-01-01', '2030-01-02')]
+
+
+def without_review_extra(monkeypatch):
+    """Make ``from secondbrain import review_registry`` fail, as without fsrs."""
+    import sys
+    import secondbrain
+    monkeypatch.delattr(secondbrain, 'review_registry', raising=False)
+    monkeypatch.setitem(sys.modules, 'secondbrain.review_registry', None)

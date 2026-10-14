@@ -73,3 +73,19 @@ def test_comments_and_docstrings_are_english():
                 if CJK.search(doc):
                     found.append(f'{rel}:{node.body[0].lineno}: docstring {doc[:60]!r}')
     assert found == []
+
+
+def test_install_hints_never_name_the_pypi_package():
+    """`secondbrain` on PyPI is someone else's package: hints install the extras from the checkout."""
+    root = PACKAGE.parents[1]
+    wrong = re.compile(r'pip install\s+["\']?secondbrain\b')
+    found = []
+    for path in sorted(PACKAGE.rglob('*.py')) + sorted((root / 'skills').rglob('*.md')) + \
+            sorted((PACKAGE / 'prompts').rglob('*.md')):
+        for number, line in enumerate(path.read_text(encoding='utf-8').splitlines(), 1):
+            if wrong.search(line):
+                found.append(f'{path.relative_to(root)}:{number}: {line.strip()[:80]}')
+    assert found == []
+    from secondbrain import labels
+    for language in ('en', 'zh'):
+        assert 'pip install -e ".[review]"' in labels.install_hint('review', language)

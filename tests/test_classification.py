@@ -5,7 +5,8 @@ import pytest
 from secondbrain import classification as c, jobs
 from secondbrain.store import Conflict
 from secondbrain.vault import parse_note
-from tests.helpers import build_vault, submit_reviewed, DOMAIN, EXISTING, PILLAR, TOPIC, MOC
+from tests.helpers import (CLOCKS, build_vault, pin_clock, submit_reviewed, DOMAIN, EXISTING, PILLAR,
+                           TOPIC, MOC)
 
 
 def ready(tmp_path, *, classified=False):
@@ -171,3 +172,13 @@ def test_stale_projection_cannot_overwrite_another_completed_batch(tmp_path, mon
     assert b'pillar: null' in path.read_bytes()
     assert b'pillar: null' not in other.read_bytes()
     assert 'without pillar or topic: 1.' in (root / 'HOME.md').read_text()
+
+
+
+@pytest.mark.parametrize('moment, review_day, calendar_day', CLOCKS)
+def test_classification_writes_home_for_the_review_day(tmp_path, monkeypatch, moment, review_day, calendar_day):
+    pin_clock(monkeypatch, moment)
+    root, path, row, review = ready(tmp_path)
+    submit_reviewed(root, 'classify', {'items': [row]}, review)
+    assert c.apply(root, 'classify')['classified_count'] == 1
+    assert f'Counted on {review_day}:' in (root / 'HOME.md').read_text(encoding='utf-8')

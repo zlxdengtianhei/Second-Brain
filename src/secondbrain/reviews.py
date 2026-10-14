@@ -30,7 +30,8 @@ def _registry():
     try:
         from . import review_registry
     except ImportError as exc:  # fsrs is an optional dependency
-        raise ReviewExtraMissing('Review commands need the review extra: pip install "secondbrain[review]"') from exc
+        from .labels import install_hint
+        raise ReviewExtraMissing(f'Review commands need the review extra: {install_hint("review")}') from exc
     return review_registry
 
 

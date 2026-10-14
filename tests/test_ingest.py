@@ -22,7 +22,7 @@ from secondbrain.pipelines import ingest
 from secondbrain.service import refresh
 from secondbrain.store import digest, recover
 from secondbrain.vault import parse_note, read_snapshot
-from tests.helpers import CUSTOM_LAYOUT, DOMAIN, EXISTING, MOC, PILLAR, TOPIC
+from tests.helpers import CLOCKS, CUSTOM_LAYOUT, DOMAIN, EXISTING, MOC, PILLAR, TOPIC, pin_clock
 from tests.ingest_helpers import (ALL_REASONS, CARDS, DIMMING_IR, FIXED_DIMMING, NEW_TOPIC, OTHER_MOC,
                                   SOURCE_NAME, build_ingest_vault, diagram_answer, first_candidate,
                                   first_review, packet_in, repair_candidate, repair_review, scripted, tree,
@@ -681,3 +681,21 @@ def test_home_counts_folders_and_cards_as_the_ingest_leaves_the_vault(tmp_path):
     assert table['00_Inbox'] == 0  # the source has moved to 40_Sources in the same transaction
     cards = int(re.search(r'\*\*cards: ([\d,]+)\*\*', home)[1].replace(',', ''))  # the inventory line
     assert cards == len(read_snapshot(root).cards) == table['10_Knowledge']
+
+
+
+@pytest.mark.parametrize('moment, review_day, calendar_day', CLOCKS)
+def test_ingest_dates_home_by_the_review_day_and_cards_by_the_calendar(tmp_path, monkeypatch, moment, review_day,
+                                                                        calendar_day):
+    from datetime import date
+    from secondbrain import labels
+    pin_clock(monkeypatch, moment)
+    root = build_ingest_vault(tmp_path / 'vault')
+    config.activate(replace(config.current(), card_language='en'))
+    _, result, _ = run_default(root, layouts.DEFAULT)
+    assert result['status'] == 'applied'
+    home = (root / 'HOME.md').read_text(encoding='utf-8')
+    assert f'Counted on {review_day}:' in home
+    assert labels.pages('en')['review_missing'].format(date=review_day) in home
+    snap = read_snapshot(root)
+    assert {snap.cards[p['id']].fm['created'] for p in result['produced']} == {date.fromisoformat(calendar_day)}

@@ -133,7 +133,9 @@ PAGES = {
                        '并把这里改成当天的链接。',
         'review_missing': '{date} 的复习页还没有生成：运行 `sb daily --apply`，它生成复习页并在这里加上链接'
                           '（不依赖插件）。',
-        'review_no_extra': '复习页需要 review 扩展：`pip install "secondbrain[review]"`，然后运行 `sb daily --apply`。',
+        'review_no_extra': '复习页需要 review 扩展：{install}，然后运行 `sb daily --apply`。',
+        # the project is installed from its folder; a PyPI package with the same name is someone else's
+        'install': '在 Second-Brain 目录（安装 `sb` 的那个目录）里运行 `pip install -e ".[{extra}]"`',
         'domains_title': '## 领域入口',
         'map_line': '- [[{path}|{title}]] · {n} 张',
         'stats_title': '## 库存',
@@ -196,8 +198,8 @@ PAGES = {
                        "`sb daily --apply` makes each day's page and points this link to it.",
         'review_missing': 'The review page of {date} has not been made yet: run `sb daily --apply`; it makes '
                           'the page and adds the link here (works without the plugin).',
-        'review_no_extra': 'The review page needs the review extra: `pip install "secondbrain[review]"`, '
-                           'then run `sb daily --apply`.',
+        'review_no_extra': 'The review page needs the review extra: {install}, then run `sb daily --apply`.',
+        'install': 'run `pip install -e ".[{extra}]"` in your Second-Brain folder (the one `sb` was installed from)',
         'domains_title': '## Maps',
         'map_line': '- [[{path}|{title}]] · cards: {n}',
         'stats_title': '## Inventory',
@@ -310,6 +312,11 @@ def check_language(snapshot) -> None:
         f'To keep {vault}, remove `language` from [cards] (the vault\'s language is then used). '
         f'To switch the vault to {want}, run `sb language --set {want}`, then `sb refresh --apply` and '
         f'`sb docs --apply` to rewrite the generated pages.')
+
+
+def install_hint(extra: str, lang: str | None = 'en') -> str:
+    """How to add an optional extra: a path install from the checkout, never a PyPI name."""
+    return PAGES[lang or language()]['install'].format(extra=extra)
 
 
 def moc(lang: str | None = None) -> dict:

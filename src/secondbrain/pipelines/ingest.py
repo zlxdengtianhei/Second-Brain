@@ -23,7 +23,7 @@ import json
 import re
 import unicodedata
 from dataclasses import replace
-from datetime import date, datetime, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 
 import yaml
@@ -1263,7 +1263,8 @@ def apply_job(root: Path, job_id: str, settled: list[dict] | None = None) -> dic
     source = packet['source']
     source_rel = lay.source_path(source['sha256'], source['filename'])
     source_raw = base64.b64decode(source['raw_b64'], validate=True)
-    today = date.today()
+    from ..reviews import now_local
+    today = now_local().date()  # cards are dated by the calendar; HOME below uses the review day
     inverse = packet['catalog'].get('inverse_relations') or {}
     # relations: resolve slugs, drop links to cards that are not written
     rels: dict = {s: [] for _, s, _ in accepted}

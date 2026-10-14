@@ -78,13 +78,16 @@ def test_daily_apply_through_real_cli(tmp_path):
     assert not (root / "HOME.md").exists()
     assert jobs.list_jobs(root) == []
 
+    from secondbrain.reviews import learning_date
+    days = {learning_date().isoformat()}  # the review day (from 04:00), read around the run
     ran = subprocess.run([VENV_PYTHON, "-m", "secondbrain", "--vault", str(root),
                           "daily", "--apply"], capture_output=True, text=True, cwd=root)
+    days.add(learning_date().isoformat())
     assert ran.returncode == 0, ran.stderr
     applied = json.loads(ran.stdout)
     assert applied["status"] == "applied"
     assert applied["kind"] == "projection"
-    assert applied["date"] == date.today().isoformat()
+    assert applied["date"] in days
     job_id = applied["job_id"]
     applied_paths = applied["applied_paths"]
     assert applied_paths and "HOME.md" in applied_paths

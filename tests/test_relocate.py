@@ -14,7 +14,7 @@ import pytest
 from secondbrain import classification as cls, jobs, relocate as r, store
 from secondbrain.store import Conflict
 from secondbrain.vault import parse_note, read_snapshot
-from tests.helpers import submit_reviewed
+from tests.helpers import CLOCKS, pin_clock, submit_reviewed
 
 SRC, DST = 'attention', 'transformer'
 SRC_MOC, DST_MOC = '注意力 MOC', 'Transformer MOC'
@@ -318,3 +318,21 @@ def test_prior_domain_suggestion_cannot_authorize_changed_card(tmp_path):
     p.write_bytes(p.read_bytes() + b'changed meaning')
     with pytest.raises(Conflict, match='card behind a reviewed move suggestion has changed'):
         r.prepare(root, source_jobs=['src-cls'], job_id='relo')
+
+
+
+@pytest.mark.parametrize('moment, review_day, calendar_day', CLOCKS)
+def test_a_move_writes_home_and_the_review_page_for_the_review_day(tmp_path, monkeypatch, moment, review_day,
+                                                                   calendar_day):
+    from secondbrain import layout, projections
+    pin_clock(monkeypatch, moment)
+    root = build_vault(tmp_path)
+    source_job(root)
+    r.prepare(root, source_jobs=['src-cls'], job_id='relo')
+    relocation_proposal(root)
+    result = r.apply(root, 'relo')
+    assert result['status'] == 'applied'
+    from datetime import date
+    page = projections.review_page(layout.of(root), date.fromisoformat(review_day))
+    assert page in result['applied_paths']
+    assert f'Counted on {review_day}:' in (root / 'HOME.md').read_text(encoding='utf-8')
