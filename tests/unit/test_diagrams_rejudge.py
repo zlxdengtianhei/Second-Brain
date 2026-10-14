@@ -620,6 +620,21 @@ def test_prune_removes_a_delete_tier_diagram_only_on_the_audits_word():
     assert prune.apply(Path("/nonexistent"), prune.plan({"d.md": tiers["d.md"]}))[0]["status"] == "unchanged"
 
 
+def test_prune_reads_raw_audit_rows_by_verdict_and_category():
+    """V3 D1: old-audit-apply turns any other pair into keep, so only a raw or hand-written file reaches this check."""
+    tiers = {"d.md": {**TIERS["d.md"], "kind": "concept", "direction": "LR", "width": 900}}
+
+    def act(**verdict):
+        [a] = prune.plan(tiers, audits=[{"ref": "d.md", **verdict}])
+        return a["action"], a["why"]
+    assert act(verdict="remove", category="restates") == ("delete_section", "le2_edges; audit:restates")
+    assert act(verdict="remove", category="misleading") == ("delete_section", "le2_edges; audit:misleading")
+    assert act(verdict="remove", category="useful") == ("direction_tb", "le2_edges; audit:useful; width 900")
+    assert act(verdict="remove", category="other") == ("direction_tb", "le2_edges; audit:unsure; width 900")
+    assert act(verdict="remove") == ("direction_tb", "le2_edges; audit:unsure; width 900")
+    assert act(verdict="keep", category="restates") == ("direction_tb", "le2_edges; audit:restates; width 900")
+
+
 def test_the_delete_tier_reaches_the_old_diagram_audit(tmp_path, capsys):
     shutil.copytree(VAULT, tmp_path / "v")
     out = tmp_path / "audit"
