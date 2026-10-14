@@ -37,7 +37,7 @@
 | V2 | 规模：flow 和 structure 4 到 9 个节点（有两条路径汇合时下限为 3 个），state 3 到 8 个状态，sequence 2 到 3 个参与者（第四个参与者会超出笔记宽度） | 每个 IR |
 | V3 | 每个节点、每条带标签的连线和每条消息都引用卡片确有的部分（`E`、`P1`..`Pn`） | 每个 IR |
 | V4 | 每个标签至少一半的词能在被引文字里找到（公式名和符号也算；`yes`、`no`、`start`、`end` 等少数词不受此限） | 每个 IR |
-| V5 | 图要增加结构：flow 里有分支、汇合或循环；structure 里有汇合、循环，或三条及以上连接（单纯的链必须引用三个或更多部分）；state 里有三条或更多状态转换；sequence 里有三条或更多消息；被引文字说明工作会重复时，flow 要画出回边（如 repeat、loop、until、iterate、重复、循环、直到、不断、轮询；否定说法如「不会重复」、被避免的重复或作为故障的循环如「避免重复」「死循环」、指重复数据的如「重复项」、名称如「循环队列」都不算） | 每个 IR |
+| V5 | 图要增加结构：flow 里有分支、汇合或循环；structure 里有汇合、循环，或三条及以上连接（单纯的链必须引用三个或更多部分）；state 里有三条或更多状态转换；sequence 里有三条或更多消息；被引文字说明工作会重复时，flow 要画出回边（如 repeat、loop、until、iterate、重复、循环、直到、不断、轮询；否定说法如「不会重复」、被避免的重复或作为故障的循环如「避免重复」「死循环」、指重复数据的如「重复项」、表示趋势的如「不断衰减」、指产品迭代的如「持续迭代」、名称如「循环队列」都不算；报错时只在文字描述的是这项工作本身重复时才要求画回边，否则要求引用别的文字或跳过） | 每个 IR |
 | V6 | 标签宽度：节点标签最多 20 个单位，判断节点标签 10，连线标签 14，消息 20（码位在 U+2E80 及以上的字符算 1，例如中日韩字符或全角标点；其他字符算 0.5） | 每个 IR |
 | V7 | structure、state 和 sequence 的连接都有标签；从判断节点出发的连线写明条件；一个判断节点有两个或更多出口 | 每个 IR |
 | V8 | 卡片有两条或更多命题时，它的图要引用两个或更多部分 | 每个 IR |
@@ -79,11 +79,11 @@ flowchart TB
 |---|---|
 | `schema` | 输出 IR 的 JSON Schema |
 | `audit-extract VAULT OUT` | 读取每张卡片（只读），写入 `cards.jsonl`；读取每个 Mermaid 代码块，写入 `blocks.jsonl`（`--language` 选择用哪套卡片小节名） |
-| `audit-repair OUT --checker tools/mermaid_check/check.mjs` | 改写解析失败的旧流程图：给每个标签加引号，把用了 Mermaid 关键字的节点 id 改名，每行只写一条语句，不改标签的内容。它渲染改写结果，写入 `repairs.jsonl` |
+| `audit-repair OUT --checker tools/mermaid_check/check.mjs` | 改写解析失败的旧流程图：给每个标签加引号（标签里的 `"` 写成 `#quot;`），把用了 Mermaid 关键字或符号的节点 id 改名，把 `A -- 文字 --> B` 改成竖线之间的标签，每行只写一条语句。它不改标签的内容。它渲染改写结果，写入 `repairs.jsonl` |
 | `audit-tier OUT` | 读取 `cards.jsonl`、`checks.jsonl` 里的 `tools/mermaid_check` 结果，以及存在时的 `repairs.jsonl`（修复后能渲染的图算作能渲染），把每张图分进一个档：`keep`、`delete`、`review` 或 `redraw`（`--delete-domain` 把整个领域分进 `delete`）。它写出 `tiers.json`，其中还记下每张旧流程图的标签和边，供 `writeback` 的重画规则使用。由缺少这些信息的 `tiers.json` 生成的池，`writeback` 会拒绝：重新运行 `audit-tier`，再运行 `pool` |
-| `prune VAULT OUT` | 删除 `delete` 档卡片的图小节（有三条或更多命题的机制卡改为进入复核池），把保留下来的、从左到右排布且过宽的图改成从上到下，并为只在 `audit-repair` 后才能渲染的保留图写入修复后的源码。带 `--checker` 时，它渲染改了方向或修复过的图，并列出仍宽于 700 px 的图 |
+| `prune VAULT OUT` | 删除 `delete` 档卡片的图小节（有三条或更多命题的机制卡改为进入复核池），把保留下来的、从左到右排布且过宽的图改成从上到下，并为只在 `audit-repair` 后才能渲染的保留图写入修复后的源码（方向是 `LR` 或 `RL` 且宽于 700 px 时，同时改成从上到下）。带 `--checker` 时，它渲染改了方向或修复过的图，并列出仍宽于 700 px 的图 |
 | `pool OUT` | 列出要重新判断的卡片：`review` 和 `redraw` 两档，加上 prune 留待复核的 `delete` 档卡片（`--refs FILE` 只取该文件里的卡片引用） |
-| `packets CARDS OUT` | 按每批十张（`--batch`）生成给模型的请求，并把预筛掉的卡片写入 `pregated.jsonl`。旧图能渲染的卡片会附上旧图的源码；说明要求只在新图能明显更好地表达本质里的关系时才画新图 |
+| `packets CARDS OUT` | 按每批十张（`--batch`）生成给模型的请求，并把预筛掉的卡片写入 `pregated.jsonl`。旧图能渲染的卡片会附上旧图的源码（修复过的就附修复后的源码）；说明要求只在新图能明显更好地表达本质里的关系时才画新图 |
 | `apply CARDS ANSWERS... --out OUT` | 读取模型答案，为每张卡做决定：`draw`（附 Mermaid）、`rewrite`（写出一个重写任务文件 `rewrite-NNN.json`）或 `skip`，结果写入 `outcomes.jsonl` 和 `mermaid.jsonl`。每份答案命名为 `X.answer.json`，放在它所回答的任务文件 `X.json` 旁边。`--checker tools/mermaid_check/check.mjs` 渲染每张新图，并按 V9、实测宽度（V14）和 V15 把关 |
 | `old-audit-packets POOL OUT` | 生成请求：对每张会保留旧图的卡片，询问这张旧图是在复述文字、有误导，还是有用 |
 | `old-audit-apply ANSWERS... --out OUT` | 读取这些答案（`old-audit-NNN.answer.json`，放在 `old-audit-NNN.json` 旁边），写入 `old_audit_outcomes.jsonl`；只有带 `restates` 或 `misleading` 的 `remove` 才删除旧图，其他答案都保留旧图 |
