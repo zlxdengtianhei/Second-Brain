@@ -61,6 +61,7 @@ Useful while a job runs:
 - `sb job show <job_id>`: state, pending items with reasons, run records;
 - `sb job packet <job_id> --role producer|reviewer [--chunk c01]`: the next hand-off again (the same open run is returned until it is submitted);
 - `sb job abandon <job_id> --run-id <run_id> --reason "<why>"`: give up a run whose sub-agent failed; the next `sb job packet` starts a new run.
+- `sb job skip-source-check <job_id> --reason "<why>"`: when the source check's answers keep being refused (its sub-agents stop after two failed corrections), give the check up once two answers were rejected or runs given up; the cards are written as the chunk reviews left them, without the merging and linking across chunks. Report it to the user.
 
 ## 5. Report to the user
 
@@ -70,7 +71,7 @@ From the final state report:
 - cards still pending, with the reviewer's reasons (`pending`), and for a retry child whether it made progress (`retry_progress`);
 - material that needs a new pillar or domain (`needs_taxonomy`);
 - duplicates of existing cards (`duplicates`) and skipped passages (`out_of_scope`);
-- what the source check settled (`source_check`): cards not written because another card of the source holds them (`merged`, with `into`), cards written as needs-review because they overlap one (`overlap`), and new topics filed under another new topic (`refiled_topics`). `status: skipped` means the check's answer kept failing and the cards were written as the chunk reviews left them;
+- what the source check settled (`source_check`): cards not written because another card of the source makes the same claim (`merged`, with `into` and what was `carried` over), links it added between cards that belong together (`added_links`), cards it left without links and why (`alone`), and new topics filed under another new topic (`refiled_topics`). `status: skipped` means the check's answers kept failing (by itself in API mode, by `sb job skip-source-check` in host mode) and the cards were written as the chunk reviews left them;
 - cards written as needs-review because they mostly repeat an existing card (`needs_review`, with `overlap_with`). They stay out of the review queue until the user sets `status: confirmed`; `sb status` counts all such cards and `sb status --needs-review` lists them;
 - links that could not be written (`skipped_relations`: the card, the type, the target and the `reason`). With reason `target card was not written` the target is still pending and a retry adds the link when it writes it; with any other reason no retry will, so the user adds it by hand. A retry child lists every link carried to it once: under `restored_relations` (added, `linked_as` when the new card already links that card another way, `redirected_from` when the target turned out to repeat an existing card) or again under `skipped_relations`;
 - conflicts with existing cards (`conflicts`): what disagrees and with which card. The user settles them; `sb status` lists them until that card's text changes. Do not edit the existing card yourself;

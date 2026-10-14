@@ -170,7 +170,13 @@ def test_two_new_topics_for_one_subject_become_one(tmp_path):
 
 
 def test_an_answer_that_keeps_failing_validation_skips_the_check(tmp_path):
-    root, job_id, result, seen = run(tmp_path, lambda packet: {'cards': [], 'new_topics': []})
+    asked = []
+
+    def bad(packet):
+        asked.append(1)
+        assert len(asked) < 5, 'the check is asked again and again'  # fail, do not hang, if the bound breaks
+        return {'cards': [], 'new_topics': []}
+    root, job_id, result, seen = run(tmp_path, bad)
     assert result['status'] == 'applied' and len(result['produced']) == 4
     assert result['source_check']['status'] == 'skipped' and 'failed validation' in result['source_check']['reason']
     assert len(seen) == 2  # max_repair_rounds = 1: the first answer and one more
@@ -187,7 +193,8 @@ def test_one_chunk_with_cards_needs_no_check(tmp_path):
     assert result['status'] == 'applied' and 'source_check' not in result and seen['source_check'] == []
 
 
-def test_host_mode_hands_the_check_to_a_reviewer(tmp_path):
+def host_until_check(tmp_path):
+    """The two-chunk source in host mode up to the source check: (root, job id, its hand-off, submit)."""
     from secondbrain.executors.host import HostExecutor
     root = build_ingest_vault(tmp_path / 'vault')
     settings(chunk_chars=1000)
@@ -201,33 +208,123 @@ def test_host_mode_hands_the_check_to_a_reviewer(tmp_path):
         model = 'gpt-test' if handoff['role'] == 'producer' else 'claude-test'
         return cli.main(['--vault', str(root), 'job', 'submit', job_id, '--role', handoff['role'], '--run-id',
                          handoff['run_id'], '--file', str(path), '--model', model])
-    waiting = ingest.advance(root, job_id, producer=host, reviewer=host)
-    first_round = waiting['handoffs']
+
+    def advance():
+        return ingest.advance(root, job_id, producer=host, reviewer=host)
+    first_round = advance()['handoffs']
     assert len(first_round) >= 2 and all(h['step'] == 'produce' for h in first_round)
     for handoff in first_round:  # all at once, as a coordinator runs them
         packet = packet_in(open(handoff['packet_path'], encoding='utf-8').read())
         assert packet['other_chunks_cards'] == []  # written at once: no chunk sees another's cards
         assert submit(handoff, producer(SimpleNamespace(packet=packet))) == 0
-    for handoff in ingest.advance(root, job_id, producer=host, reviewer=host)['handoffs']:
+    for handoff in advance()['handoffs']:
         assert handoff['step'] == 'review'
         packet = packet_in(open(handoff['packet_path'], encoding='utf-8').read())
         assert submit(handoff, review(SimpleNamespace(packet=packet))) == 0
-    [check] = ingest.advance(root, job_id, producer=host, reviewer=host)['handoffs']
+    [check] = advance()['handoffs']
+    return root, job_id, check, submit, advance
+
+
+def test_host_mode_hands_the_check_to_a_reviewer(tmp_path):
+    root, job_id, check, submit, advance = host_until_check(tmp_path)
     assert check['role'] == 'reviewer' and check['chunk'] == source_check.SLOT and check['step'] == 'source_check'
-    assert ingest.packet_for(root, job_id, role='reviewer', chunk=None, executor=host)['run_id'] == check['run_id']
+    from secondbrain.executors.host import HostExecutor
+    assert ingest.packet_for(root, job_id, role='reviewer', chunk=None, executor=HostExecutor())['run_id'] == \
+        check['run_id']
     text = open(check['packet_path'], encoding='utf-8').read()
     assert 'merge cards that repeat each other' in text
     packet = packet_in(text)
     assert submit(check, {'cards': [], 'new_topics': []}) != 0  # every card needs a decision
     assert submit(check, keep_all(packet, **{'arrival-order': {'decision': 'same', 'with': 'queue-order',
                                                                'reason': 'same point'}})) == 0
-    [diagram] = ingest.advance(root, job_id, producer=host, reviewer=host)['handoffs']
+    [diagram] = advance()['handoffs']
     request = packet_in(open(diagram['packet_path'], encoding='utf-8').read())
     assert 'arrival-order' not in [c['ref'] for c in request['cards']]  # no diagram for a card that is not written
     assert submit(diagram, diagram_answer(request)) == 0
-    done = ingest.advance(root, job_id, producer=host, reviewer=host)
+    done = advance()
     assert done['status'] == 'applied' and len(done['produced']) == 3
     assert [m['slug'] for m in done['source_check']['merged']] == ['arrival-order']
+
+
+def test_host_mode_gives_up_a_check_that_keeps_failing_only_after_two_failures(tmp_path, capsys):
+    # V1 C6: a refused answer never reached the failure count, so only `sb job reset` (all chunk runs lost) was left
+    root, job_id, check, submit, advance = host_until_check(tmp_path)
+
+    def skip():
+        return cli.main(['--vault', str(root), 'job', 'skip-source-check', job_id, '--reason', 'answers refused'])
+    assert submit(check, {'cards': [], 'new_topics': []}) != 0
+    capsys.readouterr()
+    assert skip() != 0 and 'after 2 rejected answers or given-up runs' in capsys.readouterr().err
+    assert submit(check, {'cards': [{'slug': 'nope', 'decision': 'keep'}], 'new_topics': []}) != 0
+    assert jobs.load_run(root, job_id, check['run_id'])['rejected_submits'] == 2
+    assert skip() == 0
+    assert jobs.load_run(root, job_id, check['run_id'])['status'] == 'abandoned'
+    [diagram] = advance()['handoffs']  # the check is not handed out again
+    assert diagram['step'] == 'diagram'
+    assert submit(diagram, diagram_answer(packet_in(open(diagram['packet_path'], encoding='utf-8').read()))) == 0
+    done = advance()
+    assert done['status'] == 'applied' and len(done['produced']) == 4
+    assert done['source_check']['status'] == 'skipped' and 'answers refused' in done['source_check']['reason']
+    assert skip() != 0  # nothing left to skip
+
+
+def test_a_carried_link_to_a_card_the_retry_merges_goes_to_the_card_it_repeats(tmp_path):
+    # V1: a retry's merged_into was untested (a mutant that ignored it survived)
+    root = build_ingest_vault(tmp_path / 'vault')
+    settings(chunk_chars=1000)
+    (root / '00_Inbox' / SOURCE_NAME).write_text(SOURCE, encoding='utf-8')
+    pending = {'queue-order', 'arrival-order'}
+    whole = produce()
+
+    def parent_producer(task):
+        answer = whole(task)
+        if '.r' in task.chunk:  # the repair round offers only the cards the review sent back
+            answer['cards'] = [c for c in answer['cards'] if c['slug'] in pending]
+            answer['coverage'] = [r for r in answer['coverage'] if set(r.get('cards') or []) & pending]
+        return answer
+
+    def parent_reviewer(task):
+        if is_source_check_task(task):
+            return keep_all(task.packet)
+        out = review(task)
+        for row in out['cards']:
+            if row['slug'] in pending:
+                row.update(decision='revise', reason='say it more exactly')
+        return out
+    job = ingest.prepare(root, root / '00_Inbox' / SOURCE_NAME)
+    parent = ingest.advance(root, job['job_id'], producer=FakeExecutor('gpt-test', responder=with_diagrams(parent_producer)),
+                            reviewer=FakeExecutor('claude-test', responder=parent_reviewer))
+    assert parent['status'] == 'partial' and {p['slug'] for p in parent['pending']} == pending
+    cost = next(p['id'] for p in parent['produced'] if p['slug'] == 'lit-marker-cost')
+    assert parent['skipped_relations'] == [{'from': cost, 'type': 'depends_on', 'target_slug': 'arrival-order',
+                                            'reason': 'target card was not written'}]
+    lantern = next(p['id'] for p in parent['produced'] if p['slug'] == 'lantern-queue')
+    child = ingest.retry(root, job['job_id'])
+
+    def child_producer(task):
+        answer = whole(task)
+        answer['cards'] = [{**c, 'relations': [{**r, 'target': lantern} for r in c.get('relations') or []
+                                               if r['target'] == 'lantern-queue']}
+                           for c in answer['cards'] if c['slug'] in pending]
+        answer['coverage'] = [r for r in answer['coverage'] if not r.get('cards') or set(r['cards']) & pending]
+        answer['new_topics'] = []
+        return answer
+
+    def child_reviewer(task):
+        if is_source_check_task(task):
+            return keep_all(task.packet, **{'arrival-order': {'decision': 'same', 'with': 'queue-order',
+                                                              'reason': 'both say the order is kept'}})
+        out = review(task)
+        for row in out['cards']:
+            row['overlap'] = 'distinct'
+        return out
+    done = ingest.advance(root, child['job_id'], producer=FakeExecutor('gpt-test', responder=with_diagrams(child_producer)),
+                          reviewer=FakeExecutor('claude-test', responder=child_reviewer))
+    assert done['status'] == 'applied', done.get('pending')
+    order = next(p['id'] for p in done['produced'] if p['slug'] == 'queue-order')
+    assert done['restored_relations'] == [{'from': cost, 'type': 'depends_on', 'target_slug': 'arrival-order',
+                                           'target': order, 'redirected_from': 'arrival-order'}]
+    assert {'type': 'depends_on', 'target': order} in read_snapshot(root).cards[cost].fm['relations']
 
 
 # --- the answer's form ------------------------------------------------------------------------------
@@ -342,6 +439,18 @@ def test_a_merge_carries_what_the_card_adds_and_a_moved_link_never_makes_a_pair_
     assert kept['a']['source_quotes'] == ['a quote', 'b quote']
     assert report['moved_relations'] == [] and report['merged_into'] == {'b': 'a'}
     assert settled[0]['accepted']['a']['propositions'] == ['a one']  # nothing changed in place
+
+
+def test_a_check_of_other_cards_than_the_chunks_now_accept_is_refused():
+    def card(slug):
+        return {'slug': slug, 'title': slug, 'domain': 'd', 'pillar': 'p', 'topic': 't', 'relations': []}
+    settled = [{'chunk': 'c01', 'accepted': {'a': card('a')}, 'topics': {}},
+               {'chunk': 'c02', 'accepted': {'b': card('b')}, 'topics': {}}]
+    frozen = source_check.frozen_input(settled, {'filename': 'f'}, relation_views={})
+    settled[1]['accepted'] = {'c': card('c')}
+    with pytest.raises(ValueError, match='different set of cards'):
+        source_check.apply(settled, frozen, {'cards': [{'slug': s, 'decision': 'keep'} for s in 'ab'],
+                                             'new_topics': []})
 
 
 def test_links_to_a_merged_card_follow_it_and_a_link_to_the_card_itself_becomes_text():

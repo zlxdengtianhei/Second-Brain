@@ -151,6 +151,9 @@ def parser():
                                               'source; preview unless --apply')
     jprune.add_argument('--days', type=int, default=30, help='Only writes older than this (default 30)')
     jprune.add_argument('--apply', action='store_true', help='Delete them; those writes can no longer be undone')
+    jskip = job_sub.add_parser('skip-source-check', help='Write an ingest job without its source check, after the '
+                                                          "check's answers were rejected or its runs given up")
+    jskip.add_argument('id'); jskip.add_argument('--reason', required=True)
     jabandon = job_sub.add_parser('abandon', help='Give up a run that will not be submitted')
     jabandon.add_argument('id'); jabandon.add_argument('--run-id', required=True)
     jabandon.add_argument('--reason', required=True)
@@ -205,8 +208,11 @@ def _ingest(args, root: Path) -> list:
             results.append(prepared)
             continue
         executors = executors or make_executors(args, root)
-        results.append(ingest.advance(root, prepared['job_id'], producer=executors[0],
-                                      reviewer=executors[1], apply=not args.proposal_only))
+        advanced = ingest.advance(root, prepared['job_id'], producer=executors[0],
+                                  reviewer=executors[1], apply=not args.proposal_only)
+        # a frozen source keeps its placement; say so next to what advance printed (V1 C5)
+        note = {'placement_note': prepared['placement_note']} if prepared.get('placement_note') else {}
+        results.append({**advanced, **note})
     return results
 
 
@@ -221,6 +227,9 @@ def _job(args, root: Path):
         return service.submit(args.id, payload, role=args.role, run_id=args.run_id, model=args.model)
     if args.job_command == 'abandon':
         return jobs.abandon_run(root, args.id, args.run_id, reason=args.reason)
+    if args.job_command == 'skip-source-check':
+        from .pipelines import ingest
+        return ingest.skip_source_check(root, args.id, reason=args.reason)
     if args.job_command == 'prune':
         return jobs.prune(root, days=args.days, apply=args.apply)
     if args.job_command == 'reset':

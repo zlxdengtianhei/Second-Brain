@@ -6,7 +6,7 @@ from dataclasses import replace
 
 import pytest
 
-from secondbrain import cli, config, jobs
+from secondbrain import cli, config, jobs, labels
 from secondbrain import layout as layouts
 from secondbrain.executors import FakeExecutor
 from secondbrain.pipelines import ingest
@@ -145,6 +145,8 @@ def test_a_conflict_with_an_existing_card_is_recorded_and_listed_until_that_card
     assert [(r['with'], r['job_id']) for r in rows] == [(EXISTING, result['job_id'])]
     # the existing card got back links only; its text is as it was
     assert ingest.content_digest(read_snapshot(root).cards[EXISTING]) == ingest.content_digest(existing)
+    # the HOME this write leaves counts the conflict it records (the record is not on disk yet when HOME is made)
+    assert labels.pages()['conflicts'].format(i=4, n=1) in (root / 'HOME.md').read_text(encoding='utf-8')
     assert (root / existing.path).read_bytes() != before
     assert cli.main(['--vault', str(root), 'status']) == 0
     status = json.loads(capsys.readouterr().out)
@@ -330,6 +332,36 @@ def test_a_carried_link_whose_target_is_still_pending_goes_to_the_next_retry(tmp
     assert jobs.read_input(root, grandchild['job_id'])['retry']['skipped_relations'] == [row]
 
 
+def test_a_carried_link_from_a_card_deleted_since_is_listed(tmp_path):
+    root = build_ingest_vault(tmp_path / 'vault')
+    job_id, cost_id, repair = pending_link(root)
+    gone = read_snapshot(root).cards[cost_id].path  # the owner deleted the card the link starts from
+    (root / gone).unlink()
+    registry = json.loads((root / layouts.DEFAULT.registry).read_text(encoding='utf-8'))
+    registry['notes'] = [n for n in registry['notes'] if n.get('path') != gone]
+    (root / layouts.DEFAULT.registry).write_text(json.dumps(registry), encoding='utf-8')
+    done = retried(root, job_id, [repair], [verdict('accept')])
+    assert done['restored_relations'] == []
+    assert done['skipped_relations'] == [{'from': cost_id, 'type': 'similar_to', 'target_slug': 'marker-dimming',
+                                          'reason': 'the card the link starts from no longer exists'}]
+
+
+def test_one_conflict_recorded_by_a_parent_and_its_retry_counts_once(tmp_path):
+    # V1 C7 (drill 2 copy: 5 shown, 4 real): the parent recorded it for a card it could not write, without an id
+    root = build_ingest_vault(tmp_path / 'vault')
+    digest = ingest.content_digest(read_snapshot(root).cards[EXISTING])
+    row = {'slug': 'lit-marker-cost', 'title': 'Lit marker memory cost', 'with': EXISTING, 'detail': 'd',
+           'by': 'reviewer', 'source_sha256': 'abc', 'with_digest': digest}
+    path = root / layouts.DEFAULT.conflicts
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({**row, 'card': None, 'job_id': 'parent'}) + '\n'
+                    + json.dumps({**row, 'card': 'kc_lit-marker-cost', 'job_id': 'parent-retry1'}) + '\n'
+                    + json.dumps({**row, 'slug': 'other-card', 'card': None}) + '\n', encoding='utf-8')
+    conflicts = Service(root).status()['conflicts']
+    assert [(c['card'], c['slug'], c['job_id']) for c in conflicts] == [
+        ('kc_lit-marker-cost', 'lit-marker-cost', 'parent-retry1'), (None, 'other-card', None)]
+
+
 # --- placement: the owner says where a source's cards go (J4 on drill 3: one subject in 2 domains, 8 topics) ----
 PEBBLES = {'domain': OTHER_DOMAIN, 'pillar': OTHER_PILLAR, 'topic': OTHER_TOPIC}
 
@@ -341,7 +373,7 @@ def test_a_placement_is_frozen_with_the_job_and_shown_to_producers_and_reviewers
     assert packet['placement'] == PEBBLES
     assert all(c['candidate_domains'][0] == OTHER_DOMAIN for c in packet['chunks'])
     again = ingest.prepare(root, root / '00_Inbox' / SOURCE_NAME, placement={'domain': DOMAIN})
-    assert again['resumed'] and 'keeps that placement' in again['message']
+    assert again['resumed'] and 'keeps that placement' in again['placement_note']
     produce, respond, seen = scripted([first_candidate(), repair_candidate()], [first_review(), repair_review()])
     ingest.advance(root, job['job_id'], producer=FakeExecutor('gpt-test', responder=produce),
                    reviewer=FakeExecutor('claude-test', responder=respond))
@@ -367,6 +399,11 @@ def test_the_cli_takes_a_placement_and_a_retry_keeps_it(tmp_path, capsys):
                      '--domain', OTHER_DOMAIN, '--pillar', OTHER_PILLAR]) == 0
     [job] = json.loads(capsys.readouterr().out)
     assert jobs.read_input(root, job['job_id'])['placement'] == {'domain': OTHER_DOMAIN, 'pillar': OTHER_PILLAR}
+    # V1 C5: going on with another placement keeps the frozen one, and the result says so next to the hand-offs
+    assert cli.main(['--vault', str(root), 'ingest', str(root / '00_Inbox' / SOURCE_NAME), '--executor', 'host',
+                     '--domain', DOMAIN]) == 0
+    [going] = json.loads(capsys.readouterr().out)
+    assert going['handoffs'] and 'keeps that placement' in going['placement_note']
     other = build_ingest_vault(tmp_path / 'other')
     job_id, _, _ = pending_link(other, placement=PEBBLES)
     child = ingest.retry(other, job_id)

@@ -297,8 +297,16 @@ def submit(root: Path, job_id: str, payload: dict, *, role: str, run_id: str,
             raise Conflict('STALE_CANDIDATE')
         validate = _validator(state['kind'])
         if validate is not None:
-            checked = validate(json.loads(input_raw), payload, role=role, candidate=candidate,
-                               root=root, chunk=chunk, state=state)
+            try:
+                checked = validate(json.loads(input_raw), payload, role=role, candidate=candidate,
+                                   root=root, chunk=chunk, state=state)
+            except ValueError:
+                # a host sub-agent's refused answers never reach the executor's failure count; the run keeps the
+                # count, so a step that keeps failing can be given up within bounds (the ingest source check).
+                # The job state stays as it was.
+                run['rejected_submits'] = int(run.get('rejected_submits', 0)) + 1
+                write_json(root, run_location(job_id, run_id), run)
+                raise
             payload = checked if isinstance(checked, dict) else payload
         raw = encoded(payload)
         if len(raw) > 8_000_000:

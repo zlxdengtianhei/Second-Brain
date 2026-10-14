@@ -160,7 +160,8 @@ def prepare(root: Path, source: Path, *, settings: config.Settings | None = None
         jobs.archive(root, job_id, reason='rolled back; the source was ingested again')
     elif state is not None:
         frozen = jobs.read_input(root, job_id).get('placement')
-        note = {'message': f'{job_id} was frozen before with placement {frozen}; it keeps that placement'} \
+        note = {'placement_note': f'{job_id} was frozen before with placement {frozen}; it keeps that placement, '
+                                  'not the one given now'} \
             if placement and {k: v for k, v in placement.items() if v} != (frozen or {}) else {}
         return {**state, 'resumed': True, **note}
     source_path = Path(source).absolute()
@@ -1547,6 +1548,45 @@ def _source_check_input(root: Path, packet: dict, settled: list[dict]) -> dict:
     return {**frozen, 'placement': packet['placement']} if packet.get('placement') else frozen
 
 
+def skip_source_check(root: Path, job_id: str, *, reason: str) -> dict:
+    """Give up the source check of ``job_id`` after it kept failing; the cards are written as the chunk reviews left them.
+
+    In API mode an answer that fails validation more than ``max_repair_rounds``
+    times is skipped by itself. In host mode the answer is refused at `sb job
+    submit` and the run stays open, so the coordinator ends it here, once as many
+    answers were rejected or runs abandoned. Its open run is abandoned and the
+    reason is recorded with the skip.
+    """
+    if not isinstance(reason, str) or not reason.strip():
+        raise ValueError('skipping the source check needs a concrete reason')
+    with job_lock(root, job_id):
+        state = jobs.load(root, job_id)
+        packet = jobs.read_input(root, job_id)
+        if state['kind'] != KIND:
+            raise IngestError(f'{job_id} is not an ingest job')
+        settled = [chunk_outcome(root, state, packet, c['chunk_id']) for c in effective_chunks(packet, state)]
+        info = (state.get('chunks') or {}).get(source_check.SLOT) or {}
+        if not all(o['settled'] for o in settled) or not source_check.needed(settled) or not info.get('candidate'):
+            raise IngestError(f'{job_id} has no source check waiting; run `sb job advance`')
+        if info.get('review') or info.get('skipped'):
+            raise IngestError(f'The source check of {job_id} is already done')
+        runs = [jobs.load_run(root, job_id, r) for r in state.get('runs') or []]
+        runs = [r for r in runs if r.get('chunk') == source_check.SLOT]
+        failed = int(info.get('invalid_outputs', 0)) + sum(int(r.get('rejected_submits', 0)) for r in runs) + \
+            sum(1 for r in runs if r['status'] in {'abandoned', 'failed'})
+        needed = config.review_policy().max_repair_rounds + 1
+        if failed < needed:
+            raise IngestError(f'The source check can be skipped after {needed} rejected answers or given-up runs; '
+                              f'{job_id} has {failed}. Hand the check to a new sub-agent first')
+        for run in runs:
+            if run['status'] == 'started':
+                jobs.abandon_run(root, job_id, run['run_id'], reason=f'source check skipped: {reason}')
+        _mark_slot(root, job_id, source_check.SLOT, skipped=f'skipped after {failed} rejected answers or given-up '
+                                                           f'runs: {reason.strip()}; the cards were written as the '
+                                                           'chunk reviews left them')
+        return jobs.load(root, job_id)
+
+
 def _checked(root: Path, state: dict, packet: dict, settled: list[dict]) -> tuple[list[dict], dict | None]:
     """``(settled, report)`` after the source check's decisions; ``report`` is None when no check was due."""
     if not source_check.needed(settled):
@@ -1674,14 +1714,26 @@ def content_digest(card) -> str:
     return digest(json.dumps(parts, ensure_ascii=False, sort_keys=True).encode('utf-8'))
 
 
+def _conflict_key(row: dict) -> tuple:
+    """What makes two conflict records the same disagreement: the source, the card's slug and the existing card.
+
+    A parent job records a conflict of a card it could not write with no id; the retry that writes the card
+    records it again with the id (drill 2 copy: 5 shown, 4 real). The later record wins.
+    """
+    if row.get('slug') and row.get('source_sha256'):
+        return row['source_sha256'], row['slug'], row['with']
+    return row.get('card') or row.get('slug'), row['with']
+
+
 def open_conflicts(root: Path, snapshot) -> list[dict]:
     """Recorded conflicts whose existing card is unchanged since (``sb status``); the latest record per pair."""
     rows = {}
     for row in inbox._jsonl(root, layouts.of(root).conflicts):
         card = snapshot.cards.get(row.get('with'))
         if card is not None and row.get('with_digest') == content_digest(card):
-            rows[(row.get('card') or row.get('slug'), row['with'])] = {
-                k: row.get(k) for k in ('with', 'with_title', 'card', 'title', 'detail', 'by', 'job_id', 'at')}
+            rows[_conflict_key(row)] = {
+                k: row.get(k) for k in ('with', 'with_title', 'card', 'slug', 'title', 'detail', 'by', 'job_id', 'at',
+                                        'source_sha256')}
     return list(rows.values())
 
 
@@ -1857,7 +1909,8 @@ def apply_job(root: Path, job_id: str, settled: list[dict] | None = None) -> dic
             extra_edges.append((source_id, {'type': kind, 'target': tid}))
             if inv and tid in snapshot.cards:
                 extra_edges.append((tid, {'type': inv, 'target': source_id}))
-        restored_relations.append({**row, 'target': tid, **({'redirected_from': slug} if slug not in ids else {})})
+        moved = slug not in ids or slug != carried['target_slug']  # a duplicate, or merged by the source check
+        restored_relations.append({**row, 'target': tid, **({'redirected_from': carried['target_slug']} if moved else {})})
     by_id = {ids[s]: s for s in ids}
     for slug in list(rels):
         for r in list(rels[slug]):
@@ -2025,8 +2078,8 @@ def apply_job(root: Path, job_id: str, settled: list[dict] | None = None) -> dic
     if affected:
         # last, so its folder table counts the vault as this transaction leaves it
         written, removed = planned_paths(changes)
-        open_now = {(r.get('card') or r.get('slug'), r['with']) for r in open_conflicts(root, projected)}
-        open_now |= {(c['card'] or c['slug'], c['with']) for c in conflicts}  # recorded by this write
+        open_now = {_conflict_key(r) for r in open_conflicts(root, projected)}
+        open_now |= {_conflict_key({**c, 'source_sha256': source['sha256']}) for c in conflicts}  # this write's
         changes.extend(projection_changes(root, entry_projection(projected, current_day(), final_paths=written,
                                                                  removed_paths=removed, conflicts=len(open_now))))
     result = {'status': status, 'new_card_count': len(produced), 'produced': produced,
