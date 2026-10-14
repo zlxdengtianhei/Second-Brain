@@ -100,8 +100,38 @@ def _topic_counts(snapshot) -> dict:
     return counts
 
 
-def prepare(root: Path, source: Path, *, settings: config.Settings | None = None) -> dict:
-    """Freeze one source into its ingest job (or report it as already done)."""
+def _placement(snapshot, place: dict) -> dict:
+    """``place`` ({domain, pillar, topic}) checked against the catalog and taxonomy; only the given keys are kept."""
+    place = {k: v for k, v in place.items() if v}
+    domain, pillar, topic = place.get('domain'), place.get('pillar'), place.get('topic')
+    if not domain or (topic and not pillar):
+        raise IngestError('A placement names a domain, then optionally a pillar, then optionally a topic')
+    if domain not in snapshot.catalog.get('domains', {}):
+        raise IngestError(f'Placement domain {domain!r} is not a catalog domain: '
+                          + ', '.join(sorted(snapshot.catalog.get('domains', {}))))
+    pillars = {p.get('name'): p for p in _current_taxonomy(snapshot, domain).get('pillars') or [] if isinstance(p, dict)}
+    if pillar and pillar not in pillars:
+        raise IngestError(f'Placement pillar {pillar!r} is not a pillar of {domain}: ' + ', '.join(sorted(pillars)))
+    if topic and topic not in (pillars[pillar].get('topics') or []):
+        raise IngestError(f'Placement topic {topic!r} is not a topic of {domain} / {pillar}; add it to the pillar\'s '
+                          '`topics` in the taxonomy file first: ' + ', '.join(pillars[pillar].get('topics') or []))
+    return place
+
+
+def _with_placement(domains: list, packet: dict) -> list:
+    """A chunk's candidate domains, with the owner's placement domain first."""
+    place = (packet.get('placement') or {}).get('domain')
+    return [place] + [d for d in domains if d != place] if place else domains
+
+
+def prepare(root: Path, source: Path, *, settings: config.Settings | None = None, placement: dict | None = None) -> dict:
+    """Freeze one source into its ingest job (or report it as already done).
+
+    ``placement`` ({domain, pillar, topic}; pillar and topic optional) is where
+    the owner wants the source's cards: producers file them there unless a
+    card's subject has its own topic elsewhere, and reviewers check that. It is
+    frozen with the job, so a retry keeps it.
+    """
     settings = settings or config.current()
     if settings.taxonomy_extra_reviewers:
         raise IngestError('[taxonomy] extra_reviewers > 0 is not supported yet; set it to 0')
@@ -129,7 +159,10 @@ def prepare(root: Path, source: Path, *, settings: config.Settings | None = None
         # the vault holds nothing of the old job: keep its records aside and start again
         jobs.archive(root, job_id, reason='rolled back; the source was ingested again')
     elif state is not None:
-        return {**state, 'resumed': True}
+        frozen = jobs.read_input(root, job_id).get('placement')
+        note = {'message': f'{job_id} was frozen before with placement {frozen}; it keeps that placement'} \
+            if placement and {k: v for k, v in placement.items() if v} != (frozen or {}) else {}
+        return {**state, 'resumed': True, **note}
     source_path = Path(source).absolute()
     in_inbox = source_path.parent.resolve() == (root / lay.inbox).resolve()
     inbox_path = f'{lay.inbox}/{source_path.name}' if in_inbox else None
@@ -139,10 +172,12 @@ def prepare(root: Path, source: Path, *, settings: config.Settings | None = None
         raise IngestError('The vault has no catalog; run `sb init` first')
     validate_catalog(snapshot.catalog)
     _require_some_taxonomy(snapshot, lay)
+    place = {'placement': _placement(snapshot, placement)} if placement and any(placement.values()) else {}
     chunks = []
     for chunk in chunk_text(text, settings.ingest.chunk_chars):
         routed = route(root, snapshot, text[chunk['start']:chunk['end']], domains=settings.ingest.candidate_domains)
-        chunks.append({**chunk, 'candidate_domains': routed['domains'], 'neighbors': routed['neighbors'],
+        chunks.append({**chunk, 'candidate_domains': _with_placement(routed['domains'], place),
+                       'neighbors': routed['neighbors'],
                        'routing': {'votes': routed['votes'], 'filled': routed['filled'],
                                    'passages': routed['passages']}})
     domains = sorted(snapshot.catalog['domains'])
@@ -162,6 +197,7 @@ def prepare(root: Path, source: Path, *, settings: config.Settings | None = None
                      'diagrams': settings.card_diagrams,
                      'after_ingest': settings.ingest.after_ingest},
         'snapshot_fingerprint': snapshot.fingerprint,
+        **place,
     }
     state = jobs.create(root, job_id, KIND, packet)
     return {**state, 'source_sha256': sha, 'chunks': [c['chunk_id'] for c in chunks],
@@ -246,7 +282,8 @@ def retry(root: Path, job_id: str, *, settings: config.Settings | None = None) -
         # the domains the parent's reviewers pointed to, and where the open cards last were
         named = [d for d in _reviewed_domains(root, parent, old, cid, open_items[cid])
                  if d in snapshot.catalog['domains'] and d not in routed['domains']]
-        chunks.append({**chunk, 'candidate_domains': routed['domains'] + named, 'neighbors': routed['neighbors'],
+        chunks.append({**chunk, 'candidate_domains': _with_placement(routed['domains'] + named, old),
+                       'neighbors': routed['neighbors'],
                        'routing': {'votes': routed['votes'], 'filled': routed['filled'],
                                    'passages': routed['passages'], 'named_by_review': named}})
     for card_list in written.values():
@@ -603,6 +640,7 @@ def producer_packet(root: Path, state: dict, packet: dict, slot: str) -> dict:
            **_relation_views(packet['catalog'], chunk['candidate_domains']),
            'neighbors': chunk['neighbors'],
            'other_chunks_cards': _other_cards(root, state, packet, base),
+           **({'placement': packet['placement']} if packet.get('placement') else {}),
            'rules': {'new_topics_per_source': packet['settings']['new_topics_per_source'],
                      'flashcards_per_card': [2, 4], 'id_prefix': packet['settings']['id_prefix']}}
     if packet.get('retry'):
@@ -729,7 +767,8 @@ def review_packet(root: Path, state: dict, packet: dict, slot: str) -> dict:
            'domains': [{'slug': d, 'question': m.get('question')}
                        for d, m in sorted(packet['catalog']['domains'].items())],
            **_relation_views(packet['catalog'], domains),
-           'other_chunks_cards': _other_cards(root, state, packet, base)}
+           'other_chunks_cards': _other_cards(root, state, packet, base),
+           **({'placement': packet['placement']} if packet.get('placement') else {})}
     if rnd:
         kept = _accepted_so_far(root, state, base, rnd)
         refiled = {c.get('slug') for c in candidate.get('cards', []) if isinstance(c, dict)}
@@ -1147,7 +1186,8 @@ def validate_submission(packet: dict, payload: dict, *, role: str, candidate=Non
     if card_diagrams.is_slot(chunk):
         return card_diagrams.validate_answer(payload)
     if source_check.is_slot(chunk):
-        return source_check.validate_answer(candidate, payload)
+        return source_check.validate_answer(candidate, payload, closed=lambda kind, domain, target: _closed_relation(
+            packet['catalog'], kind, domain, target))
     existing_ids, existing_titles, existing_domains = _vault_ids_titles(root)
     if role == 'reviewer':
         return validate_review(candidate, payload, existing_ids, packet['catalog']['domains'])
@@ -1471,7 +1511,7 @@ def _source_check_stage(root: Path, job_id: str, packet: dict, settled: list[dic
         if info.get('review') or info.get('skipped'):
             return []
         if not info.get('candidate'):
-            jobs.put_program_candidate(root, job_id, slot, source_check.frozen_input(settled, packet['source']))
+            jobs.put_program_candidate(root, job_id, slot, _source_check_input(root, packet, settled))
             state = jobs.load(root, job_id)
             info = state['chunks'][slot]
         text = _prompt_only('source_check.md').replace('{job_id}', job_id)
@@ -1492,6 +1532,19 @@ def _source_check_stage(root: Path, job_id: str, packet: dict, settled: list[dic
                 fields['skipped'] = (f'the answer failed validation {failed} times; the cards were written as '
                                      'the chunk reviews left them')
             _mark_slot(root, job_id, slot, **fields)
+
+
+def _source_check_input(root: Path, packet: dict, settled: list[dict]) -> dict:
+    """The source check's frozen input: the cards, their relation types, and the existing cards each may link."""
+    snapshot = read_snapshot(root)
+    domains = sorted({c['domain'] for o in settled for c in o['accepted'].values()})
+
+    def near_existing(card):
+        return [{'id': i, 'title': snapshot.cards[i].title, 'domain': snapshot.cards[i].domain}
+                for i in _neighbor_ids(root, snapshot, card)[:source_check.NEAR_EXISTING]]
+    frozen = source_check.frozen_input(settled, packet['source'], near_existing=near_existing,
+                                       relation_views=_relation_views(packet['catalog'], domains))
+    return {**frozen, 'placement': packet['placement']} if packet.get('placement') else frozen
 
 
 def _checked(root: Path, state: dict, packet: dict, settled: list[dict]) -> tuple[list[dict], dict | None]:
@@ -2009,7 +2062,8 @@ def _check_report(check: dict, ids: dict) -> dict:
     name = lambda slug: ids.get(slug, slug)  # noqa: E731
     return {'status': 'checked', 'cards': check['cards'],
             'merged': [{**m, 'into': name(m['into'])} for m in check['merged']],
-            'overlap': [{**o, 'id': name(o['slug']), 'with': name(o['with'])} for o in check['overlap']],
+            'added_links': [{**r, 'from': name(r['from']), 'target': name(r['target'])} for r in check['added_links']],
+            'alone': [{**a, 'id': name(a['slug'])} for a in check['alone']],
             'refiled_topics': check['refiled_topics'],
             'moved_relations': [{**r, 'from': name(r['from']), 'target': name(r['target'])}
                                 for r in check['moved_relations']]}

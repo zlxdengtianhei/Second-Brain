@@ -82,14 +82,17 @@ def create_server(root: Path, *, writer: bool = False):
     if writer:
         @server.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True,
                                                  openWorldHint=False))
-        def ingest_prepare(path: str) -> dict:
+        def ingest_prepare(path: str, domain: str | None = None, pillar: str | None = None,
+                           topic: str | None = None) -> dict:
             """Freeze one source (an inbox file or any text file) into its ingest job; no model call.
 
-            Returns the job id and chunk ids, or status unchanged / skipped for a
-            source that is already done.
+            ``domain`` (then ``pillar``, then ``topic``) is where the owner wants its
+            cards. Returns the job id and chunk ids, or status unchanged / skipped for
+            a source that is already done.
             """
             from .pipelines.ingest import prepare
-            return prepare(service.root, Path(path).expanduser())
+            return prepare(service.root, Path(path).expanduser(),
+                           placement={'domain': domain, 'pillar': pillar, 'topic': topic})
 
         @server.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, openWorldHint=False))
         def job_submit(job: str, role: str, run_id: str, payload: dict, model: str | None = None) -> dict:

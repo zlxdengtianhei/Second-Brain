@@ -33,6 +33,8 @@ For each `new` item decide with `references/triage.md`:
 sb ingest <path> --executor host
 ```
 
+When the user has said where a source's cards belong, add `--domain <slug>`, and `--pillar "<pillar>"` and `--topic "<topic>"` when they named them (the topic must already be in that pillar's `topics` in the taxonomy file; the user adds it there first). Producers then file every card there unless its subject has its own topic elsewhere, and reviewers check it. Without a placement, producers choose per chunk, and one subject can end up in several domains and topics.
+
 This freezes the source and splits it into chunks. It prints a JSON **list** with one job object per source (also for one source). In each job object read `job_id`, `status` and `handoffs`: one hand-off per chunk, each with `role`, `step`, `chunk`, `packet_path`, `output_path` and `submit_cmd`. Several sources can run at the same time.
 
 ## 3. Hand off every packet to a fresh sub-agent

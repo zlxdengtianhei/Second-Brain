@@ -101,6 +101,10 @@ def parser():
     ingest.add_argument('--prepare-only', action='store_true', help='Freeze input and chunks; no model call')
     ingest.add_argument('--proposal-only', action='store_true', help='Produce and review, but do not write')
     ingest.add_argument('--max-rounds', type=int, help='Override [review] max_repair_rounds for this run')
+    ingest.add_argument('--domain', help='Where the cards go: this domain (producers file elsewhere only a card '
+                                         'whose subject has its own topic there)')
+    ingest.add_argument('--pillar', help='... and this pillar of it (needs --domain)')
+    ingest.add_argument('--topic', help='... and this topic of the pillar (needs --pillar)')
     review = sub.add_parser('review', help='Review registry: status, daily queue, agent reviews')
     review_sub = review.add_subparsers(dest='review_command', required=True)
     rstatus = review_sub.add_parser('status', help='Study states and due counts, per domain')
@@ -171,9 +175,12 @@ def _ingest(args, root: Path) -> list:
         if args.max_rounds < 0:
             raise ValueError('--max-rounds must be 0 or more')
         config.set_review_policy(replace(config.review_policy(), max_repair_rounds=args.max_rounds))
+    placement = {'domain': args.domain, 'pillar': args.pillar, 'topic': args.topic}
     if args.retry:
         if paths or args.all:
             raise ValueError('--retry takes a job id instead of paths or --all')
+        if any(placement.values()):
+            raise ValueError('A retry keeps the placement its source was frozen with; drop --domain/--pillar/--topic')
         child = ingest.retry(root, args.retry)
         if args.prepare_only or child['status'] in {'applied', 'partial', 'failed'}:
             return [child]
@@ -189,7 +196,7 @@ def _ingest(args, root: Path) -> list:
     executors = None
     for path in paths:
         try:
-            prepared = ingest.prepare(root, path)
+            prepared = ingest.prepare(root, path, placement=placement)
         except ingest.IngestError as exc:
             results.append({'path': str(path), 'status': 'failed', 'error': str(exc)})
             continue

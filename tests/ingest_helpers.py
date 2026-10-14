@@ -201,8 +201,16 @@ def is_source_check_task(task):
 
 
 def keep_all(packet, **decisions):
-    """A source-check answer: ``keep`` for every card and topic unless ``decisions`` (slug -> row) says otherwise."""
-    return {'cards': [{'slug': c['slug'], 'decision': 'keep', **decisions.get(c['slug'], {})} for c in packet['cards']],
+    """A source-check answer: ``keep`` for every card and topic unless ``decisions`` (slug -> row) says otherwise.
+
+    A card with no relation is said to stand alone unless its row says something else.
+    """
+    def row(card):
+        base = {'slug': card['slug'], 'decision': 'keep', **({'alone': 'test'} if card.get('isolated') else {})}
+        given = decisions.get(card['slug'], {})
+        return {**base, **given} if 'links' not in given and given.get('decision') != 'same' else \
+            {k: v for k, v in {**base, **given}.items() if k != 'alone'}
+    return {'cards': [row(c) for c in packet['cards']],
             'new_topics': [{'id': t['id'], 'decision': 'keep', **decisions.get(t['id'], {})}
                            for t in packet['new_topics']]}
 

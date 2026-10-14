@@ -7,7 +7,7 @@
 
 2026-10-13 的复习页还没有生成：运行 `sb daily --apply`，它生成复习页并在这里加上链接（不依赖插件）。
 
-面板由 SecondBrain Review 插件显示；终端里用 `sb review status` 看进度，`sb review queue` 看今天的卡。
+面板由 SecondBrain Review 插件显示；没有启用这个插件时，上面只是一个空代码块，用复习页链接即可。终端里用 `sb review status` 看进度，`sb review queue` 看今天的卡。
 
 ## 现在做什么
 
@@ -44,7 +44,6 @@
 | `20_MOCs/` | 15 |
 | `40_Sources/` | 7 |
 | `50_Reviews/` | 0 |
-| `_data/` | 5 |
 
 > 现值用 `sb status` 查询；完整卡片与策展 YAML 是真源。
 

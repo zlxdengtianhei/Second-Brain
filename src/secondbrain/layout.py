@@ -97,8 +97,9 @@ class VaultLayout:
 
     @property
     def counted_dirs(self) -> list:
-        tops = {p.split('/')[0] for p in (self.inbox, self.knowledge, self.mocs, self.sources,
-                                          self.reviews, self.data)}
+        # not the data folder: review logs land there between writes (the plugin, `sb review log`), so a count
+        # written into HOME went stale at once (drill 3)
+        tops = {p.split('/')[0] for p in (self.inbox, self.knowledge, self.mocs, self.sources, self.reviews)}
         return sorted(tops | set(self.extra_dirs))
 
     # -- path builders ------------------------------------------------------

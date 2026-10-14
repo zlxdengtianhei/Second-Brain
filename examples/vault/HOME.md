@@ -7,7 +7,7 @@
 
 The review page of 2026-10-13 has not been made yet: run `sb daily --apply`; it makes the page and adds the link here (works without the plugin).
 
-The dashboard comes from the SecondBrain Review plugin; in a terminal use `sb review status` for progress and `sb review queue` for today's cards.
+The dashboard comes from the SecondBrain Review plugin; without the plugin the block above is empty, and the review page link works instead. In a terminal use `sb review status` for progress and `sb review queue` for today's cards.
 
 ## What to do now
 
@@ -44,7 +44,6 @@ Counted on 2026-10-13: **cards: 42** · domains: 3 · without pillar or topic: 0
 | `20_MOCs/` | 15 |
 | `40_Sources/` | 7 |
 | `50_Reviews/` | 0 |
-| `_data/` | 5 |
 
 > Current numbers: `sb status`. The cards and the curated taxonomy YAML are the source of truth.
 

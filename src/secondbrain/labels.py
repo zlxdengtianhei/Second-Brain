@@ -123,7 +123,8 @@ PAGES = {
             '```secondbrain-review',
             '```', '',
             '{review_link}', '',
-            '面板由 SecondBrain Review 插件显示；终端里用 `sb review status` 看进度，`sb review queue` 看今天的卡。', '',
+            '面板由 SecondBrain Review 插件显示；没有启用这个插件时，上面只是一个空代码块，用复习页链接即可。'
+            '终端里用 `sb review status` 看进度，`sb review queue` 看今天的卡。', '',
             '## 现在做什么', '',
             '1. 复习：用上面的面板，或终端 `sb review queue`。',
             '2. 新资料放进 `{inbox}/`，运行 `sb inbox list`，再 `sb ingest <文件>`。',
@@ -193,7 +194,8 @@ PAGES = {
             '```secondbrain-review',
             '```', '',
             '{review_link}', '',
-            'The dashboard comes from the SecondBrain Review plugin; in a terminal use `sb review status` '
+            'The dashboard comes from the SecondBrain Review plugin; without the plugin the block above is empty, and the '
+            'review page link works instead. In a terminal use `sb review status` '
             "for progress and `sb review queue` for today's cards.", '',
             '## What to do now', '',
             '1. Review: use the dashboard above, or `sb review queue` in a terminal.',

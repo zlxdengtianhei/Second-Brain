@@ -76,6 +76,17 @@ def test_home_counts_open_conflicts_after_needs_review_cards(tmp_path, language)
 
 
 @pytest.mark.parametrize('language', ['zh', 'en'])
+def test_home_says_what_works_without_the_plugin_and_counts_no_data_folder(tmp_path, language):
+    # drill 3: the plugin was not enabled, so the panel was an empty code block; the data folder's count went stale
+    # with the first review log
+    use(language)
+    root = build_vault(tmp_path / 'vault')
+    home = projections.entry_projection(read_snapshot(root), DAY).files['HOME.md'].decode('utf-8')
+    assert ('空代码块' in home) if language == 'zh' else ('block above is empty' in home)
+    assert '`_data/`' not in home and '`10_Knowledge/`' in home
+
+
+@pytest.mark.parametrize('language', ['zh', 'en'])
 def test_the_entry_block_says_the_text_around_it_is_hand_written(language):
     # drill 3: the refreshed block lost the note that the kb commands below it belong to the old system
     note = projections.entry_block(language)[-2]

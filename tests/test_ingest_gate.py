@@ -228,7 +228,7 @@ def test_a_link_to_a_card_judged_a_duplicate_goes_to_the_card_it_repeats(tmp_pat
     assert {'type': 'depends_on', 'target': queue.id} in cards[OTHER_CARD].fm['relations']  # back link
 
 
-def pending_link(root):
+def pending_link(root, placement=None):
     """A partial parent whose lit-marker-cost links marker-dimming, which stays pending; returns (job, cost id, repair)."""
     dimming = {**CARDS['marker-dimming'], 'relations': []}
     cost = {**CARDS['lit-marker-cost'], 'relations': CARDS['lit-marker-cost']['relations'] + [
@@ -238,7 +238,7 @@ def pending_link(root):
     fixed = {**FIXED_DIMMING, 'relations': []}
     repair = {'cards': [fixed], 'new_topics': [], 'coverage': repair_candidate()['coverage']}
     produce, respond, _ = scripted([first, repair], [first_review(), repair_review('revise')])
-    job = ingest.prepare(root, root / '00_Inbox' / SOURCE_NAME)
+    job = ingest.prepare(root, root / '00_Inbox' / SOURCE_NAME, placement=placement)
     parent = ingest.advance(root, job['job_id'], producer=FakeExecutor('gpt-test', responder=produce),
                             reviewer=FakeExecutor('claude-test', responder=respond))
     assert parent['status'] == 'partial'
@@ -328,6 +328,52 @@ def test_a_carried_link_whose_target_is_still_pending_goes_to_the_next_retry(tmp
     assert done['skipped_relations'] == [{**row, 'reason': 'target card was not written'}]
     grandchild = ingest.retry(root, done['job_id'])
     assert jobs.read_input(root, grandchild['job_id'])['retry']['skipped_relations'] == [row]
+
+
+# --- placement: the owner says where a source's cards go (J4 on drill 3: one subject in 2 domains, 8 topics) ----
+PEBBLES = {'domain': OTHER_DOMAIN, 'pillar': OTHER_PILLAR, 'topic': OTHER_TOPIC}
+
+
+def test_a_placement_is_frozen_with_the_job_and_shown_to_producers_and_reviewers(tmp_path):
+    root = build_ingest_vault(tmp_path / 'vault')
+    job = ingest.prepare(root, root / '00_Inbox' / SOURCE_NAME, placement=PEBBLES)
+    packet = jobs.read_input(root, job['job_id'])
+    assert packet['placement'] == PEBBLES
+    assert all(c['candidate_domains'][0] == OTHER_DOMAIN for c in packet['chunks'])
+    again = ingest.prepare(root, root / '00_Inbox' / SOURCE_NAME, placement={'domain': DOMAIN})
+    assert again['resumed'] and 'keeps that placement' in again['message']
+    produce, respond, seen = scripted([first_candidate(), repair_candidate()], [first_review(), repair_review()])
+    ingest.advance(root, job['job_id'], producer=FakeExecutor('gpt-test', responder=produce),
+                   reviewer=FakeExecutor('claude-test', responder=respond))
+    assert seen['producer'][0].packet['placement'] == PEBBLES and seen['reviewer'][0].packet['placement'] == PEBBLES
+    assert OTHER_DOMAIN in seen['producer'][0].packet['candidate_taxonomies']
+
+
+@pytest.mark.parametrize('place, message', [
+    ({'domain': 'nowhere'}, 'not a catalog domain'),
+    ({'domain': OTHER_DOMAIN, 'pillar': 'Nope'}, 'not a pillar of pebbles'),
+    ({'domain': OTHER_DOMAIN, 'pillar': OTHER_PILLAR, 'topic': 'Colours'}, 'add it to the pillar'),
+    ({'domain': OTHER_DOMAIN, 'topic': OTHER_TOPIC}, 'then optionally a pillar'),
+])
+def test_a_placement_must_name_what_the_taxonomy_has(tmp_path, place, message):
+    root = build_ingest_vault(tmp_path / 'vault')
+    with pytest.raises(ingest.IngestError, match=message):
+        ingest.prepare(root, root / '00_Inbox' / SOURCE_NAME, placement=place)
+
+
+def test_the_cli_takes_a_placement_and_a_retry_keeps_it(tmp_path, capsys):
+    root = build_ingest_vault(tmp_path / 'vault')
+    assert cli.main(['--vault', str(root), 'ingest', str(root / '00_Inbox' / SOURCE_NAME), '--prepare-only',
+                     '--domain', OTHER_DOMAIN, '--pillar', OTHER_PILLAR]) == 0
+    [job] = json.loads(capsys.readouterr().out)
+    assert jobs.read_input(root, job['job_id'])['placement'] == {'domain': OTHER_DOMAIN, 'pillar': OTHER_PILLAR}
+    other = build_ingest_vault(tmp_path / 'other')
+    job_id, _, _ = pending_link(other, placement=PEBBLES)
+    child = ingest.retry(other, job_id)
+    packet = jobs.read_input(other, child['job_id'])
+    assert packet['placement'] == PEBBLES and packet['chunks'][0]['candidate_domains'][0] == OTHER_DOMAIN
+    assert cli.main(['--vault', str(other), 'ingest', '--retry', job_id, '--domain', DOMAIN]) != 0
+    assert 'keeps the placement' in capsys.readouterr().err
 
 
 # --- prompts --------------------------------------------------------------------------------------
