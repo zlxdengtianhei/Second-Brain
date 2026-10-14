@@ -2,10 +2,11 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 
 import pytest
 
-from secondbrain import cli, jobs
+from secondbrain import cli, config, jobs
 from secondbrain import layout as layouts
 from secondbrain.executors import FakeExecutor
 from secondbrain.pipelines import ingest
@@ -196,6 +197,68 @@ def test_runs_of_spaces_in_a_card_reach_the_written_file(tmp_path):
                    reviewer=FakeExecutor('claude-test', responder=respond))
     queue = next(c for c in read_snapshot(root).cards.values() if c.title == 'Lantern queue')
     assert '- P2. split() reads `3  10 -2` as three numbers.' in queue.body
+
+
+# --- drill-log P4: a slug that would take an existing card's id ----------------------------------
+def test_a_slug_whose_id_an_existing_card_has_is_refused(tmp_path):
+    root = build_ingest_vault(tmp_path / 'vault')
+    config.activate(replace(config.current(), ingest=replace(config.current().ingest, id_prefix='card_')))
+    card = {**CARDS['queue-order'], 'slug': 'exist'}  # card_ + exist = the existing card_exist
+    with pytest.raises(ingest.IngestError, match="slug 'exist' would make the id card_exist, which an existing card has"):
+        check(root, candidate_with(card))
+    assert check(root, candidate_with({**card, 'slug': 'arrival-order'}))
+
+
+# --- drill-log P6: links to cards that were not written ---------------------------------------
+def test_a_link_to_a_card_judged_a_duplicate_goes_to_the_card_it_repeats(tmp_path):
+    root = build_ingest_vault(tmp_path / 'vault')
+    candidate = first_candidate()
+    candidate['cards'][0] = {**candidate['cards'][0], 'relations': candidate['cards'][0]['relations'] + [
+        {'type': 'depends_on', 'target': 'queue-order', 'note': 'order comes first'}]}
+    review = first_review()
+    review['cards'][3]['duplicate_of'] = OTHER_CARD  # queue-order repeats the pebble card (for the test)
+    produce, respond, _ = scripted([candidate, repair_candidate()], [review, repair_review()])
+    job = ingest.prepare(root, root / '00_Inbox' / SOURCE_NAME)
+    result = ingest.advance(root, job['job_id'], producer=FakeExecutor('gpt-test', responder=produce),
+                            reviewer=FakeExecutor('claude-test', responder=respond))
+    assert result['status'] == 'applied' and result['skipped_relations'] == []
+    cards = {c.id: c for c in read_snapshot(root).cards.values()}
+    queue = next(c for c in cards.values() if c.title == 'Lantern queue')
+    assert {'type': 'depends_on', 'target': OTHER_CARD, 'note': 'order comes first'} in queue.fm['relations']
+    assert {'type': 'depends_on', 'target': queue.id} in cards[OTHER_CARD].fm['relations']  # back link
+
+
+def test_a_link_to_a_pending_card_is_restored_when_a_retry_writes_it(tmp_path):
+    root = build_ingest_vault(tmp_path / 'vault')
+    dimming = {**CARDS['marker-dimming'], 'relations': []}
+    cost = {**CARDS['lit-marker-cost'], 'relations': CARDS['lit-marker-cost']['relations'] + [
+        {'type': 'similar_to', 'target': 'marker-dimming', 'note': 'both about markers'}]}
+    first = first_candidate()
+    first['cards'] = [first['cards'][0], cost, dimming, first['cards'][3]]
+    fixed = {**FIXED_DIMMING, 'relations': []}
+    repair = {'cards': [fixed], 'new_topics': [], 'coverage': repair_candidate()['coverage']}
+    produce, respond, _ = scripted([first, repair], [first_review(), repair_review('revise')])
+    job = ingest.prepare(root, root / '00_Inbox' / SOURCE_NAME)
+    parent = ingest.advance(root, job['job_id'], producer=FakeExecutor('gpt-test', responder=produce),
+                            reviewer=FakeExecutor('claude-test', responder=respond))
+    assert parent['status'] == 'partial'
+    cost_id = next(p['id'] for p in parent['produced'] if p['slug'] == 'lit-marker-cost')
+    assert [(r['from'], r['target_slug']) for r in parent['skipped_relations']] == [(cost_id, 'marker-dimming')]
+    child = ingest.retry(root, job['job_id'])
+    assert jobs.read_input(root, child['job_id'])['retry']['skipped_relations'] == [
+        {'from': cost_id, 'type': 'similar_to', 'target_slug': 'marker-dimming'}]
+    produce, respond, _ = scripted([{**repair, 'coverage': repair['coverage']}],
+                                   [{'cards': [{'slug': 'marker-dimming', 'decision': 'accept', 'reason': 'fixed'}],
+                                     'new_topics': [], 'coverage': {'decision': 'accept', 'reason': 'ok'}}])
+    done = ingest.advance(root, child['job_id'], producer=FakeExecutor('gpt-test', responder=produce),
+                          reviewer=FakeExecutor('claude-test', responder=respond))
+    assert done['status'] == 'applied'
+    new_id = next(p['id'] for p in done['produced'] if p['slug'] == 'marker-dimming')
+    assert done['restored_relations'] == [{'from': cost_id, 'type': 'similar_to', 'target': new_id}]
+    cards = read_snapshot(root).cards
+    assert {'type': 'similar_to', 'target': cost_id} in cards[new_id].fm['relations']
+    assert {'type': 'similar_to', 'target': new_id} in cards[cost_id].fm['relations']
+    assert '[[Marker dimming]]' in cards[cost_id].body  # and in its related section
 
 
 # --- prompts --------------------------------------------------------------------------------------

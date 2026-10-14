@@ -223,6 +223,14 @@ def retry(root: Path, job_id: str, *, settings: config.Settings | None = None) -
         written.setdefault(card['chunk'], []).append({'id': card['id'], 'title': card['title'], 'slug': card.get('slug')})
     settled = {cid: {key: list(rows) for key, rows in kinds.items()}
                for cid, kinds in (lineage.get('settled') or {}).items() if cid in open_items}
+    # links to cards that were still pending; restored when a later job writes the target
+    written_now = {card.get('slug') for card in parent.get('produced') or []}
+    skipped = []
+    for row in (lineage.get('skipped_relations') or []) + [
+            r for r in parent.get('skipped_relations') or [] if r.get('reason') == 'target card was not written']:
+        entry = {k: row.get(k) for k in ('from', 'type', 'target_slug')}
+        if entry['target_slug'] not in written_now and entry not in skipped:
+            skipped.append(entry)
     for cid in open_items:
         for key, rows in _settled_rows(root, parent, cid).items():
             bucket = settled.setdefault(cid, {'duplicates': [], 'out_of_scope': []}).setdefault(key, [])
@@ -254,7 +262,7 @@ def retry(root: Path, job_id: str, *, settings: config.Settings | None = None) -
               'topic_counts': _topic_counts(snapshot), 'snapshot_fingerprint': snapshot.fingerprint,
               'retry': {'of': job_id, 'root': first, 'round': number,
                         'pending': {cid: open_items[cid] for cid in open_items},
-                        'written': written, 'settled': settled}}
+                        'written': written, 'settled': settled, 'skipped_relations': skipped}}
     child = f'{first}-retry{number}'
     live = _live_child(root, job_id, parent, child)
     if live is not None:  # made before an interruption, before the parent recorded it
@@ -850,6 +858,10 @@ def validate_candidate(packet: dict, payload: dict, *, slot: str, other_cards: l
             errors.append(f'{where}.slug must match [a-z0-9][a-z0-9-]{{0,59}}')
         elif slug in slugs or slug in other_slugs:  # a kept slug files that card again (repair rounds)
             errors.append(f'{where}.slug {slug!r} is already used in this source')
+        elif f'{prefix}{slug}' in existing_ids:
+            # the card would get another id ("-2"), and its slug reads like the existing card's (drill 2, P4)
+            errors.append(f'{where}.slug {slug!r} would make the id {prefix}{slug}, which an existing card has; '
+                          'choose another slug, or if it is that card\'s knowledge, write a duplicate coverage row')
         else:
             slugs.add(slug)
         where = f'cards[{slug or i}]'
@@ -1642,7 +1654,11 @@ def apply_job(root: Path, job_id: str, settled: list[dict] | None = None) -> dic
     rels: dict = {s: [] for _, s, _ in accepted}
     skipped_relations = []
     new_domains = {ids[s]: c['domain'] for _, s, c in accepted}
+    # a target the reviewer judged a duplicate lives on in the existing card it repeats (drill 2, P6)
+    duplicate_of = {d['slug']: d['duplicate_of'] for o in settled for d in o['duplicates']
+                    if d.get('duplicate_of') in snapshot.cards}
     for _, slug, card in accepted:
+        linked = {r.get('target') for r in card.get('relations') or []}
         for r in card.get('relations') or []:
             target = r['target']
             if target in snapshot.cards:
@@ -1651,6 +1667,8 @@ def apply_job(root: Path, job_id: str, settled: list[dict] | None = None) -> dic
                 tid = ids[target]
             elif target in _written_slugs(packet) and _written_slugs(packet)[target] in snapshot.cards:
                 tid = _written_slugs(packet)[target]
+            elif target in duplicate_of and duplicate_of[target] not in linked:
+                tid = duplicate_of[target]
             else:
                 skipped_relations.append({'from': ids[slug], 'type': r['type'], 'target_slug': target,
                                           'reason': 'target card was not written'})
@@ -1665,6 +1683,17 @@ def apply_job(root: Path, job_id: str, settled: list[dict] | None = None) -> dic
                 continue
             rels[slug].append({k: v for k, v in (('type', r['type']), ('target', tid),
                                                  ('note', r.get('note')), ('tier', r.get('tier'))) if v})
+    # links an earlier job of this source could not write because their target was pending: now that this
+    # retry writes the target, the link is added from its side, and the back link reaches the earlier card
+    restored_relations = []
+    for skipped in (packet.get('retry') or {}).get('skipped_relations') or []:
+        slug, source_id, inv = skipped['target_slug'], skipped['from'], inverse.get(skipped['type'])
+        if slug not in ids or source_id not in snapshot.cards or not inv or \
+                any(x['target'] == source_id for x in rels[slug]) or \
+                _closed_relation(packet['catalog'], inv, new_domains[ids[slug]], snapshot.cards[source_id].domain):
+            continue
+        rels[slug].append({'type': inv, 'target': source_id})
+        restored_relations.append({'from': source_id, 'type': skipped['type'], 'target': ids[slug]})
     by_id = {ids[s]: s for s in ids}
     for slug in list(rels):
         for r in list(rels[slug]):
@@ -1833,7 +1862,8 @@ def apply_job(root: Path, job_id: str, settled: list[dict] | None = None) -> dic
               'duplicates': [d for o in settled for d in o['duplicates']],
               'out_of_scope': [x for o in settled for x in o['skipped']],
               'new_topics': [{'domain': d, 'pillar': p, 'name': n} for d, p, n in topics],
-              'skipped_relations': skipped_relations, 'maintenance': maintenance,
+              'skipped_relations': skipped_relations, 'restored_relations': restored_relations,
+              'maintenance': maintenance,
               'needs_review': needs_review, 'conflicts': conflicts,
               'source_record': {'sha256': source['sha256'], 'path': source_rel},
               'inbox_moved': move, 'projection_metrics': projection_metrics,
