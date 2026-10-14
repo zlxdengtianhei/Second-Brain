@@ -13,7 +13,7 @@
     python -m secondbrain.diagrams old-audit-apply ANSWER.json ... --out OUT_DIR
     python -m secondbrain.diagrams writeback VAULT OUT_DIR OUTCOMES.jsonl ... [--old-audit FILE ...]
         [--refs REFS.txt] [--delete-review-on-skip remove|keep] [--remove-domain D ...] [--language en|zh]
-        [--checker CHECK.mjs] [--write]
+        [--checker CHECK.mjs] [--replace-only] [--write]
 
 CARDS.jsonl holds one card per line: ref, title, kind, domain, essence,
 propositions (list), related_titles. audit-extract writes this format, so a
@@ -42,6 +42,11 @@ there is a verdict nothing changes (prune: pending; writeback: pending,
 rule .../no_audit). `pool --delete-tier` writes the delete-tier cards prune
 handles as rows for old-audit-packets; the packets for the pool cover the
 delete_review cards too.
+
+An upright old flowchart wider than 700 px is tiered redraw (rule wide): the
+model sees it as old_diagram "too_wide", and a narrower redraw replaces it even
+with the same steps. writeback --replace-only writes new diagrams only, so a
+redraw set leaves every skipped card as it is.
 
 writeback refuses to run when the rendering old flowcharts in the pool have
 no graph (a tiers.json from before the redraw guard): rerun audit-tier.
@@ -316,6 +321,8 @@ def cmd_writeback(a) -> dict:
         actions = rejudge.plan(pool, outcomes, _writeback_policy(a), audits)
     except ValueError as e:
         raise SystemExit(str(e))
+    if a.replace_only:
+        actions = rejudge.replace_only(actions)
     _turns_need_checker(a, actions)
     touched = [x["ref"] for x in actions if x["action"] in rejudge.WRITES]
     fmt = _card_format(a, touched)
@@ -407,6 +414,8 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("--delete-review-on-skip", choices=("remove", "keep"), default="remove",
                    help="old diagram of a delete_review card the model skips: remove as the old-diagram audit "
                         "says (default), or keep")
+    s.add_argument("--replace-only", action="store_true",
+                   help="write new diagrams only; every other card keeps today's diagram (a redraw set)")
     s.add_argument("--remove-domain", action="append", default=[],
                    help="also remove old diagrams on skip in this domain (cards the audit tiered "
                         "'domain' are removed anyway)")

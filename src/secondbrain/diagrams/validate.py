@@ -1,4 +1,4 @@
-"""Mechanical checks V2-V8, V10-V14 and warnings W1-W2 on a parsed diagram IR.
+"""Mechanical checks V2-V8, V10-V14 and warnings W1-W3 on a parsed diagram IR.
 
 V1 (shape) lives in ir.parse_ir. V9 (the emitted Mermaid parses in the target
 Mermaid build) is a property of the generator, covered by the regression
@@ -9,15 +9,17 @@ corpus run through tools/mermaid_check.
 | V2 | size: flow and structure 4-9 nodes (3 when two paths merge), state 3-8, sequence 2-3 (a fourth participant does not fit 700 px) |
 | V3 | every node, labelled edge and message cites existing sources (P1..Pn or E) |
 | V4 | label wording is at least half found in the cited text (formula names and symbols count) |
-| V5 | structural gain: branch, merge or loop in flow; merge, loop or 3+ links in structure (a plain chain of links cites 3+ sources); 3+ transitions in state; 3+ messages in sequence; a flow whose cited text says the work repeats has its back edge |
+| V5 | structural gain: branch, merge or loop in flow; merge, loop or 3+ links in structure (a plain chain of links cites 3+ sources); 3+ transitions in state; 3+ messages in sequence; a flow whose cited text says the work repeats has its back edge, unless the model quotes the words in no_repeat and says why they do not mean that |
 | V6 | label widths |
 | V7 | structure, state and sequence links are labelled; a decision has 2+ labelled exits |
 | V8 | a card with 2+ propositions gets a diagram citing 2+ sources (E counts) |
 | V10 | labels are plain text, not TeX |
 | V11 | a data diagram (arrows data) starts at inputs and ends at outputs or a final store; in any diagram an input has outgoing edges only, into nodes whose cited text mentions it, and an output incoming edges only |
-| V12 | the diagram cites E: it carries the key relation the essence states; replacing an old diagram that renders, it also cites 2 propositions (all, if the card has fewer) |
+| V12 | the diagram cites E: it carries the key relation the essence states; replacing an old diagram that renders (also one too wide), it also cites 2 propositions (all, if the card has fewer) |
 | V13 | no fan-out into more than 3 leaves, and no decision whose 3+ exits are all leaves (that is a list) |
 | V14 | estimated rendered width at most 700 px (the batch path measures the real width instead) |
+
+W3 names a no_repeat item that excuses nothing (wrong source, not copied, too long, or no loop word).
 
 Thresholds are recommended defaults set from the distribution of existing
 diagrams and a 50-card pilot; they are not calibrated.
@@ -29,7 +31,7 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Any, Iterable
 
-from .ir import DEFAULT_ARROWS, Card, DiagramIR, Issue, is_ref, parse_ir
+from .ir import DEFAULT_ARROWS, Card, DiagramIR, Issue, NoRepeat, is_ref, parse_ir
 from .staleness import cited_refs
 from .text import display_width, grounding_tokens, has_tex, overlap, source_tokens, title_match
 from .width import estimate_width
@@ -182,19 +184,23 @@ def _branches(ir: DiagramIR) -> bool:
                and all(e.label for e in exits[n.key]) for n in ir.nodes)
 
 
-def says_repeat(card: Card, refs: Iterable[str] | None = None) -> tuple[str, str] | None:
+def says_repeat(card: Card, refs: Iterable[str] | None = None,
+                excused: dict[str, list[str]] | None = None) -> tuple[str, str] | None:
     """(ref, quoted context) for the first cited text that says the work repeats, if any.
 
     refs are the sources the diagram cites; None reads the whole card. Each
     source is read on its own, after cutting out names, negations and
-    duplicates (_NOT_LOOPS).
+    duplicates (_NOT_LOOPS) and the words the model quoted as not a repeat
+    (excused: source -> quotes, from no_repeat).
     """
     order = ["E", *(f"P{i}" for i in range(1, len(card.propositions) + 1))]
     wanted = set(order) if refs is None else set(refs)
     for ref in order:
         if ref not in wanted:
             continue
-        src = card.source(ref)
+        src = " ".join(card.source(ref).split())
+        for q in (excused or {}).get(ref, ()):
+            src = src.replace(q, " " * len(q))
         m = _LOOP.search(_NOT_LOOPS.sub(lambda x: " " * len(x.group()), src))
         if m:
             a, b = max(0, m.start() - 12), min(len(src), m.end() + 12)
@@ -240,8 +246,24 @@ def _gain(ir: DiagramIR, shape: _Shape, limits: Limits, n_cited: int = 0) -> str
     return None
 
 
+NO_REPEAT_QUOTE_MAX = 40  # characters: the words around the loop word, not the whole proposition
+
+
+def _no_repeat_problem(x: NoRepeat, card: Card) -> str | None:
+    """Why a no_repeat item cannot excuse anything, or None: it quotes a loop word copied from a source it names."""
+    if x.p not in card.refs:
+        return f"{x.p} is not a source of this card"
+    if len(x.quote) > NO_REPEAT_QUOTE_MAX:
+        return f"quote is {len(x.quote)} characters; quote at most {NO_REPEAT_QUOTE_MAX} around the loop word"
+    if x.quote not in " ".join(card.source(x.p).split()):
+        return f"quote is not copied from {x.p}"
+    if not _LOOP.search(x.quote):
+        return "quote has no loop word"
+    return None
+
+
 def check(ir: DiagramIR, card: Card, limits: Limits = DEFAULT_LIMITS) -> tuple[list[Issue], list[Issue]]:
-    """Run V2-V8, V10-V14 and W1-W2 on a parsed draw IR. Returns (errors, warnings)."""
+    """Run V2-V8, V10-V14 and W1-W3 on a parsed draw IR. Returns (errors, warnings)."""
     errors: list[Issue] = []
     warnings: list[Issue] = []
     if ir.decision != "draw":
@@ -289,13 +311,26 @@ def check(ir: DiagramIR, card: Card, limits: Limits = DEFAULT_LIMITS) -> tuple[l
     if gain:
         errors.append(Issue("V5", gain + "; consider skip"))
     all_cited = [r for r in cited_refs(ir) if r in valid]
-    repeat = says_repeat(card, all_cited) if form == "flow" and limits.require_back_edge else None
+    excused: dict[str, list[str]] = defaultdict(list)
+    ignored: dict[str, str] = {}
+    for i, x in enumerate(ir.no_repeat):
+        problem = _no_repeat_problem(x, card)
+        if problem:
+            warnings.append(Issue("W3", f"no_repeat item ignored: {problem}", f"no_repeat[{i}]"))
+            ignored[x.p] = problem
+        else:
+            excused[x.p].append(x.quote)
+    repeat = says_repeat(card, all_cited, excused) if form == "flow" and limits.require_back_edge else None
     if repeat and not shape.loop:
-        other = "skip (E stays cited)" if repeat[0] == "E" else "cite other text or skip"
+        word = _LOOP.search(repeat[1])
         errors.append(Issue("V5", f"{repeat[0]}, which the diagram cites, may say the work repeats («{repeat[1]}»). "
                                   f"If it describes this work repeating, draw that back edge, from where one round "
-                                  f"ends to the step that repeats. If it does not, {other}; never add "
-                                  f"a loop the card does not state"))
+                                  f"ends to the step that repeats. If it does not, add "
+                                  f"{{\"p\":\"{repeat[0]}\",\"quote\":\"<the words of {repeat[0]} around "
+                                  f"«{word.group() if word else ''}», copied>\",\"why\":\"<what they mean>\"}} "
+                                  f"to no_repeat; never add a loop the card does not state"
+                                  + (f" (your no_repeat item for {repeat[0]}: {ignored[repeat[0]]})"
+                                     if repeat[0] in ignored else "")))
 
     if form in limits.labeled_links:
         for i, e in enumerate(ir.links):
@@ -316,7 +351,7 @@ def check(ir: DiagramIR, card: Card, limits: Limits = DEFAULT_LIMITS) -> tuple[l
     if limits.require_essence and card.essence.strip() and "E" not in cited:
         errors.append(Issue("V12", "the diagram does not cite E; find the relation the essence states, draw it, "
                                    "and cite E on the nodes or edges that carry it"))
-    elif card.old_diagram == "renders" and not strong_enough(all_cited, len(card.propositions),
+    elif card.old_diagram in ("renders", "too_wide") and not strong_enough(all_cited, len(card.propositions),
                                                              bool(card.essence.strip())):
         need = min(2, len(card.propositions))
         errors.append(Issue("V12", f"this card's old diagram renders; a diagram that replaces it cites E and "

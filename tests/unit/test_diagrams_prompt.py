@@ -55,7 +55,9 @@ def _prompt_examples() -> list[tuple[Card, dict]]:
 # 7,124 bytes). After set E: the loop words are examples, a redraw is the same steps and links, the audit
 # handles a skipped card's old diagram, edge labels read from source to target; the broken-old-diagram sentence
 # went (F1 left one such card) and so did "Code draws the Mermaid" (2,000 o200k, 2,085 cl100k, 7,118 bytes).
-# New rules have to replace old text.
+# After the vault batch: check against all propositions, no_repeat, no self-loop in a flow, too_wide old
+# diagrams, the skip sentence (D3); the router skip example became one line of format, and a few asides went
+# (1,995 o200k, 2,068 cl100k, 7,098 bytes). New rules have to replace old text.
 TOKEN_CAP = 2000
 BYTE_CAP = 7200  # dependency-free proxy for the same budget (7,099 bytes when written)
 
@@ -70,7 +72,7 @@ def test_prompt_states_the_core_rules():
                    "citing E and 2+ propositions (all, if fewer)", "a decision whose 3+ exits all end at once",
                    "3+ named states and 3+ labelled transitions", "a chain of 3+ links citing 3+ different sources",
                    "structure 3+ links unless paths merge", "no edge labels overlapping", "state diagrams scale to fit",
-                   "On skip, an audit keeps or removes the old diagram", "an overlapping pair of CJK characters",
+                   "On skip, a broken one goes; an audit judges the rest", "an overlapping pair of CJK characters",
                    "even when the text lists them in order", "credits it to each path", "would redraw its structure",
                    "steps whose order the card does not state", "at any length", "accumulator",
                    "Over the whole diagram", "paths that split and never meet are a list",
@@ -79,7 +81,12 @@ def test_prompt_states_the_core_rules():
                    "comes with its source `old_mermaid`", "shows E's relation clearly better",
                    # after set E: P5-draw's questions and J6's edge labels
                    "says the work repeats, in any words", "(the same steps and links)",
-                   "An edge label reads from source to target"):
+                   "An edge label reads from source to target",
+                   # after the vault batch: J8's points, V3's D2 and D3
+                   "check each node and edge against all propositions, not only E", "quote it in `no_repeat`",
+                   "No self-loop in a flow (a repeat goes back from a later step)",
+                   "A `too_wide` one may be redrawn narrower with the same steps",
+                   'Skip: `{"decision":"skip","reason":"<the rule>"}`'):
         assert phrase in PROMPT, phrase
 
 
@@ -107,8 +114,7 @@ def test_prompt_token_budget():
 def test_prompt_examples_pass_the_validator():
     examples = _prompt_examples()
     assert [(c.ref, ir["decision"], ir.get("form")) for c, ir in examples] == [
-        ("nn/residual", "draw", "flow"), ("algo/rpn", "draw", "flow"), ("econ/inflation", "draw", "structure"),
-        ("rag/router", "skip", None)]
+        ("nn/residual", "draw", "flow"), ("algo/rpn", "draw", "flow"), ("econ/inflation", "draw", "structure")]
     for card, ir in examples:
         report = validate(ir, card)
         assert report.ok, (card.ref, [str(e) for e in report.errors])
@@ -132,9 +138,10 @@ def _example_mermaid() -> list[dict]:
     return out
 
 
-def test_skip_example_is_what_the_validator_rejects_as_a_draw():
-    """The router card's skip: drawn, its 3 exits that all end at once are V13 (a list), not a decision."""
-    card = next(c for c, ir in _prompt_examples() if c.ref == "rag/router")
+def test_a_decision_whose_exits_all_end_is_rejected_as_a_list():
+    """The router card (a skip example until the vault batch): drawn, its 3 exits that all end at once are V13."""
+    card = Card(title="rag/router", essence="路由器按问题类型选检索方式。",
+                propositions=("事实问题用关键词检索，语义问题用向量检索，多跳问题用图检索。",), ref="rag/router")
     drawn = {"decision": "draw", "form": "flow", "question": "选哪种检索？",
              "nodes": [{"key": "d", "label": "问题类型？", "role": "decision", "p": ["E"]},
                        {"key": "a", "label": "关键词检索", "p": ["P1"]}, {"key": "b", "label": "向量检索", "p": ["P1"]},

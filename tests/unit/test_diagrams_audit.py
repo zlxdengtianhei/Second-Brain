@@ -80,6 +80,21 @@ def test_tier_rules(card_kw, check, expected):
     assert audit.tier_one(_card(**card_kw), check, rules) == expected
 
 
+def test_an_upright_flowchart_too_wide_for_the_note_is_redrawn():
+    """J8 #36 and the batch's 114: turning cannot narrow a TB diagram, so it goes to the model instead of +wide."""
+    rules = audit.TierRules(delete_domains=("english",))
+    keep = _check(GROUNDED, BRANCH)
+    restating = _check(GROUNDED[:3], BRANCH[:2])
+    for check in (keep, restating):  # whatever the other rules say
+        for direction in ("TB", "TD", "BT"):
+            assert audit.tier_one(_card(), {**check, "direction": direction, "width": 701}, rules) == ("redraw", "wide")
+        assert audit.tier_one(_card(), {**check, "width": 700}, rules) != ("redraw", "wide")
+        assert audit.tier_one(_card(), {**check, "direction": "LR", "width": 900}, rules) != ("redraw", "wide")
+    assert audit.tier_one(_card(domain="english"), {**keep, "width": 900}, rules) == ("delete", "domain")
+    assert audit.tier_one(_card(), {"ok": True, "type": "sequence", "width": 900}, rules) == ("keep", "sequence/state")
+    assert audit.tier_one(_card(), {**keep, "width": 900}, audit.TierRules(max_width=1000)) == ("keep", "branch")
+
+
 def test_shapes():
     n = lambda *ids: [{"id": i} for i in ids]  # noqa: E731
     e = lambda *pairs: [{"from": a, "to": b} for a, b in pairs]  # noqa: E731

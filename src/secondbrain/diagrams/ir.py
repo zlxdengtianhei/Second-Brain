@@ -26,11 +26,13 @@ ARROWS = ("control", "data", "relation")
 DEFAULT_ARROWS = {"flow": "control", "structure": "relation"}
 MESSAGE_STYLES = ("sync", "reply", "async")
 _REF = re.compile(r"^(E|P[1-9][0-9]*)$")
-_TOP_KEYS = {"decision", "reason", "form", "question", "arrows", "groups", "nodes", "edges", "messages"}
+_TOP_KEYS = {"decision", "reason", "form", "question", "arrows", "groups", "nodes", "edges", "messages", "no_repeat"}
 _NODE_KEYS = {"key", "label", "role", "p"}
 _EDGE_KEYS = {"from", "to", "label", "p"}
 _MESSAGE_KEYS = {"from", "to", "text", "p", "style", "note"}
 _GROUP_KEYS = {"label", "members", "p"}
+_NO_REPEAT_KEYS = {"p", "quote", "why"}
+OLD_DIAGRAM = ("renders", "too_wide", "broken")
 
 
 def clean_text(s: str) -> str:
@@ -67,7 +69,7 @@ class Card:
     domain: str | None = None
     related_titles: tuple[str, ...] = ()
     ref: str | None = None
-    old_diagram: str | None = None  # "renders" or "broken" when the card already has a diagram
+    old_diagram: str | None = None  # "renders", "too_wide" (renders wider than the note) or "broken"
     old_mermaid: str | None = None  # the old diagram's source, shown to the model when it renders
 
     @classmethod
@@ -81,7 +83,7 @@ class Card:
             domain=d.get("domain"),
             related_titles=tuple(str(t) for t in d.get("related_titles") or ()),
             ref=d.get("ref") or d.get("id") or d.get("path"),
-            old_diagram=d.get("old_diagram") if d.get("old_diagram") in ("renders", "broken") else None,
+            old_diagram=d.get("old_diagram") if d.get("old_diagram") in OLD_DIAGRAM else None,
             old_mermaid=d.get("old_mermaid") if isinstance(d.get("old_mermaid"), str) and d.get("old_mermaid") else None,
         )
 
@@ -133,6 +135,15 @@ class Group:
 
 
 @dataclass(frozen=True)
+class NoRepeat:
+    """The model's word that a loop word in the text it cites does not mean this work repeats (V5)."""
+
+    p: str
+    quote: str
+    why: str
+
+
+@dataclass(frozen=True)
 class DiagramIR:
     decision: str
     reason: str = ""
@@ -143,6 +154,7 @@ class DiagramIR:
     edges: tuple[Link, ...] = ()
     messages: tuple[Link, ...] = ()
     groups: tuple[Group, ...] = ()
+    no_repeat: tuple[NoRepeat, ...] = ()
     extra_keys: tuple[str, ...] = field(default=(), compare=False)
 
     @property
@@ -270,8 +282,12 @@ def parse_ir(data: Any) -> tuple[DiagramIR | None, list[Issue]]:
         else:
             label = _text(e.get("label"), w + ".label", issues, required=False)
             links.append(Link(str(src), str(dst), label, _refs(e.get("p"), w + ".p", issues)))
+            if src == dst and form == "flow":  # a long loop line far from its label (J8)
+                issues.append(Issue("V1", f"node {src!r} loops on itself: in a flow, draw a repeat as an edge "
+                                          f"back from a later step to the step that repeats, or say it in "
+                                          f"the label (逐个比较…)", w))
             # Mermaid drops the labels when one node has several self-loops.
-            if src == dst and sum(1 for x in links if x.src == x.dst == src) == 2:
+            elif src == dst and sum(1 for x in links if x.src == x.dst == src) == 2:
                 issues.append(Issue("V1", f"node {src!r} has more than one self-loop; merge them into one", w))
 
     groups: list[Group] = []
@@ -305,6 +321,25 @@ def parse_ir(data: Any) -> tuple[DiagramIR | None, list[Issue]]:
                 grouped.add(m)
         groups.append(Group(label, tuple(str(m) for m in members), _refs(g.get("p"), w + ".p", issues)))
 
+    no_repeat: list[NoRepeat] = []
+    raw_nr = data.get("no_repeat")
+    if raw_nr is not None and not isinstance(raw_nr, list):
+        issues.append(Issue("V1", "no_repeat must be a list", "no_repeat"))
+        raw_nr = []
+    for i, x in enumerate(raw_nr or []):
+        w = f"no_repeat[{i}]"
+        if not isinstance(x, dict):
+            issues.append(Issue("V1", 'no_repeat item must be {"p","quote","why"}', w))
+            continue
+        _extra(x, _NO_REPEAT_KEYS, w, issues)
+        ref = x.get("p")
+        if not isinstance(ref, str) or not _REF.match(ref.strip()):
+            issues.append(Issue("V1", "p must be one source such as \"P2\" or \"E\"", w + ".p"))
+            continue
+        quote = _text(x.get("quote"), w + ".quote", issues, required=True)
+        why = _text(x.get("why"), w + ".why", issues, required=True)
+        no_repeat.append(NoRepeat(ref.strip(), quote, why))
+
     if any(i.is_error for i in issues):
         return None, issues
     ir = DiagramIR(
@@ -312,6 +347,7 @@ def parse_ir(data: Any) -> tuple[DiagramIR | None, list[Issue]]:
         edges=tuple(links) if form != "sequence" else (),
         messages=tuple(links) if form == "sequence" else (),
         groups=tuple(groups),
+        no_repeat=tuple(no_repeat),
         extra_keys=tuple(sorted(set(data) - _TOP_KEYS)),
     )
     return ir, issues
@@ -367,6 +403,17 @@ IR_JSON_SCHEMA: dict[str, Any] = {
                 "type": "object", "required": ["from", "to"], "additionalProperties": False,
                 "properties": {"from": {"type": "string"}, "to": {"type": "string"},
                                "label": {"type": "string"}, "p": _REFS_SCHEMA},
+            },
+        },
+        "no_repeat": {
+            "type": "array",
+            "description": "flow only: a loop word in cited text that does not mean this work repeats. quote "
+                           "copies the words from that source (at most 40 characters), why says what they mean.",
+            "items": {
+                "type": "object", "required": ["p", "quote", "why"], "additionalProperties": False,
+                "properties": {"p": {"type": "string", "pattern": "^(E|P[1-9][0-9]*)$"},
+                               "quote": {"type": "string", "minLength": 1, "maxLength": 40},
+                               "why": {"type": "string", "minLength": 1}},
             },
         },
         "messages": {

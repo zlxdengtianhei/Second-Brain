@@ -65,7 +65,7 @@ def test_skip_needs_only_a_reason():
     (lambda d: d.update(groups=[{"label": "g", "members": ["ghost"]}]), "groups[0].members"),
     (lambda d: d.update(groups=[{"label": "g", "members": ["mid"]}, {"label": "h", "members": ["mid"]}]),
      "groups[1].members"),
-    (lambda d: d["edges"].extend([{"from": "mid", "to": "mid"}, {"from": "mid", "to": "mid"}]), "edges[9]"),
+    (lambda d: d["edges"].append({"from": "mid", "to": "mid"}), "edges[8]"),  # no self-loop in a flow (J8)
 ])
 def test_v1_rejects_malformed_ir(mutate, where):
     data = ir("algorithms/binary-search")
@@ -591,8 +591,9 @@ def test_v5_back_edge_looks_only_at_the_text_the_diagram_cites():
     errors = [str(e) for e in validate(_loop_flow(cite_p2=True), card, FULL).errors]
     assert len(errors) == 1 and errors[0].startswith("V5 P2, which the diagram cites, may say the work repeats")
     assert "«误差计算要重复到足够小为止。»" in errors[0]  # the message quotes the cited text it asks about
-    # it never pushes a loop onto text that does not state one: the other way out is to cite differently or skip
-    assert "If it does not, cite other text or skip; never add a loop the card does not state" in errors[0]
+    # it never pushes a loop onto text that does not state one: the other way out is to say so in no_repeat
+    assert ('If it does not, add {"p":"P2","quote":"<the words of P2 around «重复», copied>",'
+            '"why":"<what they mean>"} to no_repeat; never add a loop the card does not state') in errors[0]
     looped = _loop_flow(cite_p2=True)
     looped["edges"].append({"from": "f", "to": "a"})
     assert codes(looped, card, FULL) == []
@@ -645,11 +646,69 @@ def test_v5_loop_words(text, word):
     assert ref == "P2" and word in quote
 
 
-def test_v5_when_e_says_it_the_way_out_is_to_skip():
-    """V3's Y2: E has to stay cited, so when E only seems to say the work repeats, the model can only skip."""
+def test_v5_when_e_says_it_the_model_can_say_it_is_no_repeat():
+    """V3's D2: E has to stay cited, so before no_repeat the only way out of a misfire on E was to skip."""
     card = Card(title="t", essence="取样器反复按误差决定是否继续。", propositions=_loop_card("x").propositions)
-    [error] = [str(e) for e in validate(_loop_flow(cite_p2=False), card, FULL).errors if e.code == "V5"]
-    assert error.startswith("V5 E, which the diagram cites") and "If it does not, skip (E stays cited);" in error
+    data = _loop_flow(cite_p2=False)
+    [error] = [str(e) for e in validate(data, card, FULL).errors if e.code == "V5"]
+    assert error.startswith("V5 E, which the diagram cites") and '{"p":"E","quote":"<the words of E around «反复»' in error
+    data["no_repeat"] = [{"p": "E", "quote": "取样器反复按误差决定", "why": "it says how often it checks, not a step"}]
+    report = validate(data, card, FULL)
+    assert report.ok and not report.warnings and report.ir.no_repeat[0].p == "E"
+
+
+def _no_repeat(**item):
+    data = _loop_flow(cite_p2=True)
+    data["no_repeat"] = [item]
+    return validate(data, _loop_card("误差计算要重复到足够小为止。"), FULL)
+
+
+def test_no_repeat_excuses_only_the_words_it_copies():
+    """V3's D2: the model confirms or rejects a loop-word trigger; it never makes up a loop to pass."""
+    assert _no_repeat(p="P2", quote="要重复到足够小", why="一次算到足够小，不是循环").ok
+    assert _no_repeat(p="P2", quote="误差计算要重复到足够小为止。", why="x").ok   # the whole short sentence
+    for item, problem in (
+            ({"p": "P1", "quote": "要重复到足够小", "why": "x"}, "quote is not copied from P1"),
+            ({"p": "P2", "quote": "要重复到很小", "why": "x"}, "quote is not copied from P2"),
+            ({"p": "P2", "quote": "误差计算", "why": "x"}, "quote has no loop word"),
+            ({"p": "P9", "quote": "要重复到足够小", "why": "x"}, "P9 is not a source of this card"),
+            ({"p": "P2", "quote": "重复" * 21, "why": "x"}, "quote is 42 characters")):
+        report = _no_repeat(**item)
+        assert [e.code for e in report.errors] == ["V5"], item
+        assert [w.code for w in report.warnings] == ["W3"] and problem in str(report.warnings[0]), item
+        if item["p"] == "P2":  # the rewrite message says why the item did not count
+            assert f"(your no_repeat item for P2: {problem}" in str(report.errors[0])
+
+
+def test_no_repeat_keeps_other_loop_words_in_the_same_text():
+    card = _loop_card("误差计算要重复到足够小为止，否则不断取样。")
+    data = _loop_flow(cite_p2=True)
+    data["no_repeat"] = [{"p": "P2", "quote": "要重复到足够小", "why": "x"}]
+    [error] = [str(e) for e in validate(data, card, FULL).errors]
+    assert error.startswith("V5 P2") and "«不断»" in error
+
+
+@pytest.mark.parametrize("bad, where", [
+    ("x", "no_repeat"), (["x"], "no_repeat[0]"), ([{"p": "Q", "quote": "q", "why": "w"}], "no_repeat[0].p"),
+    ([{"p": "P2", "why": "w"}], "no_repeat[0].quote"), ([{"p": "P2", "quote": "q"}], "no_repeat[0].why")])
+def test_v1_no_repeat_shape(bad, where):
+    data = _loop_flow(cite_p2=True)
+    data["no_repeat"] = bad
+    report = validate(data, _loop_card("误差计算要重复到足够小为止。"), FULL)
+    assert report.ir is None and [e.where for e in report.errors] == [where]
+
+
+def test_a_self_loop_is_a_state_or_structure_thing():
+    """J8 #63: a flow's self-loop draws a long line far from its label; a state may stay in itself once."""
+    data = _loop_flow(cite_p2=False)
+    data["edges"].append({"from": "b", "to": "b"})
+    [error] = validate(data, _loop_card("x"), FULL).errors
+    assert error.code == "V1" and "draw a repeat as an edge back from a later step" in error.message
+    ir, issues = parse_ir({"decision": "draw", "form": "state", "question": "q",
+                           "nodes": [{"key": k, "label": k, "p": ["P1"]} for k in "abc"],
+                           "edges": [{"from": "a", "to": "a", "label": "x", "p": ["P1"]},
+                                     {"from": "a", "to": "b", "label": "y", "p": ["P1"]}]})
+    assert ir is not None and not issues
 
 
 def test_v12_replacing_a_renderable_old_diagram_needs_e_and_two_propositions():
@@ -664,6 +723,8 @@ def test_v12_replacing_a_renderable_old_diagram_needs_e_and_two_propositions():
     assert [e.code for e in errors] == ["V12"] and "renders" in errors[0].message  # E and P1 only
     broken = Card.from_dict({**card.to_dict(), "old_diagram": "broken"})
     assert codes(data, broken, wording_off) == []  # a broken old diagram sets no bar
+    wide = Card.from_dict({**card.to_dict(), "old_diagram": "too_wide"})
+    assert codes(data, wide, wording_off) == ["V12"]  # a too-wide one renders: the same bar
     one = Card.from_dict({**card.to_dict(), "propositions": ["每次取一批样本计算误差。"]})
     assert "V12" not in codes(data, one, wording_off)  # min(2, 1): E and the only proposition
 

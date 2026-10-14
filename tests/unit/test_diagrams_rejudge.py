@@ -11,6 +11,7 @@ import pytest
 
 from secondbrain.diagrams import audit, prune, rejudge
 from secondbrain.diagrams.__main__ import main
+from secondbrain.diagrams.ir import Card
 
 VAULT = Path(__file__).resolve().parents[1] / "fixtures" / "diagrams" / "vault"
 TOOL = Path(__file__).resolve().parents[2] / "tools" / "mermaid_check" / "check.mjs"
@@ -720,3 +721,70 @@ def test_prune_does_not_turn_a_repaired_diagram_that_tb_makes_wider():
     assert wider["why"].endswith("TB 1200 px is wider than 900 px, not turned")
     [same], n = prune.settle([act], {"k.md": {"ok": True, "width": 900}}, tiers)
     assert same["flip"] is True and n == {"still_wide": 1}
+
+
+# After the vault batch: too-wide upright flowcharts are redrawn; a redraw set writes new diagrams only ------------
+
+def test_a_too_wide_old_diagram_may_be_redrawn_with_its_steps():
+    tiers = {"w.md": {"tier": "redraw", "why": "wide", "kind": "mechanism", "domain": "evol", "n_props": 3,
+                      "has_essence": True, "sha256": "w", "ok": True, "type": "flowchart-v2", "direction": "TB",
+                      "width": 900, "graph": OLD_EVOL}}
+    pool = rejudge.select_pool(tiers)
+    assert [(p["pool_reason"], p["tier_why"]) for p in pool] == [("redraw", "wide")]
+    [card] = rejudge.pool_cards(pool, [{"ref": "w.md", "title": "t", "kind": "mechanism", "domain": "evol",
+                                        "essence": "e", "propositions": ["a", "b", "c"], "related_titles": [],
+                                        "blocks": ["flowchart TB\n  a --> b"]}])
+    assert card["old_diagram"] == "too_wide" and card["old_mermaid"].startswith("flowchart TB")
+    assert Card.from_dict(card).old_diagram == "too_wide"
+    [act] = rejudge.plan(pool, [{"ref": "w.md", "status": "draw", "mermaid": NEW_EVOL}])
+    assert (act["rule"], act["action"]) == ("draw", "replace")      # the same steps, narrower: written
+    same = rejudge.select_pool({"w.md": {**tiers["w.md"], "tier": "review", "why": "no_gain"}})
+    [act] = rejudge.plan(same, [{"ref": "w.md", "status": "draw", "mermaid": NEW_EVOL}])
+    assert act["rule"].startswith("draw:same_as_old/")              # elsewhere a redraw is still not written
+    weak = NEW_EVOL.replace("props=E,P1,P2", "props=P1,P2")
+    [act] = rejudge.plan(pool, [{"ref": "w.md", "status": "draw", "mermaid": weak}])
+    assert act["rule"].startswith("draw:weak/")                     # it still has to cite E and 2 propositions
+    [act] = rejudge.plan(pool, [{"ref": "w.md", "status": "skip"}])
+    assert (act["rule"], act["action"]) == ("skip:old_parses+wide", "keep_old")  # skipped: today's diagram stays
+
+
+def test_replace_only_writes_new_diagrams_and_nothing_else():
+    pool = rejudge.select_pool(TIERS)
+    outcomes = [{"ref": "a.md", "status": "draw", "mermaid": NEW}, {"ref": "b.md", "status": "skip"},
+                {"ref": "g.md", "status": "skip"}, {"ref": "h.md", "status": "skip"}]
+    acts = {a["ref"]: a for a in rejudge.plan(pool, outcomes, audits=[
+        {"ref": "h.md", "verdict": "remove", "category": "restates"}])}
+    assert {r: a["action"] for r, a in acts.items()} == {"a.md": "replace", "b.md": "remove", "c.md": "pending",
+                                                         "g.md": "remove", "h.md": "remove"}
+    only = {a["ref"]: a for a in rejudge.replace_only(list(acts.values()))}
+    assert {r: (a["action"], a["rule"]) for r, a in only.items()} == {
+        "a.md": ("replace", "draw"), "b.md": ("keep_old", "skip:old_broken/replace_only"), "c.md": ("pending", "pending"),
+        "g.md": ("keep_old", "skip:domain/replace_only"), "h.md": ("keep_old", "audit:restates/replace_only")}
+    turned = rejudge.replace_only([{"ref": "x.md", "action": "repair_old", "rule": "r", "mermaid": "m", "flip": True}])
+    assert turned == [{"ref": "x.md", "action": "keep_old", "rule": "r/replace_only"}]
+
+
+def test_cli_writeback_replace_only(tmp_path, capsys):
+    shutil.copytree(VAULT, tmp_path / "v")
+    out = tmp_path / "audit"
+    main(["audit-extract", str(tmp_path / "v"), str(out)])
+    checks = [{"id": f"{TCP}#0", "ok": True, "type": "flowchart-v2", "direction": "LR", "width": 900,
+               "nodes": [{"id": "c", "label": "客户端", "shape": "square"}, {"id": "s", "label": "服务器", "shape": "square"}],
+               "edges": [{"from": "c", "to": "s", "label": "SYN"}, {"from": "s", "to": "c", "label": "SYN+ACK"},
+                         {"from": "c", "to": "s", "label": "ACK"}]},
+              {"id": f"{BUBBLE}#0", "ok": False, "error": "Parse error"}]
+    (out / "checks.jsonl").write_text("".join(json.dumps(c, ensure_ascii=False) + "\n" for c in checks),
+                                      encoding="utf-8")
+    (out / "repairs.jsonl").write_text("", encoding="utf-8")
+    main(["audit-tier", str(out)])
+    outcomes = tmp_path / "outcomes.jsonl"
+    outcomes.write_text(json.dumps({"ref": TCP, "status": "skip"}) + "\n" +
+                        json.dumps({"ref": BUBBLE, "status": "draw", "mermaid": NEW}) + "\n", encoding="utf-8")
+    before = (tmp_path / "v" / TCP).read_bytes()
+    capsys.readouterr()
+    assert main(["writeback", str(tmp_path / "v"), str(out), str(outcomes), "--replace-only", "--write"]) == 0
+    done = json.loads(capsys.readouterr().out)
+    assert done["actions"] == {"keep_old": 1, "replace": 1}   # TCP would be turned TB; here it stays as it is
+    assert (tmp_path / "v" / TCP).read_bytes() == before
+    assert NEW.split("\n")[1] in (tmp_path / "v" / BUBBLE).read_text(encoding="utf-8")
+

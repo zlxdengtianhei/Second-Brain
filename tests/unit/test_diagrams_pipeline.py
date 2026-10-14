@@ -174,6 +174,8 @@ def test_payload_tells_the_model_about_the_old_diagram():
     assert card_payload(renders)["old_mermaid"] == "flowchart LR\n  a --> b"   # so a mere redraw can be skipped
     broken = Card.from_dict({**renders.to_dict(), "old_diagram": "broken"})
     assert "old_mermaid" not in card_payload(broken)
+    wide = Card.from_dict({**renders.to_dict(), "old_diagram": "too_wide"})  # the drawer redraws it narrower
+    assert (card_payload(wide)["old_diagram"], card_payload(wide)["old_mermaid"]) == ("too_wide", "flowchart LR\n  a --> b")
 
 
 def test_state_diagrams_are_not_width_gated_on_either_path():

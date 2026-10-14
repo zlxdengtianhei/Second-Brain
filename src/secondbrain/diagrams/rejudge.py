@@ -50,6 +50,13 @@ rendering everywhere (the pool, the draw and audit packets, the guards).
 Where it stays, the repaired source is written in its place (action
 repair_old, rule ...+repaired, turned TB too when it is wide and LR).
 
+After the vault batch: an upright flowchart wider than the reading width is
+tiered redraw (rule wide) and goes to the model as old_diagram "too_wide";
+a narrower redraw of the same steps is what it is for, so the same-structure
+guard does not apply to it (a new diagram still passes the width gate V14).
+replace_only() turns a plan into one that writes new diagrams only, for a
+redraw set whose skipped cards keep today's diagram.
+
 Only the diagram section changes, byte for byte. Every write is guarded by the
 file hash recorded at audit time, and nothing is written without write=True.
 """
@@ -104,14 +111,15 @@ def select_pool(tiers: dict[str, dict[str, Any]], policy: PrunePolicy = PrunePol
 def pool_cards(pool: list[dict[str, Any]], cards: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
     """Card records (the packets input format) for the pool, in pool order.
 
-    old_diagram ("renders" or "broken") and, when it renders, old_mermaid go
-    to the draw packet; old_mermaid also to the old-diagram audit packet. A
-    repaired old diagram is shown as repaired.
+    old_diagram ("renders", "too_wide" for rule wide, or "broken") and, when it
+    renders, old_mermaid go to the draw packet; old_mermaid also to the
+    old-diagram audit packet. A repaired old diagram is shown as repaired.
     """
     by_ref = {c["ref"]: c for c in cards}
     fields = ("ref", "title", "kind", "domain", "essence", "propositions", "related_titles")
     return [{**p, **{k: by_ref[p["ref"]][k] for k in fields},
-             "old_diagram": "renders" if p["old_parses"] else "broken",
+             "old_diagram": ("too_wide" if p.get("tier_why") == "wide" else "renders") if p["old_parses"]
+             else "broken",
              "old_mermaid": (p.get("old_repair") or {}).get("text") or (by_ref[p["ref"]].get("blocks") or [""])[0]}
             for p in pool]
 
@@ -295,7 +303,8 @@ def plan(pool: list[dict[str, Any]], outcomes: Iterable[dict[str, Any]],
                             "status_in": o.get("status") if o else None})
         elif o["status"] == "draw" and o.get("mermaid") and (not p["old_parses"] or (
                 strong_enough(o["mermaid"], p.get("n_props", 0), p.get("has_essence", True))
-                and not same_structure(o["mermaid"], p.get("old_graph"), policy.same_words_min))):
+                and (p.get("tier_why") == "wide"  # a narrower redraw is the point
+                     or not same_structure(o["mermaid"], p.get("old_graph"), policy.same_words_min)))):
             actions.append({**row, "action": "replace", "rule": "draw", "mermaid": o["mermaid"]})
         else:
             action, rule = _skip_rule(p, policy)
@@ -327,6 +336,17 @@ def plan(pool: list[dict[str, Any]], outcomes: Iterable[dict[str, Any]],
         actions.append({"ref": ref, "action": "not_in_pool", "rule": "not_in_pool",
                         "status_in": final[ref].get("status")})
     return actions
+
+
+def replace_only(actions: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The plan with every write but a new diagram dropped: the old diagram stays as it is (rule .../replace_only)."""
+    out = []
+    for a in actions:
+        if a["action"] in WRITES and a["action"] != "replace":
+            a = {k: v for k, v in a.items() if k not in ("mermaid", "flip")}
+            a = {**a, "action": "keep_old", "rule": a["rule"] + "/replace_only"}
+        out.append(a)
+    return out
 
 
 def summary(actions: list[dict[str, Any]]) -> dict[str, dict[str, int]]:
