@@ -103,7 +103,7 @@ sb job prune --days 30              # 预览旧的回滚日志；加 --apply 才
 
 | 命令 | 作用 |
 |---|---|
-| `sb refresh` | 预览会变动的地图页；加 `--apply` 写入 |
+| `sb refresh` | 预览会变动的地图页；加 `--apply` 写入。知识库里已有别处来的地图页时，第一次 `--apply` 还会给每页加上 Breadcrumbs 字段 `BC-list-note-field: down`（[详见](new-vault.zh-CN.md#4-检查并生成地图页)） |
 | `sb classify --domain <slug>` | 为没有支柱和主题的卡片提议支柱和主题（`--repair-invalid` 用于分类已不再合法的卡片） |
 | `sb backlog` | 分批对整个领域或整个知识库做分类 |
 | `sb curate --domain <slug>` | 提议修改已有领域的支柱和主题 |

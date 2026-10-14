@@ -103,7 +103,7 @@ These commands use the same produce, review and gate pattern on cards that are a
 
 | Command | Does |
 |---|---|
-| `sb refresh` | previews the MOC pages that would change; `--apply` writes them |
+| `sb refresh` | previews the MOC pages that would change; `--apply` writes them. In a vault with MOC pages from elsewhere, the first `--apply` also adds the Breadcrumbs field `BC-list-note-field: down` to each page ([details](new-vault.md#4-check-and-generate-the-maps)) |
 | `sb classify --domain <slug>` | proposes pillar and topic for cards that have none (`--repair-invalid` for cards whose classification is no longer legal) |
 | `sb backlog` | runs classification over a whole domain or vault in batches |
 | `sb curate --domain <slug>` | proposes changes to the pillars and topics of existing domains |

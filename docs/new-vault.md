@@ -94,6 +94,16 @@ sb refresh --apply # writes the MOC pages under 20_MOCs/
 
 `issues` lists what stops writes. `map_issues` counts what `sb refresh` reports about the maps, for example cards whose classification is no longer valid; `sb refresh` lists each one.
 
+**In a vault that already has MOC pages**, the first `sb refresh --apply` adds three lines of front matter at the top of every domain and pillar page under `20_MOCs/` that does not have them yet:
+
+```yaml
+---
+BC-list-note-field: down
+---
+```
+
+The Obsidian plugin Breadcrumbs reads this field and treats the links listed on the page as links down the hierarchy, so the domain page, its pillar pages and the cards form one tree. Without Breadcrumbs the field does nothing. `sb refresh` without `--apply` counts these pages under `drift.kinds.breadcrumbs_field_only`, so you can see the change before it is made. It happens once: later refreshes keep the field. To undo it, run `sb recover <job_id> --rollback` with the job id that `sb refresh --apply` printed, or revert the change with git if the vault is under git.
+
 ## 5. Ingest
 
 Put notes, articles or transcripts into `00_Inbox/`, then follow the quick start in the [README](../README.md): `sb inbox list`, then `sb ingest <file>` with the host or the API executor.

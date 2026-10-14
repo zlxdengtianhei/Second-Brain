@@ -175,7 +175,7 @@ language = "en"               # en | zh: card headings and the text of maps, HOM
 diagrams = true
 ```
 
-Optional extras: `pip install -e ".[api]"` for the API executor, `".[mcp]"` for the MCP server, `".[review]"` for `sb review`, `sb today` and the review page of `sb daily`. Every key, the folder layout and the review policy: [docs/configuration.md](docs/configuration.md). To start a vault of your own: [docs/new-vault.md](docs/new-vault.md).
+Optional extras: `pip install -e ".[api]"` for the API executor, `".[mcp]"` for the MCP server, `".[review]"` for `sb review`, `sb today` and the review page of `sb daily`. Every key, the folder layout and the review policy: [docs/configuration.md](docs/configuration.md). To start a vault of your own: [docs/new-vault.md](docs/new-vault.md). In an Obsidian vault that already has MOC pages, the first `sb refresh --apply` adds Breadcrumbs front matter (`BC-list-note-field: down`) to each of them, once; [step 4](docs/new-vault.md#4-check-and-generate-the-maps) says how to see and undo it.
 
 ## Safety and recovery
 

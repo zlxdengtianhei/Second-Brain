@@ -175,7 +175,7 @@ language = "zh"               # en | zh：卡片小节名，以及地图页、HO
 diagrams = true
 ```
 
-可选依赖：API 执行器用 `pip install -e ".[api]"`，MCP 服务用 `".[mcp]"`，`sb review`、`sb today` 和 `sb daily` 的复习页用 `".[review]"`。全部配置项、目录布局和复核策略：[docs/configuration.zh-CN.md](docs/configuration.zh-CN.md)。从零建自己的库：[docs/new-vault.zh-CN.md](docs/new-vault.zh-CN.md)。
+可选依赖：API 执行器用 `pip install -e ".[api]"`，MCP 服务用 `".[mcp]"`，`sb review`、`sb today` 和 `sb daily` 的复习页用 `".[review]"`。全部配置项、目录布局和复核策略：[docs/configuration.zh-CN.md](docs/configuration.zh-CN.md)。从零建自己的库：[docs/new-vault.zh-CN.md](docs/new-vault.zh-CN.md)。已有地图页的 Obsidian 知识库里，第一次 `sb refresh --apply` 会给每个地图页加一次 Breadcrumbs front matter（`BC-list-note-field: down`）；怎样先看到、怎样撤销见[第 4 步](docs/new-vault.zh-CN.md#4-检查并生成地图页)。
 
 ## 安全与恢复
 

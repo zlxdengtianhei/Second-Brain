@@ -94,6 +94,16 @@ sb refresh --apply # 把地图页写到 20_MOCs/ 下
 
 `issues` 列出会阻止写入的问题。`map_issues` 统计 `sb refresh` 报告的地图页问题，例如分类已不合法的卡片；`sb refresh` 会逐条列出。
 
+**已有地图页的知识库**：第一次运行 `sb refresh --apply` 时，会在 `20_MOCs/` 下每个还没有这几行的领域页和支柱页顶部加上三行 front matter：
+
+```yaml
+---
+BC-list-note-field: down
+---
+```
+
+Obsidian 插件 Breadcrumbs 读取这个字段，把页面上列出的链接当作通往下一层的链接，于是领域页、它的支柱页和卡片连成一棵树。没装 Breadcrumbs 时，这个字段不起作用。不带 `--apply` 运行 `sb refresh`，会在 `drift.kinds.breadcrumbs_field_only` 下统计这类页面，所以改动之前就能看到。这个改动只发生一次：以后的 refresh 保留这个字段。要撤销，用 `sb refresh --apply` 输出的任务 id 运行 `sb recover <job_id> --rollback`；如果知识库在 git 里，也可以用 git 撤回这次改动。
+
 ## 5. 入库
 
 把笔记、文章或转录稿放进 `00_Inbox/`，然后按 [README](../README.zh-CN.md) 里的快速上手操作：先运行 `sb inbox list`，再用宿主执行器或 API 执行器运行 `sb ingest <file>`。
