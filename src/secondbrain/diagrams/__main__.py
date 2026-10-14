@@ -36,8 +36,10 @@ writeback write the repaired source where the diagram stays.
 writeback refuses to run when the rendering old flowcharts in the pool have
 no graph (a tiers.json from before the redraw guard): rerun audit-tier. With
 --checker, prune and writeback render the old diagrams they turn TB or
-repair, as they will be written; writeback adds +wide to the rule of those
-still wider than 700 px, prune names them in 'why' and counts them.
+repair, as they will be written. A diagram that TB would make wider than it
+was is not turned (writeback: keep_old, +wide instead of +tb). writeback adds
++wide to the rule of those still wider than 700 px; prune names both cases in
+'why' and counts them (not_turned, still_wide).
 """
 from __future__ import annotations
 
@@ -240,23 +242,19 @@ def cmd_prune(a) -> dict:
     tiers = json.loads((a.dir / "tiers.json").read_text(encoding="utf-8"))["cards"]
     actions = prune.plan(tiers, prune.PrunePolicy(width_limit=a.width_limit))
     fmt = _card_format(a, [x["ref"] for x in actions])
-    still_wide = {}
+    settled = None
     if a.checker:  # render the diagrams turned TB or repaired as they will be written
         a.out = a.dir
         kept = rejudge.kept_sources(a.vault, actions, fmt)
-        checks = _run_checker(a, kept, "kept") if kept else {}
-        still_wide = {r: c["width"] for r, c in checks.items() if c.get("ok") and (c.get("width") or 0) > a.width_limit}
+        actions, settled = prune.settle(actions, _run_checker(a, kept, "kept") if kept else {}, tiers, a.width_limit)
     rows = prune.apply(a.vault, actions, write=a.write, fmt=fmt)
-    for r in rows:
-        if r["ref"] in still_wide:
-            r["why"] += f"; still {still_wide[r['ref']]} px wide"
     _write_jsonl(a.dir / ("prune_manifest.jsonl" if a.write else "prune_plan.jsonl"), rows)
     summary: dict = {"actions": dict(Counter(r["action"] for r in rows)),
                      "status": dict(Counter(r["status"] for r in rows)),
                      "lines_removed": sum(r.get("lines_removed", 0) for r in rows),
                      "lines_added": sum(r.get("lines_added", 0) for r in rows)}
-    if a.checker:
-        summary["still_wide"] = len(still_wide)
+    if settled is not None:
+        summary.update({"not_turned": settled["not_turned"], "still_wide": settled["still_wide"]})
     return summary
 
 
@@ -279,11 +277,11 @@ def cmd_writeback(a) -> dict:
         raise SystemExit(str(e))
     touched = [x["ref"] for x in actions if x["action"] in rejudge.WRITES]
     fmt = _card_format(a, touched)
-    if a.checker:  # render the kept old diagrams as they will be written; +wide when still too wide
+    if a.checker:  # render the kept old diagrams as they will be written: no turn that widens, +wide if too wide
         a.out = a.dir
         kept = rejudge.kept_sources(a.vault, actions, fmt)
-        actions = rejudge.mark_still_wide(actions, _run_checker(a, kept, "kept") if kept else {},
-                                          _writeback_policy(a))
+        actions = rejudge.settle_kept(actions, _run_checker(a, kept, "kept") if kept else {},
+                                      {p["ref"]: p.get("old_width") for p in pool}, _writeback_policy(a))
     rows = rejudge.apply(a.vault, actions, write=a.write, fmt=fmt)
     _write_jsonl(a.dir / ("writeback_manifest.jsonl" if a.write else "writeback_plan.jsonl"), rows)
     _write_jsonl(a.dir / "writeback_mermaid.jsonl",

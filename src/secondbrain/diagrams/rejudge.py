@@ -350,15 +350,24 @@ def kept_sources(vault: Path, actions: list[dict[str, Any]], fmt: CardFormat = D
     return out
 
 
-def mark_still_wide(actions: list[dict[str, Any]], checks: dict[str, dict[str, Any]],
-                    policy: WritebackPolicy = WritebackPolicy()) -> list[dict[str, Any]]:
-    """Add +wide to the rule of a kept old diagram whose new source (kept_sources) still renders too wide."""
+def settle_kept(actions: list[dict[str, Any]], checks: dict[str, dict[str, Any]], widths: dict[str, Any],
+                policy: WritebackPolicy = WritebackPolicy()) -> list[dict[str, Any]]:
+    """Settle the kept old diagrams from renders of their new sources (kept_sources).
+
+    widths holds each card's old width. A turn to TB that makes the diagram wider than that is dropped (the
+    turn is there to make it narrower): direction_tb becomes keep_old, repair_old keeps the old direction, and
+    +tb in the rule becomes +wide. A diagram that still renders wider than the limit gets +wide.
+    """
     out = []
     for a in actions:
         c = checks.get(a["ref"]) or {}
-        if a["action"] in KEPT_CHANGED and c.get("ok") and (c.get("width") or 0) > policy.width_limit \
-                and c.get("type") not in ("stateDiagram", "state") and "+wide" not in a["rule"]:
-            a = {**a, "rule": a["rule"] + "+wide"}
+        if a["action"] in KEPT_CHANGED and c.get("ok") and c.get("type") not in ("stateDiagram", "state"):
+            width, old = c.get("width") or 0, widths.get(a["ref"])
+            if (a["action"] == "direction_tb" or a.get("flip")) and old and width > old:
+                a = {**a, "rule": a["rule"].replace("+tb", "+wide")}
+                a = {**a, "action": "keep_old"} if a["action"] == "direction_tb" else {**a, "flip": False}
+            elif width > policy.width_limit and "+wide" not in a["rule"]:
+                a = {**a, "rule": a["rule"] + "+wide"}
         out.append(a)
     return out
 

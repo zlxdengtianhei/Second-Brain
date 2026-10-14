@@ -44,7 +44,8 @@ def test_flow_golden_output():
 
 def test_groups_become_subgraphs_and_data_nodes_cylinders():
     mm = emit(parsed("operating-systems/segmented-paging"))
-    assert '  subgraph g1 ["逻辑地址的三部分"]\n    n1["段号"]' in mm
+    # direction TB: Mermaid lays out a group with no edge to the outside on its own, left to right unless told
+    assert '  subgraph g1 ["逻辑地址的三部分"]\n    direction TB\n    n1["段号"]' in mm
     assert '  n4[("段表")]' in mm and '  n7(["物理地址：第 3 次访问内存"])' in mm
 
 

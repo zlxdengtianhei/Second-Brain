@@ -98,6 +98,20 @@ MEASURED = {
                                  + [{"key": "m", "label": "合"}],
                                  [{"from": "a", "to": f"b{i}"} for i in range(3)] + [{"from": f"b{i}", "to": "m"} for i in range(3)],
                                  groups=[{"label": "甲", "members": ["b1"]}]), 528, 15),
+    # groups with no edge to the outside: Mermaid lays each out on its own (15 px more); without direction TB in the
+    # subgraph it would turn them left to right (D2's two-stage pipeline: 1,906 px)
+    "two_groups_alone": (flow([{"key": k, "label": c(4, i)} for i, k in enumerate("abcd")],
+                              [{"from": "a", "to": "b"}, {"from": "c", "to": "d"}],
+                              groups=[{"label": "甲", "members": ["a", "b"]}, {"label": "乙", "members": ["c", "d"]}]), 454, 5),
+    "two_stage_groups": (flow([{"key": k, "label": c(w, i), "role": r} for i, (k, w, r) in enumerate([
+                                  ("a1", 4, "input"), ("a2", 5, "step"), ("a3", 10, "step"), ("a4", 2, "store"),
+                                  ("b1", 2, "input"), ("b2", 4, "step"), ("b3", 4, "step"), ("b4", 8, "step"),
+                                  ("b5", 5, "output")])],
+                              [{"from": a, "to": b} for a, b in [("a1", "a2"), ("a2", "a3"), ("a3", "a4"), ("b1", "b2"),
+                                                                 ("b2", "b3"), ("b3", "b4"), ("b2", "b4"), ("b4", "b5")]],
+                              arrows="data", groups=[{"label": "甲段", "members": ["a1", "a2", "a3", "a4"]},
+                                                     {"label": "乙段", "members": ["b1", "b2", "b3", "b4", "b5"]}]),
+                         647, 40),
     # a group outside the widest layer adds nothing to it
     "row3_7_group_above": (flow([{"key": "s", "label": "始"}, {"key": "g", "label": c(4, 1)}]
                                 + [{"key": f"b{i}", "label": c(7, i + 2)} for i in range(3)] + [{"key": "m", "label": "合"}],

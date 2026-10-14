@@ -16,7 +16,8 @@ edgesep), 35 px between a node and an edge item; the widest layer sets the
 width. Unbroken Latin words do not wrap. A group is a box as wide as its
 widest layer plus 40 px (dagre's border nodes), standing in every layer it
 spans; 15 px more for each end of the layer it reaches (we assume one end
-when it shares the layer); it widens to fit its title. On the 15 grouped
+when it shares the layer), 15 px more when no edge leaves it (Mermaid then
+lays it out on its own); it widens to fit its title. On the 15 grouped
 diagrams models drew in the trial rounds the error is -10 to +16 px but for
 one; a group whose member hands on to a node beside it can push the layout
 much wider than this (a probe: 691 px, estimated 497). Checked on 3,210 vault flowcharts
@@ -41,6 +42,7 @@ WRAP = 200        # Mermaid wraps label text at this width, between words or CJK
 GROUP = 40        # a group's box: its widest layer plus this
 GROUP_END = 15    # more when the box reaches an end of the layer
 GROUP_TITLE = 8   # box around its title, ends included
+GROUP_ALONE = 15  # more for a group with no edge to the outside, which Mermaid lays out on its own
 _PAD = {"step": 60, "actor": 60, "data": 60, "decision": 54, "store": 31, "input": 70, "output": 70,
         "start": 41, "end": 41}
 _WRAP = {"decision": 224}
@@ -148,6 +150,8 @@ def _with_groups(ir: DiagramIR, layers: dict[int, list[Item]]) -> dict[int, floa
             continue
         span = range(min(spans), max(spans) + 1)
         box = max(_row_px([it for it in layers.get(i, []) if member(g, it[1])]) for i in span) + GROUP
+        if not any((e.src in g.members) != (e.dst in g.members) for e in ir.edges):
+            box += GROUP_ALONE
         box = max(box, text_px(g.label) + GROUP_TITLE - 2 * GROUP_END)
         for i in span:
             rows[i] = [it for it in rows.get(i, []) if not member(g, it[1])] + [(box, f"group {n}")]

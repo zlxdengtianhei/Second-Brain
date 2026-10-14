@@ -9,6 +9,9 @@ Actions come from audit tiers:
 - keep tier, diagram that only renders after audit-repair: the repaired
   source replaces the broken one (turned TB as well when it is wide and LR).
 
+With renders of the turned diagrams (settle), one that TB makes wider than
+it was stays as it is: the turn is there to make it narrower.
+
 Every write is guarded by the file hash recorded at audit time: a card edited
 since the audit is reported as conflict and left alone. Without apply=True
 nothing is written; the manifest shows what would change.
@@ -18,6 +21,7 @@ from __future__ import annotations
 import difflib
 import hashlib
 import re
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -50,6 +54,30 @@ def plan(tiers: dict[str, dict[str, Any]], policy: PrunePolicy = PrunePolicy()) 
         elif t["tier"] == "keep" and t.get("direction") in ("LR", "RL") and (t.get("width") or 0) > policy.width_limit:
             actions.append({"ref": ref, "action": "direction_tb", "why": f"width {t['width']}", "sha256": t["sha256"]})
     return actions
+
+
+def settle(actions: list[dict[str, Any]], checks: dict[str, dict[str, Any]], tiers: dict[str, dict[str, Any]],
+           width_limit: int = 700) -> tuple[list[dict[str, Any]], Counter]:
+    """Settle the actions from renders of the diagrams as they would be written (rejudge.kept_sources).
+
+    A turn that makes the diagram wider than its old width is dropped: direction_tb becomes keep (nothing
+    written), repair keeps the old direction. A diagram still wider than width_limit says so in why.
+    Returns the actions and counts of not_turned and still_wide.
+    """
+    out, n = [], Counter()
+    for a in actions:
+        c = checks.get(a["ref"]) or {}
+        turned = a["action"] == "direction_tb" or (a["action"] == "repair" and a.get("flip"))
+        old = tiers.get(a["ref"], {}).get("width")
+        if c.get("ok") and turned and old and (c.get("width") or 0) > old:
+            n["not_turned"] += 1
+            a = {**a, "why": f"{a['why']}; TB {c['width']} px is wider than {old} px, not turned"}
+            a = {**a, "action": "keep"} if a["action"] == "direction_tb" else {**a, "flip": False}
+        elif c.get("ok") and (c.get("width") or 0) > width_limit:
+            n["still_wide"] += 1
+            a = {**a, "why": f"{a['why']}; still {c['width']} px wide"}
+        out.append(a)
+    return out, n
 
 
 def replace_block(text: str, source: str, heading: str, flip: bool = False) -> str:
@@ -128,6 +156,9 @@ def apply(vault: Path, actions: list[dict[str, Any]], write: bool = False,
     for a in actions:
         path = Path(vault) / a["ref"]
         row = {"ref": a["ref"], "action": a["action"], "why": a["why"]}
+        if a["action"] == "keep":  # a turn settle dropped
+            rows.append({**row, "status": "unchanged"})
+            continue
         if not path.is_file():
             rows.append({**row, "status": "missing"})
             continue

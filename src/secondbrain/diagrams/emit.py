@@ -78,6 +78,8 @@ def _flow(ir: DiagramIR, ids: dict[str, str]) -> list[str]:
     grouped: set[str] = set()
     for gi, g in enumerate(ir.groups, 1):
         lines.append(f'  subgraph g{gi} ["{escape(g.label)}"]')
+        # Mermaid lays out a group with no edge to the outside on its own, left to right unless told
+        lines.append("    direction TB")
         for k in g.members:
             lines.append(node_line(k, "    "))
             grouped.add(k)

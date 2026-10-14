@@ -447,12 +447,43 @@ def test_a_kept_diagram_still_too_wide_after_turning_says_so(tmp_path):
     assert (act["action"], act["rule"]) == ("direction_tb", "skip:old_parses+tb")
     [src] = rejudge.kept_sources(tmp_path / "v", [act])
     assert src["id"] == TCP and src["text"].startswith("flowchart TB\n") and "b4[" in src["text"]
-    wide = rejudge.mark_still_wide([act], {TCP: {"ok": True, "type": "flowchart-v2", "width": 741}})
+    old = {TCP: 900}
+    wide = rejudge.settle_kept([act], {TCP: {"ok": True, "type": "flowchart-v2", "width": 741}}, old)
     assert wide[0]["rule"] == "skip:old_parses+tb+wide" and wide[0]["action"] == "direction_tb"
-    assert rejudge.mark_still_wide([act], {TCP: {"ok": True, "type": "flowchart-v2", "width": 700}}) == [act]
-    assert rejudge.mark_still_wide([act], {}) == [act]                      # not rendered: unchanged
+    assert rejudge.settle_kept([act], {TCP: {"ok": True, "type": "flowchart-v2", "width": 700}}, old) == [act]
+    assert rejudge.settle_kept([act], {}, old) == [act]                      # not rendered: unchanged
     path.write_text(path.read_text(encoding="utf-8") + "\n", encoding="utf-8")
     assert rejudge.kept_sources(tmp_path / "v", [act]) == []               # changed since the audit: not rendered
+
+
+def test_a_turn_that_makes_the_diagram_wider_is_dropped():
+    """Turning TB is there to make a wide diagram narrower; when the render says it does not, the old one stays."""
+    skip = [{"ref": "a.md", "status": "skip", "reason": "x"}]
+    row = {**rejudge.select_pool({"a.md": {**TIERS["a.md"], "type": "flowchart-v2", "graph": OLD_EVOL,
+                                           "direction": "LR", "width": 706}})[0]}
+    [act] = rejudge.plan([row], skip)
+    tb = lambda w: {"a.md": {"ok": True, "type": "flowchart-v2", "width": w}}
+    [kept] = rejudge.settle_kept([act], tb(1018), {"a.md": 706})
+    assert (kept["action"], kept["rule"]) == ("keep_old", "skip:old_parses+wide")
+    [turned] = rejudge.settle_kept([act], tb(650), {"a.md": 706})
+    assert (turned["action"], turned["rule"]) == ("direction_tb", "skip:old_parses+tb")
+    [unknown] = rejudge.settle_kept([act], tb(1018), {})                     # old width unknown: turned as planned
+    assert (unknown["action"], unknown["rule"]) == ("direction_tb", "skip:old_parses+tb+wide")
+    repaired = {**row, "old_repair": {"text": "flowchart LR\n  a --> b", "fixes": ["quoted label"]}}
+    [rep] = rejudge.plan([repaired], skip)
+    assert (rep["action"], rep["flip"], rep["rule"]) == ("repair_old", True, "skip:old_parses+tb+repaired")
+    [rep_kept] = rejudge.settle_kept([rep], tb(774), {"a.md": 720})
+    assert (rep_kept["action"], rep_kept["flip"], rep_kept["rule"]) == ("repair_old", False, "skip:old_parses+wide+repaired")
+    # prune's keep tier follows the same rule
+    tiers = {"k.md": {"tier": "keep", "why": "branch", "kind": "mechanism", "n_props": 4, "sha256": "9", "ok": True,
+                      "type": "flowchart-v2", "direction": "LR", "width": 776}}
+    acts, n = prune.settle(prune.plan(tiers), {"k.md": {"ok": True, "width": 791}}, tiers)
+    assert acts[0]["action"] == "keep" and acts[0]["why"] == "width 776; TB 791 px is wider than 776 px, not turned"
+    assert n == {"not_turned": 1}
+    assert prune.apply(Path("/nonexistent"), acts) == [{"ref": "k.md", "action": "keep", "why": acts[0]["why"],
+                                                        "status": "unchanged"}]
+    acts, n = prune.settle(prune.plan(tiers), {"k.md": {"ok": True, "width": 741}}, tiers)
+    assert acts[0]["action"] == "direction_tb" and acts[0]["why"].endswith("; still 741 px wide") and n == {"still_wide": 1}
 
 
 def _checker():
@@ -467,19 +498,22 @@ def test_writeback_checker_marks_kept_diagrams_still_too_wide(tmp_path, capsys):
     path, row = _wide_lr(tmp_path)
     out = tmp_path / "audit"
     main(["audit-extract", str(tmp_path / "v"), str(out)])
-    (out / "tiers.json").write_text(json.dumps({"cards": {TCP: {
-        "tier": "review", "why": "no_gain", "kind": "mechanism", "n_props": 3, "sha256": row["sha256"], "ok": True,
-        "type": "flowchart-v2", "direction": "LR", "width": 900, "graph": {"labels": [], "edges": []}}}}),
-        encoding="utf-8")
     outcomes = tmp_path / "outcomes.jsonl"
     outcomes.write_text(json.dumps({"ref": TCP, "status": "skip", "reason": "x"}) + "\n", encoding="utf-8")
-    capsys.readouterr()
-    main(["writeback", str(tmp_path / "v"), str(out), str(outcomes), "--checker", str(TOOL),
-          "--checker-modules", str(modules)])
-    plan = json.loads(capsys.readouterr().out)
-    assert plan["by_pool_reason"] == {"review": {"skip:old_parses+tb+wide→direction_tb": 1}}
+    plans = {}
+    for old_width in (1500, 900):  # the TB render (about 1,156 px) is narrower than the first, wider than the second
+        (out / "tiers.json").write_text(json.dumps({"cards": {TCP: {
+            "tier": "review", "why": "no_gain", "kind": "mechanism", "n_props": 3, "sha256": row["sha256"], "ok": True,
+            "type": "flowchart-v2", "direction": "LR", "width": old_width, "graph": {"labels": [], "edges": []}}}}),
+            encoding="utf-8")
+        capsys.readouterr()
+        main(["writeback", str(tmp_path / "v"), str(out), str(outcomes), "--checker", str(TOOL),
+              "--checker-modules", str(modules)])
+        plans[old_width] = json.loads(capsys.readouterr().out)["by_pool_reason"]
     [kept] = [json.loads(x) for x in (out / "kept_checks.jsonl").read_text(encoding="utf-8").splitlines()]
-    assert kept["width"] > 700 and kept["direction"] == "TB"
+    assert 900 < kept["width"] < 1500 and kept["direction"] == "TB"
+    assert plans[1500] == {"review": {"skip:old_parses+tb+wide→direction_tb": 1}}
+    assert plans[900] == {"review": {"skip:old_parses+wide→keep_old": 1}}
 
 
 def test_the_redraw_guard_needs_both_the_words_and_the_degrees():
@@ -518,12 +552,15 @@ def test_prune_checker_names_kept_diagrams_still_too_wide(tmp_path, capsys):
     path, row = _wide_lr(tmp_path)
     out = tmp_path / "audit"
     out.mkdir()
-    (out / "tiers.json").write_text(json.dumps({"cards": {TCP: {
-        "tier": "keep", "why": "branch", "kind": "mechanism", "n_props": 3, "sha256": row["sha256"], "ok": True,
-        "type": "flowchart-v2", "direction": "LR", "width": 900}}}), encoding="utf-8")
-    capsys.readouterr()
-    main(["prune", str(tmp_path / "v"), str(out), "--checker", str(TOOL), "--checker-modules", str(modules)])
-    summary = json.loads(capsys.readouterr().out)
-    assert (summary["actions"], summary["still_wide"]) == ({"direction_tb": 1}, 1)
-    [planned] = [json.loads(x) for x in (out / "prune_plan.jsonl").read_text(encoding="utf-8").splitlines()]
-    assert planned["why"].startswith("width 900; still ") and planned["why"].endswith(" px wide")
+    runs = {}
+    for old_width in (1500, 900):
+        (out / "tiers.json").write_text(json.dumps({"cards": {TCP: {
+            "tier": "keep", "why": "branch", "kind": "mechanism", "n_props": 3, "sha256": row["sha256"], "ok": True,
+            "type": "flowchart-v2", "direction": "LR", "width": old_width}}}), encoding="utf-8")
+        capsys.readouterr()
+        main(["prune", str(tmp_path / "v"), str(out), "--checker", str(TOOL), "--checker-modules", str(modules)])
+        summary = json.loads(capsys.readouterr().out)
+        [planned] = [json.loads(x) for x in (out / "prune_plan.jsonl").read_text(encoding="utf-8").splitlines()]
+        runs[old_width] = (summary["actions"], summary["not_turned"], summary["still_wide"], planned["why"])
+    assert runs[1500][:3] == ({"direction_tb": 1}, 0, 1) and runs[1500][3].startswith("width 1500; still ")
+    assert runs[900][:3] == ({"keep": 1}, 1, 0) and runs[900][3].endswith("is wider than 900 px, not turned")
