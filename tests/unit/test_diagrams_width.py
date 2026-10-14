@@ -4,7 +4,9 @@ prompt's rule of thumb (rule 7) checked against both the estimate and the render
 The measured widths come from tools/mermaid_check (mermaid@11.13.0 with Obsidian's patch and config,
 Chrome on macOS, -apple-system / PingFang fonts), 2026-10-13. They pin the layout constants: a change of
 the node gap, the edge-label gap, the group frame or the sequence margins moves at least one case out of
-its tolerance.
+its tolerance. Other fonts give other widths (the first CI run, Chrome on Ubuntu: row3_8 at 584 px), so the
+pins are compared on macOS only; the rule of thumb (each case at most 700 px, no labels overlapping) is
+checked wherever the renderer runs.
 """
 from __future__ import annotations
 
@@ -13,6 +15,8 @@ import os
 import re
 import shutil
 import subprocess
+import sys
+import warnings
 from pathlib import Path
 
 import pytest
@@ -251,8 +255,12 @@ def test_rule_of_thumb_and_pinned_widths_render_as_measured(tmp_path):
                           capture_output=True, text=True, timeout=600)
     assert proc.returncode == 0, proc.stderr
     got = {r["id"]: r for r in map(json.loads, out.read_text(encoding="utf-8").splitlines())}
-    for k in cases:
-        if k.startswith("rule7: "):
-            assert got[k]["width"] <= 700 and not got[k]["label_overlaps"], (k, got[k]["width"])
-        else:
-            assert abs(got[k]["width"] - MEASURED[k][1]) <= 2, (k, got[k]["width"], MEASURED[k][1])
+    too_wide = {k: (got[k]["width"], got[k]["label_overlaps"]) for k in cases if k.startswith("rule7: ")
+                and (got[k]["width"] > 700 or got[k]["label_overlaps"])}
+    assert not too_wide, too_wide  # the gate the prompt promises, on every platform
+    off = {k: (got[k]["width"], MEASURED[k][1]) for k in MEASURED if abs(got[k]["width"] - MEASURED[k][1]) > 2}
+    if sys.platform == "darwin":  # where the pins were measured
+        assert not off, off
+    elif off:
+        warnings.warn(f"{len(off)} of {len(MEASURED)} widths pinned on macOS render otherwise on {sys.platform} "
+                      f"(measured, pinned): {off}")
