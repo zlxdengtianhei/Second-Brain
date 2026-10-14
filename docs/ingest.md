@@ -51,7 +51,7 @@ sb ingest --retry <job>             # try the pending cards of a partial job aga
 - two relations between the same two cards, counting the back links the program writes;
 - two relations that point opposite ways: a type and its inverse from one card to the same target, or two cards that each claim the same type of the other;
 - a card with a `contrasts_with` relation that does not state the contrast in `confusions`;
-- a duplicate slug, a title that cannot be a file name, or a title that an existing card already has;
+- a duplicate slug, a slug whose card id an existing card already has (`rag-vs-finetune` when `kc_rag-vs-finetune` exists), a title that cannot be a file name, or a title that an existing card already has;
 - fewer than two or more than four question-and-answer pairs, or `::` inside them;
 - a card id written into the text (cards refer to each other by `[[Title]]`);
 - a card that is missing from the coverage table, or a coverage row whose quote is not in the chunk.
@@ -69,7 +69,7 @@ In one transaction:
 - the MOC pages of the affected domains and the entry page `HOME.md`;
 - with `after_ingest = "move"`, the removal of the inbox file (its bytes are in the source copy).
 
-Relations that point to a pending card are left out and listed in the result as `skipped_relations`.
+A relation to a card the reviewer judged a duplicate goes to the existing card it repeats. Relations that point to a pending card are left out and listed in the result as `skipped_relations`. They are carried to retry children: when a child writes the target card, the relation is added, with its back link on the earlier card, and the child's result lists it under `restored_relations`.
 
 Nothing is merged or corrected automatically. The job result lists the conflicts as `conflicts`, and `sb status` lists every open one under `conflicts`. A conflict stays open until the text of the existing card changes; back links added to that card do not count.
 
