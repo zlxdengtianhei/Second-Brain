@@ -168,6 +168,7 @@ Maps a substring of a model name to a family, for the independent-review check. 
 | `SECONDBRAIN_STATE_DIR` | processing-state folder |
 | `SECONDBRAIN_LOCK_WAIT` | seconds to wait for another writer's lock (default 30) |
 | `SECONDBRAIN_NO_CACHE=1` | read every card from disk, without the parse cache |
+| `SECONDBRAIN_TEST_TIMEOUT` | seconds after which one test fails (default 300; `0` turns the limit off; POSIX only) |
 
 ## Install extras
 

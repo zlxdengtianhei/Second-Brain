@@ -27,7 +27,7 @@ sb ingest <file> --domain <slug> --pillar "<pillar>"   # 把卡片放到这里�
 
 `--executor host|api` 覆盖 `[executor] default`。`--max-rounds N` 覆盖本次运行的返修轮数。
 
-要指定一份来源的卡片放在哪里，加 `--domain <slug>`，还可以再加 `--pillar "<pillar>"`，然后加 `--topic "<topic>"`（MCP 工具 `ingest_prepare` 接受同样三个参数）。放置位置随任务冻结，重试也沿用；`--retry` 同时带放置参数会报错。放置的领域排在每个块候选领域的第一位。生产者把卡片放到这里，除非卡片的主题在分类体系里已经有自己的主题（例如某个算法、某种数据结构、另一门语言）；没有这个理由却放到别处的卡片，复核者会退回。不存在的领域、支柱或主题会被拒绝，错误信息列出现有的；`--topic` 必须已经在这个支柱的 `topics` 里。没有创建主题的命令：在 `20_MOCs/_pillars/<MOC>.yaml` 里这个支柱的 `topics:` 下加上名字，或让 `sb curate` 提议。
+要指定一份来源的卡片放在哪里，加 `--domain <slug>`，还可以再加 `--pillar "<pillar>"`，然后加 `--topic "<topic>"`（MCP 工具 `ingest_prepare` 接受同样三个参数）。放置位置随任务冻结，重试也沿用；`--retry` 同时带放置参数会报错。如果这份来源之前已用别的放置位置冻结，任务沿用原来的位置，`sb ingest`（或 `ingest_prepare`）会返回一条 `placement_note` 说明这一点。放置的领域排在每个块候选领域的第一位。生产者把卡片放到这里，除非卡片的主题在分类体系里已经有自己的主题（例如某个算法、某种数据结构、另一门语言）；没有这个理由却放到别处的卡片，复核者会退回。不存在的领域、支柱或主题会被拒绝，错误信息列出现有的；`--topic` 必须已经在这个支柱的 `topics` 里。没有创建主题的命令：在 `20_MOCs/_pillars/<MOC>.yaml` 里这个支柱的 `topics:` 下加上名字，或让 `sb curate` 提议。
 
 ## 各个步骤
 
@@ -73,7 +73,7 @@ sb ingest <file> --domain <slug> --pillar "<pillar>"   # 把卡片放到这里�
 
 它对每个新主题给出一个判定：`keep`，或 `same` 加另一个新主题的 id。后一种情况下，这个主题下的卡片改归到那个主题（它的领域、支柱和主题），这个主题不加入分类体系。任务指定了放置位置（`--domain`）时，保留放置位置上的那个主题。
 
-答案里有卡片或主题没有判定、`same` 指向一张自己也是 `same` 的卡、`carry` 不是逐字抄的、替换保留卡没有的命题或把同一条命题替换两次、同一段文字既在 `replace` 又在 `propositions` 里、超过 12 条和 8 组的上限、违反链接规则、孤立的卡既没有链接也没有 `alone`，或 `same` 没写理由时，`sb job submit` 会拒绝。在 API 模式下，答案经过 `max_repair_rounds` 次修正（默认 1 次）后仍不合格，就记为跳过，卡片按各块复核后的样子写入。任务结果在 `source_check` 下报告结果：`merged`（带 `carried` 计数、`replaced` 和 `repeats_skipped`）、`added_links`、`alone`、`refiled_topics`、`moved_relations` 和 `rewritten_links`，或 `status: skipped` 加原因。
+答案里有卡片或主题没有判定、`same` 指向一张自己也是 `same` 的卡、`carry` 不是逐字抄的、替换保留卡没有的命题或把同一条命题替换两次、同一段文字既在 `replace` 又在 `propositions` 里、超过 12 条和 8 组的上限、违反链接规则、孤立的卡既没有链接也没有 `alone`，或 `same` 没写理由时，`sb job submit` 会拒绝。在 API 模式下，答案经过 `max_repair_rounds` 次修正（默认 1 次）后仍不合格，就记为跳过，卡片按各块复核后的样子写入。在宿主模式下，核对一再失败时运行 `sb job skip-source-check <job> --reason "<why>"`。失败次数达到 `max_repair_rounds` + 1（默认 2；被拒的答案、放弃或失败的运行、无效的输出合起来计）之后才能用；次数不够时，它会拒绝并说明目前有几次。它放弃未完成的运行并记下跳过；下一次 `sb job advance` 画图并按各块复核后的样子写入卡片，不做跨块的合并或链接。任务结果在 `source_check` 下报告结果：`merged`（带 `carried` 计数、`replaced` 和 `repeats_skipped`）、`added_links`、`alone`、`refiled_topics`、`moved_relations` 和 `rewritten_links`，或 `status: skipped` 加原因。
 
 ## 写入哪些内容
 
@@ -93,9 +93,9 @@ sb ingest <file> --domain <slug> --pillar "<pillar>"   # 把卡片放到这里�
 - `target card was not written`：目标卡还在待定。这条关系会带到重试子任务；子任务写入目标卡时补上这条关系，并在先前那张卡上加反向链接。
 - `target card was dropped in review; add the link by hand if it still matters`：这条关系不再带下去。
 
-在重试子任务里，每条带过来的关系都只有一种结果。写入的关系列在 `restored_relations` 里，带 `target_slug`。新卡已经用别的类型链接了那张卡时，这一行带 `linked_as`；目标卡被判为某张已有卡的重复时，这一行带 `redirected_from`：关系改为指向那张已有卡，并写在两张已有卡上。其余带过来的关系仍留在 `skipped_relations` 里，原因是上面两种之一。
+在重试子任务里，每条带过来的关系都只有一种结果。写入的关系列在 `restored_relations` 里，带 `target_slug`。新卡已经用别的类型链接了那张卡时，这一行带 `linked_as`；目标卡被判为某张已有卡的重复（关系改为指向那张已有卡，并写在两张已有卡上），或在重试的来源核对里被并入另一张卡时，这一行带 `redirected_from`。其余带过来的关系仍留在 `skipped_relations` 里，原因是上面两种之一。
 
-程序不会自动合并或改正任何内容：由你判断哪张卡对，改正另一张。任务结果在 `conflicts` 里列出冲突，`sb status` 在 `conflicts` 下列出所有未解决的冲突，`HOME.md` 在「现在做什么」下给出数量。已有卡片的正文改动之前，冲突一直列着；只给那张卡补上反向关系不算改动。
+程序不会自动合并或改正任何内容：由你判断哪张卡对，改正另一张。任务结果在 `conflicts` 里列出冲突，`sb status` 在 `conflicts` 下列出所有未解决的冲突，`HOME.md` 在「现在做什么」下给出数量。已有卡片的正文改动之前，冲突一直列着；只给那张卡补上反向关系不算改动。每处冲突按来源、卡片和已有卡片只算一次：重试子任务再次记下父任务记过的冲突时，显示的是重试的那条记录。
 
 ## 任务与恢复
 
@@ -108,6 +108,7 @@ sb job advance <job_id> --executor host
 sb recover <job_id> --rollback      # 逐字节还原这个任务写过的每个文件
 sb recover <job_id> --resume        # 完成被打断的写入
 sb job reset <job_id> --reason "<why>"   # 搁置一个卡住且从未写入的任务
+sb job skip-source-check <job_id> --reason "<why>"   # 来源核对一再失败后，不经核对写入
 sb job prune --days 30              # 预览旧的回滚日志；加 --apply 才删除
 ```
 

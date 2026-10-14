@@ -168,6 +168,7 @@ commit = false
 | `SECONDBRAIN_STATE_DIR` | 处理状态目录 |
 | `SECONDBRAIN_LOCK_WAIT` | 等待另一个写者的锁的秒数（默认 30） |
 | `SECONDBRAIN_NO_CACHE=1` | 每张卡都从磁盘读取，不用解析缓存 |
+| `SECONDBRAIN_TEST_TIMEOUT` | 单个测试超过这么多秒就判为失败（默认 300；`0` 关闭限制；只在 POSIX 系统上有效） |
 
 ## 安装可选依赖
 
