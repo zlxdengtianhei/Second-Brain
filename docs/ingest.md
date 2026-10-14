@@ -55,7 +55,7 @@ To say where the cards of a source belong, add `--domain <slug>`, optionally wit
 - two relations between the same two cards, counting the back links the program writes;
 - two relations that point opposite ways: a type and its inverse from one card to the same target, or two cards that each claim the same type of the other;
 - a card with a `contrasts_with` relation that does not state the contrast in `confusions`;
-- a duplicate slug, a slug whose card id an existing card already has (`rag-vs-finetune` when `kc_rag-vs-finetune` exists), a title that cannot be a file name, or a title that an existing card already has;
+- a duplicate slug, a slug whose card id an existing card already has (`spacing-effect` when `kc_spacing-effect` exists), a title that cannot be a file name, or a title that an existing card already has;
 - fewer than two or more than four question-and-answer pairs, or `::` inside them;
 - a card id written into the text (cards refer to each other by `[[Title]]`);
 - a card that is missing from the coverage table, or a coverage row whose quote is not in the chunk.
