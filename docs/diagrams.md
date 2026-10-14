@@ -110,7 +110,7 @@ A typical run:
 2. Audit the old diagrams that `prune` could remove: `pool --delete-tier --out OUT/delete_pool.jsonl`, `old-audit-packets` on that file, the model answers, and `old-audit-apply --out OUT/delete_audit`.
 3. `prune --old-audit OUT/delete_audit/old_audit_outcomes.jsonl --checker`, first without `--write` to read the plan, then with `--write`.
 4. `pool`, `packets` on the pool, the model answers, `apply --checker`, and the rewrites.
-5. `old-audit-packets` on the pool, the answers, and `old-audit-apply --out OUT/pool_audit`.
+5. `old-audit-packets` on the pool, the answers, and `old-audit-apply --out OUT/pool_audit`. This can run beside step 4 and covers every pool card that might keep or lose its old diagram; after step 4, `--outcomes outcomes.jsonl` limits it to the cards the model skipped.
 6. `writeback --checker --old-audit OUT/pool_audit/old_audit_outcomes.jsonl` without `--write` to read the plan, then with `--write`.
 
 Run `sb diagrams <command> --help` for every option.

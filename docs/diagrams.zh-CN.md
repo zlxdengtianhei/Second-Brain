@@ -110,7 +110,7 @@ flowchart TB
 2. 审计 `prune` 可能删除的旧图：`pool --delete-tier --out OUT/delete_pool.jsonl`，对这个文件运行 `old-audit-packets`，模型作答，再运行 `old-audit-apply --out OUT/delete_audit`。
 3. 运行 `prune --old-audit OUT/delete_audit/old_audit_outcomes.jsonl --checker`，先不带 `--write` 查看计划，再带 `--write` 运行。
 4. 运行 `pool`，对池运行 `packets`，模型作答，运行 `apply --checker`，处理重写。
-5. 对池运行 `old-audit-packets`，模型作答，再运行 `old-audit-apply --out OUT/pool_audit`。
+5. 对池运行 `old-audit-packets`，模型作答，再运行 `old-audit-apply --out OUT/pool_audit`。这一步可以和第 4 步同时进行，覆盖池中所有可能保留或失去旧图的卡片；在第 4 步之后运行时，用 `--outcomes outcomes.jsonl` 只审计模型跳过的卡片。
 6. 先不带 `--write` 运行 `writeback --checker --old-audit OUT/pool_audit/old_audit_outcomes.jsonl` 查看计划，再带 `--write` 运行。
 
 运行 `sb diagrams <command> --help` 查看全部选项。
