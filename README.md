@@ -4,9 +4,9 @@ Turn notes in an Obsidian inbox into checked, linked knowledge cards, and review
 
 [中文说明](README.zh-CN.md)
 
-![Animated atlas of a Second Brain vault: cards appear day by day, relations light up between them, then the view moves into one domain](docs/media/second-brain-atlas-en.gif)
+![Animated atlas of a Second Brain vault: cards appear day by day, relations light up between them, the maps of content sort them into domains, the view moves into one domain and one card, then pulls back to the whole map](docs/media/second-brain-atlas-en.gif)
 
-<sub>The atlas shows the author's own vault: 8,615 cards and 23,841 typed relations in 25 domains. Those cards are not published. The GIF shows three short stretches of the 54-second atlas animation at normal speed. This repository ships the tool and two small example vaults, in [English](examples/vault/) and in [Chinese](examples/vault-zh/).</sub>
+<sub>The atlas shows the author's own vault: 8,615 cards and 23,841 typed relations in 25 domains. Those cards are not published. The GIF is the whole 54-second atlas animation at normal speed. This repository ships the tool and two small example vaults, in [English](examples/vault/) and in [Chinese](examples/vault-zh/).</sub>
 
 - **Cards from your inbox, with a second opinion.** One model drafts atomic cards from a source. A separate reviewer judges every card against the source. Code checks quotes, taxonomy and links before anything is written.
 - **One recoverable write per source.** Cards, a copy of the source, the registries and the maps are written in one transaction. `sb recover <job> --rollback` undoes it byte for byte.
