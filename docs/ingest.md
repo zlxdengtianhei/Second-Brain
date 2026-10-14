@@ -33,11 +33,12 @@ sb ingest --retry <job>             # try the pending cards of a partial job aga
 | Freeze | The source bytes, the extracted text, the chunks, the catalog, the full taxonomy and the nearest cards are stored as the job's input, with a hash. Only UTF-8 text is read unless a converter is configured. A source over `max_source_bytes` is refused. |
 | Chunk | The text is cut into exact consecutive slices of about `chunk_chars` characters, at headings and blank lines first, then at sentence ends. |
 | Route | Each paragraph of a chunk is searched against the existing cards. The domains of the best matches become the chunk's candidate domains. The best matches for the whole chunk, then the best three of each paragraph (40 at most), become its neighbours. |
-| Produce | The producer gets the chunk, all domains with their guiding questions, the full taxonomy of the candidate domains (with card counts per topic), the neighbours and the cards already proposed for other chunks of the same source. It returns cards, proposed new topics and a coverage table. |
+| Produce | The producer gets the chunk, all domains with their guiding questions, the full taxonomy of the candidate domains (with card counts per topic), the neighbours and, in API mode, the cards already proposed for earlier chunks of the same source: there the chunks run one after another. In host mode `sb ingest` hands out every first-round producer task at once, so those producers see no other chunk's cards. It returns cards, proposed new topics and a coverage table. |
 | Check | Code validates the answer when it is submitted (list below). Errors go back to the producer; an invalid answer uses the chunk's repair round. |
-| Review | The reviewer gets the chunk, the cards without the producer's reasons, for each new card the ids of the five closest existing cards, each of those cards once with its title, domain, essence and (within a size budget) its propositions, and the taxonomy. It decides `accept`, `revise` or `duplicate` for each card, `accept` or `revise` for each new topic, and whether the coverage table is right, each with a reason. When it accepts a card that links an existing card, it also sets `overlap`: `distinct` if the card holds a recallable unit of its own, or `needs_review` with `overlap_with` naming the linked card it mostly repeats. A card that adds no recallable unit of its own is a `duplicate`. Producer and reviewer can flag `conflicts`, where a new card disagrees with an existing one. |
-| Repair | Cards marked `revise` go back to the producer with the reviewer's findings, once by default. Accepted cards are kept. The round also sees what earlier rounds settled without a card (duplicates of existing cards, passages out of scope, as `already_settled`) and does not write those again. When the reviewer refused a new topic, the accepted cards under it come back as `refile_cards`; the producer may file them, with the same slug, under a renamed topic or an existing one, and they are reviewed again. A rejected card that the repair splits or drops does not stay pending; the coverage verdict of the later round decides. |
+| Review | The reviewer gets the chunk, the cards without the producer's reasons, the cards of all other chunks of the source, for each new card the ids of the five closest existing cards, each of those cards once with its title, domain, essence and (within a size budget) its propositions, and the taxonomy. It decides `accept`, `revise` or `duplicate` for each card, `accept` or `revise` for each new topic, and whether the coverage table is right, each with a reason. It does not ask for a revision only because another chunk makes the same point; the source check settles that. When it accepts a card that links an existing card, it also sets `overlap`: `distinct` if the card holds a recallable unit of its own, or `needs_review` with `overlap_with` naming the linked card it mostly repeats. A card that adds no recallable unit of its own is a `duplicate`. Producer and reviewer can flag `conflicts`, where a new card disagrees with an existing one. |
+| Repair | Cards marked `revise` go back to the producer with the reviewer's findings, once by default. Accepted cards are kept. The producer sees the cards of all other chunks here too. The round also sees what earlier rounds settled without a card (duplicates of existing cards, passages out of scope, as `already_settled`) and does not write those again. When the reviewer refused a new topic, the accepted cards under it come back as `refile_cards`; the producer may file them, with the same slug, under a renamed topic or an existing one, and they are reviewed again. A rejected card that the repair splits or drops does not stay pending; the coverage verdict of the later round decides. |
 | Gate | A card is written only if a reviewer in a different run accepted it. Cards still rejected become pending with the reasons. A card that is still filed under a rejected new topic after the repair also becomes pending. |
+| Source check | When the accepted cards come from two or more chunks, one reviewer judges them all together, with the source's new topics ([below](#the-source-check)). |
 | Diagram | Accepted cards go through the diagram step ([diagrams.md](diagrams.md)). |
 | Write | One transaction (below). |
 | Commit | With `[git] commit = true`, the written paths are committed. A failed commit is recorded and does not undo the write. |
@@ -56,11 +57,23 @@ sb ingest --retry <job>             # try the pending cards of a partial job aga
 - a card id written into the text (cards refer to each other by `[[Title]]`);
 - a card that is missing from the coverage table, or a coverage row whose quote is not in the chunk.
 
+### The source check
+
+Each chunk is produced and reviewed on its own, so two chunks can each write a card on the same point, or each propose a new topic for the same subject. Once every chunk has settled, and before the diagram step, one more reviewer hand-off (`chunk: xc01`, `step: source_check`) gets every accepted card and every new topic of the source, sorted by domain, pillar and topic. It gives one decision per card:
+
+- `keep`: no other card says the same thing.
+- `same`, with `with` naming another card's slug: this card is not written. Links to it go to `with`, and its own links move there, unless that card already links the target or the move would make a link to itself or two links pointing both ways.
+- `overlap`, with `with`: both cards are written. This one gets `status: needs-review` and is listed in `needs_review` with `overlap_with`.
+
+It gives one decision per new topic: `keep`, or `same` with another new topic's id. In the second case, the topic's cards are filed under that topic (its domain, pillar and topic), and the topic is not added.
+
+`sb job submit` refuses an answer that leaves a card or topic without a decision, points `same` at a card that is itself `same`, or gives no reason for a decision other than `keep`. In API mode, an answer that still fails after `max_repair_rounds` corrections (default 1) is recorded as skipped, and the cards are written as the chunk reviews left them. The job result reports the outcome under `source_check`: `merged`, `overlap`, `refiled_topics` and `moved_relations`, or `status: skipped` with the reason.
+
 ## What is written
 
 In one transaction:
 
-- each accepted card, as `10_Knowledge/<domain>/<title>.md`, rendered by code from the reviewed fields. A card the reviewer marked `needs_review` gets `status: needs-review` and is listed in the result as `needs_review`; the review queue does not offer it as a new card until that status changes. `sb status` counts these cards (`needs_review`), `sb status --needs-review` lists them, and `HOME.md` names the count under "What to do now";
+- each accepted card, as `10_Knowledge/<domain>/<title>.md`, rendered by code from the reviewed fields. A card the reviewer marked `needs_review` gets `status: needs-review` and is listed in the result as `needs_review` (so is an `overlap` card from the source check); the review queue does not offer it as a new card until that status changes. `sb status` counts these cards (`needs_review`), `sb status --needs-review` lists them, and `HOME.md` names the count under "What to do now";
 - inverse relations on existing cards, in the front matter and in the related section (the rest of the card stays as it is);
 - accepted new topics in the taxonomy file;
 - a copy of the source in `40_Sources/<first 16 hex of sha256>/<file name>`;
@@ -69,9 +82,14 @@ In one transaction:
 - the MOC pages of the affected domains and the entry page `HOME.md`;
 - with `after_ingest = "move"`, the removal of the inbox file (its bytes are in the source copy).
 
-A relation to a card the reviewer judged a duplicate goes to the existing card it repeats. Relations that point to a pending card are left out and listed in the result as `skipped_relations`. They are carried to retry children: when a child writes the target card, the relation is added, with its back link on the earlier card, and the child's result lists it under `restored_relations`.
+A relation to a card the reviewer judged a duplicate goes to the existing card it repeats. A relation that cannot be written is listed in the result under `skipped_relations`, with one of two reasons:
 
-Nothing is merged or corrected automatically. The job result lists the conflicts as `conflicts`, and `sb status` lists every open one under `conflicts`. A conflict stays open until the text of the existing card changes; back links added to that card do not count.
+- `target card was not written`: the target card is still pending. The relation is carried to retry children, and a child that writes the target adds the relation, with its back link on the earlier card.
+- `target card was dropped in review; add the link by hand if it still matters`: the relation is not carried.
+
+In a retry child, each carried relation gets exactly one outcome. A written one is listed under `restored_relations`, with `target_slug`. Such a row has `linked_as` when the new card already links that card with another type, and `redirected_from` when the target was judged a duplicate of an existing card: the relation then goes to that card and is written on both existing cards. Every other carried relation stays in `skipped_relations` with one of the two reasons above.
+
+Nothing is merged or corrected automatically: you decide which card is right and fix the other. The job result lists the conflicts as `conflicts`, `sb status` lists every open one under `conflicts`, and `HOME.md` shows their count under "What to do now". A conflict stays open until the text of the existing card changes; back links added to that card do not count.
 
 ## Jobs and recovery
 
@@ -91,7 +109,7 @@ Before writing, the transaction compares each file with the bytes it planned aga
 
 A rolled-back source can be ingested again.
 
-`sb recover <job> --rollback` needs the job's rollback journal (`transaction.json` in the job's state folder), and the tool never deletes it on its own. `sb job prune` previews, with sizes, the journals that may go: finished writes older than `--days` (default 30) that are not the newest write of their source or operation. A source's parent and retry jobs count as one source; other jobs are grouped by operation, such as refresh or daily. `sb job prune --apply` deletes those journals and their write plans; such a write can no longer be undone, and its cards stay. `sb status` shows the state folder and its size under `state_dir`.
+`sb recover <job> --rollback` needs the job's rollback journal (`transaction.json` in the job's state folder), and the tool never deletes it on its own. `sb job prune` previews, with sizes, the journals that may go: finished writes older than `--days` (default 30) that are not the newest write of their source or operation. A source's parent and retry jobs count as one source; other jobs are grouped by operation, such as refresh or daily. `sb job prune --apply` deletes those journals and their write plans; such a write can no longer be undone, and its cards stay. `sb status` shows the state folder under `state_dir`: its size, the size of each top-level folder (`parts`, such as `jobs` and `cache`) and what `sb job prune` would free now (`prunable_mb`). The cache holds the parse cache and the search index; it grows with the vault and is rebuilt if deleted.
 
 `sb ingest --retry <job>` runs the pending cards of a partial job as a child job, `<job>-retry1` and so on, with its own transaction. Roll back a retry child before its parent: while the child's writes are in the vault, `sb recover <parent> --rollback` refuses and names the child. A child that was rolled back or reset does not block a new `sb ingest --retry <parent>`; the new child takes its id.
 

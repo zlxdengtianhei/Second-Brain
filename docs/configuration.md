@@ -99,7 +99,7 @@ Folder names are relative to the vault. Folders must not overlap.
 | `reviews` | `50_Reviews` | the generated daily review page (`sb today`) |
 | `data` | `_data` | registries, the catalog, review logs |
 | `home` | `HOME.md` | the generated entry page |
-| `entry_docs` | none | hand-written top-level notes whose generated blocks `sb docs` refreshes, for example `["Guide.md"]` |
+| `entry_docs` | none | hand-written top-level notes whose generated blocks `sb docs` refreshes, for example `["Guide.md"]`. The last line of the block says that `sb` writes only the block, and that commands named elsewhere in the note are not `sb` commands |
 | `extra_dirs` | none | more top-level folders counted in the folder table on the entry page (and in the optional `kb-dirs` block) |
 
 ### `[executor]`, `[executor.producer]`, `[executor.reviewer]`

@@ -92,7 +92,7 @@ sb status          # "issues": [] 表示知识库已就绪
 sb refresh --apply # 把地图页写到 20_MOCs/ 下
 ```
 
-`issues` 列出会阻止写入的问题。`map_issues` 统计 `sb refresh` 报告的地图页问题，例如分类已不合法的卡片；`sb refresh` 会逐条列出。
+`issues` 列出会阻止写入的问题。`map_issues` 统计 `sb refresh` 报告的地图页问题，例如分类已不合法的卡片，以及学习顺序的环；`sb refresh` 会逐条列出。学习顺序的环，是两张或更多卡片组成的一组，它们之间的前置关系（`depends_on`、`follows`、`required_by`、`precedes`）绕回自身。每组报告一次（`learning_order_cycle`，带 `card_ids` 和 `mocs`），按整个知识库统计；复习队列会不按顺序取出这类卡片（`sb review queue` 报告 `prerequisite_cycles` 和 `cycle_breaks`）。
 
 **已有地图页的知识库**：第一次运行 `sb refresh --apply` 时，会在 `20_MOCs/` 下每个还没有这几行的领域页和支柱页顶部加上三行 front matter：
 

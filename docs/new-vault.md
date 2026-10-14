@@ -92,7 +92,7 @@ sb status          # "issues": [] means the vault is ready
 sb refresh --apply # writes the MOC pages under 20_MOCs/
 ```
 
-`issues` lists what stops writes. `map_issues` counts what `sb refresh` reports about the maps, for example cards whose classification is no longer valid; `sb refresh` lists each one.
+`issues` lists what stops writes. `map_issues` counts what `sb refresh` reports about the maps, for example cards whose classification is no longer valid, and learning-order cycles; `sb refresh` lists each one. A learning-order cycle is a group of two or more cards whose prerequisite links (`depends_on`, `follows`, `required_by`, `precedes`) lead back to themselves. It is reported once per group (`learning_order_cycle`, with `card_ids` and `mocs`), counted over the whole vault; the review queue takes such cards out of order (`sb review queue` reports `prerequisite_cycles` and `cycle_breaks`).
 
 **In a vault that already has MOC pages**, the first `sb refresh --apply` adds three lines of front matter at the top of every domain and pillar page under `20_MOCs/` that does not have them yet:
 

@@ -99,7 +99,7 @@ commit = false
 | `reviews` | `50_Reviews` | 生成的每日复习页（`sb today`） |
 | `data` | `_data` | 登记表、领域目录（catalog）、复习日志 |
 | `home` | `HOME.md` | 生成的首页 |
-| `entry_docs` | 无 | 手写的顶层笔记，`sb docs` 刷新其中生成的区块，例如 `["Guide.md"]` |
+| `entry_docs` | 无 | 手写的顶层笔记，`sb docs` 刷新其中生成的区块，例如 `["Guide.md"]`。区块最后一行说明 `sb` 只写这个区块，笔记其他地方提到的命令不是 `sb` 的命令 |
 | `extra_dirs` | 无 | 另外计入首页目录表的顶层目录（也计入可选的 `kb-dirs` 区块） |
 
 ### `[executor]`、`[executor.producer]`、`[executor.reviewer]`
