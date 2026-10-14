@@ -54,7 +54,7 @@ sb init --catalog catalog.json
 
 `sb init` writes the catalog to `_data/secondbrain/catalog.json`, an empty card registry `_data/notes_registry.json`, and the folders `10_Knowledge/`, `20_MOCs/_pillars/` and `00_Inbox/` when they are missing. Its result lists `created_folders` and `taxonomy_files_missing`: the taxonomy files you still have to write (step 3). Running it again with the same catalog changes nothing; it only adds a registry or folders that are missing.
 
-The catalog is written once. `sb init` also records the vault's language in it: `[cards] language` from the config file if set, else the language of maps already in the folder, else English. `sb language` shows it; `sb language --set zh` switches it, and then `sb refresh --apply` and `sb docs --apply` rewrite the generated pages. To change other parts of the catalog later, edit `_data/secondbrain/catalog.json` with care, or use the curation commands.
+The catalog is written once. `sb init` also records the vault's language in it: `[cards] language` from the config file if set, else the language of maps already in the folder, else English. `sb language` shows it; `sb language --set zh` switches it, and then `sb refresh --apply` and `sb docs --apply` rewrite the generated pages. To change other parts of the catalog later, edit `_data/secondbrain/catalog.json` with care, or use the curation commands. After a hand edit, run `sb doctor`: its `catalog` field says `valid`, or `invalid:` with the reason, and `sb status` then lists `catalog_invalid` under `issues`.
 
 ## 3. Write one taxonomy file per MOC
 
@@ -90,6 +90,8 @@ Start small. A producer can propose new topics under an existing pillar (two per
 sb status          # "issues": [] means the vault is ready
 sb refresh --apply # writes the MOC pages under 20_MOCs/
 ```
+
+`issues` lists what stops writes. `map_issues` counts what `sb refresh` reports about the maps, for example cards whose classification is no longer valid; `sb refresh` lists each one.
 
 ## 5. Ingest
 

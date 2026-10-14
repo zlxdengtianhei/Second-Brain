@@ -54,7 +54,7 @@ sb init --catalog catalog.json
 
 `sb init` 把领域目录写到 `_data/secondbrain/catalog.json`，写一份空的卡片登记表 `_data/notes_registry.json`，并在缺少时建立文件夹 `10_Knowledge/`、`20_MOCs/_pillars/` 和 `00_Inbox/`。它的结果列出 `created_folders` 和 `taxonomy_files_missing`；后者是你还要写的分类体系文件（第 3 步）。用同一份领域目录再运行一次，什么都不会改变；它只补上缺少的登记表或文件夹。
 
-领域目录只写入一次。`sb init` 还在领域目录里记录知识库的语言：配置文件设置了 `[cards] language` 就用它；否则用文件夹里已有地图页的语言；再否则用英文。`sb language` 显示这个语言；`sb language --set zh` 切换语言，然后由 `sb refresh --apply` 和 `sb docs --apply` 重写生成的页面。以后要改领域目录的其他部分，请小心编辑 `_data/secondbrain/catalog.json`，或使用整理（curation）命令。
+领域目录只写入一次。`sb init` 还在领域目录里记录知识库的语言：配置文件设置了 `[cards] language` 就用它；否则用文件夹里已有地图页的语言；再否则用英文。`sb language` 显示这个语言；`sb language --set zh` 切换语言，然后由 `sb refresh --apply` 和 `sb docs --apply` 重写生成的页面。以后要改领域目录的其他部分，请小心编辑 `_data/secondbrain/catalog.json`，或使用整理（curation）命令。手动编辑后运行 `sb doctor`：它的 `catalog` 字段给出 `valid`，或 `invalid:` 加原因；这时 `sb status` 也会在 `issues` 里列出 `catalog_invalid`。
 
 ## 3. 为每张地图页写一个分类体系文件
 
@@ -90,6 +90,8 @@ pillars:
 sb status          # "issues": [] 表示知识库已就绪
 sb refresh --apply # 把地图页写到 20_MOCs/ 下
 ```
+
+`issues` 列出会阻止写入的问题。`map_issues` 统计 `sb refresh` 报告的地图页问题，例如分类已不合法的卡片；`sb refresh` 会逐条列出。
 
 ## 5. 入库
 
