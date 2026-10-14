@@ -1550,11 +1550,9 @@ def _source_check_input(root: Path, packet: dict, settled: list[dict]) -> dict:
     """The source check's frozen input: the cards, their relation types, and the existing cards each may link.
 
     In a retry each card also gets the cards earlier jobs of the source wrote
-    that are closest to it (ranked among those cards only) and the ones it
-    links, with their essence and propositions, so the check can tell a repeat
-    of one of them (see :mod:`.source_check`).
+    that are closest to it (:func:`_near_written`), so the check can tell a
+    repeat of one of them (see :mod:`.source_check`).
     """
-    from ..search import search as rank
     snapshot = read_snapshot(root)
     domains = sorted({c['domain'] for o in settled for c in o['accepted'].values()})
 
@@ -1562,23 +1560,38 @@ def _source_check_input(root: Path, packet: dict, settled: list[dict]) -> dict:
         return [{'id': i, 'title': snapshot.cards[i].title, 'domain': snapshot.cards[i].domain}
                 for i in _neighbor_ids(root, snapshot, card)[:source_check.NEAR_EXISTING]]
     written = replace(snapshot, cards={i: snapshot.cards[i] for i in _written_ids(packet) if i in snapshot.cards})
-    by_slug = _written_slugs(packet)  # a retry card may link a written card by its slug
-    slug_of = {i: s for s, i in by_slug.items()}
-
-    def near_written(card):
-        query = _neighbor_query(card)
-        ranked = [h['id'] for h in rank(written, query, source_check.NEAR_WRITTEN)] if query.strip() else []
-        linked = [by_slug.get(r.get('target'), r.get('target')) for r in card.get('relations') or []
-                  if isinstance(r, dict)]
-        out = []
-        for i in dict.fromkeys(ranked + [t for t in linked if t in written.cards]):
-            digest_, props = _card_digest(written.cards[i])
-            out.append({'id': i, **({'slug': slug_of[i]} if i in slug_of else {}), **digest_, 'propositions': props})
-        return out
+    slugs = _written_slugs(packet)  # a retry card may link a written card by its slug
     frozen = source_check.frozen_input(settled, packet['source'], near_existing=near_existing,
-                                       near_written=near_written if written.cards else None,
+                                       near_written=(lambda card: _near_written(written, card, slugs))
+                                       if written.cards else None,
                                        relation_views=_relation_views(packet['catalog'], domains))
     return {**frozen, 'placement': packet['placement']} if packet.get('placement') else frozen
+
+
+def _near_written(written, card: dict, slugs: dict) -> list[dict]:
+    """The cards earlier jobs of the source wrote that ``card`` may repeat, for a retry's source check.
+
+    ``written`` is a snapshot of those cards only, so they are ranked among
+    themselves (by score, best first, ties by id). The
+    :data:`source_check.NEAR_WRITTEN` closest come first, then the written cards
+    ``card`` links (by id or by slug, ``slugs``: slug -> id), the closer ones
+    first, up to :data:`source_check.NEAR_WRITTEN_MAX` in all. Each comes with
+    its slug (when known), title, domain, essence and propositions.
+    """
+    from ..search import search as rank
+    query = _neighbor_query(card)
+    ranked = [h['id'] for h in rank(written, query, len(written.cards))] if query.strip() else []
+    closest = ranked[:source_check.NEAR_WRITTEN]
+    linked = {slugs.get(r.get('target'), r.get('target')) for r in card.get('relations') or [] if isinstance(r, dict)}
+    place = {i: n for n, i in enumerate(ranked)}  # a linked card without a word in common comes last
+    linked = sorted((i for i in linked if i in written.cards and i not in closest),
+                    key=lambda i: (place.get(i, len(ranked)), i))
+    slug_of = {i: s for s, i in slugs.items()}
+    out = []
+    for i in (closest + linked)[:source_check.NEAR_WRITTEN_MAX]:
+        digest_, props = _card_digest(written.cards[i])
+        out.append({'id': i, **({'slug': slug_of[i]} if i in slug_of else {}), **digest_, 'propositions': props})
+    return out
 
 
 def skip_source_check(root: Path, job_id: str, *, reason: str) -> dict:

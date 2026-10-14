@@ -57,8 +57,9 @@ MAX_PROPOSITIONS, MAX_FLASHCARDS = 12, 8
 _WIKILINK = re.compile(r'\[\[([^\[\]|#]+)((?:#[^\[\]|]*)?)((?:\|[^\[\]]*)?)\]\]')
 #: Existing cards shown per card as possible link targets (drill 3: the Euclid card was second).
 NEAR_EXISTING = 3
-#: Cards earlier jobs of the source wrote, shown per card of a retry by closeness (plus the ones it links).
-NEAR_WRITTEN = 5
+#: Cards earlier jobs of the source wrote, shown per card of a retry: the closest by score (the real-vault retry
+#: card's three repeated cards ranked first, second and fourth), then the ones it links, up to the maximum in all.
+NEAR_WRITTEN, NEAR_WRITTEN_MAX = 5, 8
 
 _STR = {'type': 'string'}
 _NSTR = {'type': ['string', 'null']}
@@ -108,8 +109,9 @@ def frozen_input(settled: list[dict], source: dict, *, relation_views: dict,
 
     ``near_existing(card)`` gives the existing cards (id, title, domain) a card
     may link; ``near_written(card)``, in a retry, the cards earlier jobs of the
-    source wrote that are closest to it (id, title, domain, essence,
-    propositions); ``relation_views`` the relation types and their meanings.
+    source wrote that are closest to it or that it links, at most
+    :data:`NEAR_WRITTEN_MAX` (id, title, domain, essence, propositions);
+    ``relation_views`` the relation types and their meanings.
     """
     accepted = [(o['chunk'], s, c) for o in settled for s, c in o['accepted'].items()]
     slugs = {s for _, s, _ in accepted}

@@ -353,7 +353,7 @@ def test_a_carried_link_to_a_card_the_retry_merges_goes_to_the_card_it_repeats(t
 # by the retry no longer saw those cards) ------------------------------------------------------------------------
 @pytest.mark.parametrize('by_slug', [False, True])
 def test_a_single_chunk_retry_is_checked_against_the_cards_its_source_wrote(tmp_path, monkeypatch, by_slug):
-    monkeypatch.setattr(source_check, 'NEAR_WRITTEN', 1)  # the closest written card, and the ones the card links
+    monkeypatch.setattr(source_check, 'NEAR_WRITTEN', 1)  # the closest written card, then the ones the card links
     root, job_id, parent, whole = partial_parent(tmp_path, {'arrival-order'})
     ids = {p['slug']: p['id'] for p in parent['produced']}
     before = ingest._card_digest(read_snapshot(root).cards[ids['queue-order']])[1]
@@ -364,6 +364,7 @@ def test_a_single_chunk_retry_is_checked_against_the_cards_its_source_wrote(tmp_
     assert card['slug'] == 'arrival-order'
     near = {e['id']: e for e in card['near_written']}
     assert list(near) == [ids['queue-order'], ids['lantern-queue']]  # the closest, then the one it links
+    assert near[ids['lantern-queue']]['slug'] == 'lantern-queue'
     assert near[ids['queue-order']]['propositions'] == before and before
     assert near[ids['queue-order']]['essence'] and near[ids['queue-order']]['title'] == CARDS['queue-order']['title']
     # kept: written as reviewed, and the carried link from the parent's cost card reaches it
@@ -396,6 +397,35 @@ def test_a_retry_card_that_repeats_a_written_card_is_written_next_to_it_as_needs
     assert ingest._card_digest(after.cards[order]) == ingest._card_digest(before)
     assert after.cards[order].fm['sources'] == before.fm['sources']
     assert [r['target'] for r in done['restored_relations']] == [arrival]  # kept, not merged away
+
+
+def test_a_retry_card_is_shown_the_five_closest_written_cards_then_the_closest_it_links_eight_in_all():
+    from secondbrain.vault import Card, Snapshot
+    terms = [w * 3 for w in 'abcdefghijklmnop']  # 16 query words
+
+    def written(cid, k):  # the first k query words, padded so every card has the same length and the same title
+        body = (f'## Essence\n\n{" ".join(terms[:k] + ["filler"] * (16 - k))}\n\n'
+                f'## Propositions\n\n- P1. {cid} holds\n')
+        return Card(id=cid, title='Card', domain='d', path=f'{cid}.md', raw=b'', fm={}, body=body, sha256='')
+    cards = [written(f'kc_w{k}', k) for k in range(16)] + [written('kc_w10b', 10)]  # the more words, the closer
+    # it links 10 written cards: one of the closest, a tie (kc_w10, kc_w10b), one by slug, one with no word in common
+    links = ['kc_w15', 'kc_w10b', 'kc_w10', 'w9', 'kc_w8', 'kc_w7', 'kc_w5', 'kc_w3', 'kc_w1', 'kc_w0']
+    card = {'title': ' '.join(terms), 'essence': '', 'propositions': [],
+            'relations': [{'type': 'similar_to', 'target': t} for t in links]}
+
+    def near(order):
+        snapshot = Snapshot(root=None, cards={c.id: c for c in order}, registry={}, catalog={}, taxonomies={},
+                            issues=[], fingerprint='')
+        return ingest._near_written(snapshot, card, {'w9': 'kc_w9'})
+    shown = near(cards)
+    assert [e['id'] for e in shown] == ['kc_w15', 'kc_w14', 'kc_w13', 'kc_w12', 'kc_w11',  # the five closest
+                                        'kc_w10', 'kc_w10b', 'kc_w9']  # the closest linked ones, ties by id
+    assert near(list(reversed(cards))) == shown  # the same whatever order the vault lists them in
+    assert shown[7] == {'id': 'kc_w9', 'slug': 'w9', 'title': 'Card', 'domain': 'd',
+                        'essence': ' '.join(terms[:9] + ['filler'] * 7), 'propositions': ['P1. kc_w9 holds']}
+    assert 'slug' not in shown[0]
+    card['relations'] = card['relations'][:2]  # fewer links: all of them shown, no more than five closest otherwise
+    assert [e['id'] for e in near(cards)] == ['kc_w15', 'kc_w14', 'kc_w13', 'kc_w12', 'kc_w11', 'kc_w10b']
 
 
 def test_needs_a_check_for_two_chunks_or_for_any_accepted_card_of_a_retry_whose_source_wrote_cards():
