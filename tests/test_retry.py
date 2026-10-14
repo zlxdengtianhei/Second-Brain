@@ -11,8 +11,10 @@ from secondbrain.executors import FakeExecutor
 from secondbrain.pipelines import ingest
 from secondbrain.store import Conflict, recover, state_root
 from secondbrain.vault import read_snapshot
-from tests.ingest_helpers import (DIMMING_IR, FIXED_DIMMING, SOURCE_NAME, build_ingest_vault, first_candidate,
-                                  first_review, repair_candidate, repair_review, scripted, tree)
+from tests.helpers import EXISTING
+from tests.ingest_helpers import (ALL_REASONS, CARDS, DIMMING_IR, FIXED_DIMMING, SOURCE_NAME, TOPIC_PROPOSAL,
+                                  build_ingest_vault, coverage, first_candidate, first_review, repair_candidate,
+                                  repair_review, scripted, tree)
 
 
 def partial_job(root):
@@ -51,7 +53,7 @@ def test_retry_redoes_only_the_pending_card(tmp_path):
     assert [f['slug'] for f in task.packet['retry']['findings']] == ['marker-dimming']
     assert task.packet['retry']['findings'][0]['reason'] == 'still wrong'
     assert {c['title'] for c in task.packet['retry']['written_cards']} == {'Lantern queue', 'Lit marker memory cost'}
-    assert {c['title'] for c in seen['reviewer'][0].packet['already_written_cards']} == {
+    assert {c['title'] for c in seen['reviewer'][0].packet['retry']['written_cards']} == {
         'Lantern queue', 'Lit marker memory cost'}
     cards = {c.title: c for c in read_snapshot(root).cards.values()}
     assert {'Lantern queue', 'Lit marker memory cost', 'Marker dimming'} <= set(cards)
@@ -64,6 +66,60 @@ def test_retry_redoes_only_the_pending_card(tmp_path):
     # the child has its own transaction: rolling it back restores the partial state exactly
     assert recover(root, child['job_id'], 'rollback')['status'] == 'rolled_back'
     assert tree(root) == before
+
+
+#: A passage the parent's producer handled as a duplicate of an existing card (no card written).
+SKIM_ROW = {'source_quote': 'A reader that holds a marker can jump straight to it without scanning the items',
+            'disposition': 'duplicate', 'duplicate_of': [EXISTING], 'reason': 'the existing card says it'}
+#: One more such passage, found by the first retry.
+CUT_ROW = {'source_quote': 'When the queue is compacted', 'disposition': 'duplicate', 'duplicate_of': [EXISTING],
+           'reason': 'compaction is described there'}
+
+
+def test_a_retry_child_is_shown_what_earlier_jobs_settled_and_passes_it_on(tmp_path):
+    """Drill 2 (P1): a child did not know which passages the parent judged duplicates, so its
+    reviewer called them missing and its repair wrote them as new cards."""
+    root = build_ingest_vault(tmp_path / 'vault')
+    first = first_candidate()
+    first['coverage'].append(SKIM_ROW)
+    produce, respond, _ = scripted([first, repair_candidate()], [first_review(), repair_review('revise')])
+    prepared = ingest.prepare(root, root / '00_Inbox' / SOURCE_NAME)
+    parent = prepared['job_id']
+    assert ingest.advance(root, parent, producer=FakeExecutor('gpt-test', responder=produce),
+                          reviewer=FakeExecutor('claude-test', responder=respond))['status'] == 'partial'
+    child = ingest.retry(root, parent)
+    settled = jobs.read_input(root, child['job_id'])['retry']['settled']['c01']
+    queue_order = CARDS['queue-order']
+    assert settled['duplicates'] == [
+        {k: SKIM_ROW[k] for k in ('source_quote', 'duplicate_of')},  # the producer's row, without its reason
+        {'source_quote': queue_order['source_quotes'][0], 'title': queue_order['title'],  # the reviewer's verdict
+         'duplicate_of': [EXISTING], 'review': 'already covered by the existing card'}]
+    assert settled['out_of_scope'] == [{'source_quote': 'Thanks for reading, see you next week!'}]
+    answer = retry_answer()
+    answer['coverage'].append(CUT_ROW)
+    still = {'cards': [{'slug': 'marker-dimming', 'decision': 'revise', 'reason': 'still wrong'}],
+             'new_topics': [], 'coverage': {'decision': 'accept', 'reason': 'the open card was answered'}}
+    produce, respond, seen = scripted([answer, answer], [still, still])
+    ingest.advance(root, child['job_id'], producer=FakeExecutor('gpt-test', responder=produce),
+                   reviewer=FakeExecutor('claude-test', responder=respond))
+    # both roles see the settled passages, with instructions that they are settled
+    for role, words in (('producer', 'do not write cards for them either'),
+                        ('reviewer', 'is covered; do not ask for a card for it')):
+        task = seen[role][0]
+        assert task.packet['retry']['duplicates'] == settled['duplicates'], role
+        assert task.packet['retry']['out_of_scope'] == settled['out_of_scope'], role
+        assert words in task.prompt, role
+    for task in seen['reviewer']:  # no producer's reasoning reaches a reviewer, the parent's included
+        shown = json.dumps(task.packet, ensure_ascii=False)
+        assert not any(r in shown for r in ALL_REASONS + [SKIM_ROW['reason'], CUT_ROW['reason']])
+    written = {c['title']: c for c in seen['reviewer'][0].packet['retry']['written_cards']}
+    assert written['Lantern queue']['source_quote'] == CARDS['lantern-queue']['source_quotes'][0]
+    # the next retry gets the parent's settled passages and the child's, each once
+    grandchild = ingest.retry(root, child['job_id'])
+    passed_on = jobs.read_input(root, grandchild['job_id'])['retry']['settled']['c01']
+    assert passed_on['duplicates'] == settled['duplicates'] + [
+        {k: CUT_ROW[k] for k in ('source_quote', 'duplicate_of')}]
+    assert passed_on['out_of_scope'] == settled['out_of_scope']
 
 
 def test_only_partial_jobs_can_be_retried(tmp_path, capsys):
@@ -176,7 +232,7 @@ def test_a_written_child_that_looks_stale_is_refused_not_replaced(tmp_path):
     assert archived(root, child['job_id']) == [] and tree(root) == before
 
 
-def test_retrying_a_parent_whose_child_is_partial_points_to_the_child(tmp_path):
+def test_a_retry_that_settles_nothing_says_so_and_stops_suggesting_retries(tmp_path, capsys):
     root = build_ingest_vault(tmp_path / 'vault')
     parent = partial_job(root)
     child = ingest.retry(root, parent)
@@ -185,10 +241,73 @@ def test_retrying_a_parent_whose_child_is_partial_points_to_the_child(tmp_path):
     produce, respond, _ = scripted([retry_answer(), retry_answer()], [still, still])
     done = ingest.advance(root, child['job_id'], producer=FakeExecutor('gpt-test', responder=produce),
                           reviewer=FakeExecutor('claude-test', responder=respond))
-    assert done['status'] == 'partial'
+    assert done['status'] == 'partial' and 'hint' not in done
+    assert done['retry_progress'] == {'open_before': 1, 'open_after': 1, 'cards_written': 0, 'progress': False}
+    assert 'another retry would likely repeat it' in done['message'] and 'sb inbox skip' in done['message']
+    # every place that used to say "retry" says to read the reasons instead
+    [item] = inbox.scan(root)
+    assert item['job_id'] == child['job_id'] and 'made no progress' in item['note'] and '--retry' not in item['note']
     again = ingest.retry(root, parent)
-    assert again['job_id'] == child['job_id'] and again['resumed']
-    assert f'sb ingest --retry {child["job_id"]}' in again['hint']
+    assert again['job_id'] == child['job_id'] and again['resumed'] and 'hint' not in again
+    assert again['message'].startswith(f'{parent} was retried already (by {child["job_id"]})')
+    assert 'made no progress' in again['message'] and 'diagram_cards' not in again  # a short summary
+    assert cli.main(['--vault', str(root), 'ingest', '--retry', parent]) == 0
+    [shown] = json.loads(capsys.readouterr().out)
+    assert next(iter(shown)) == 'message'  # printed first, where a reader looks
+    # a retry is still allowed, for when the blocker was changed meanwhile
+    assert ingest.retry(root, child['job_id'])['job_id'] == f'{parent}-retry2'
+    # the message's other way out closes the source with the item left open
+    assert inbox.skip(root, item['sha256'][:12], 'the rest is not worth a card')['changed']
+    assert inbox.scan(root) == [] and ingest.prepare(root, root / item['path'])['status'] == 'skipped'
+
+
+def test_retrying_a_parent_names_the_newest_partial_job_of_the_chain(tmp_path):
+    root = build_ingest_vault(tmp_path / 'vault')
+    parent = two_pending_job(root)
+    child = ingest.retry(root, parent)
+    fixed = {'cards': [{'slug': 'marker-dimming', 'decision': 'accept', 'reason': 'matches now'},
+                       {'slug': 'lit-marker-cost', 'decision': 'revise', 'reason': 'numbers still off'}],
+             'new_topics': [{**TOPIC_KEY, 'decision': 'accept', 'reason': 'still needed'}],
+             'coverage': {'decision': 'accept', 'reason': 'both open cards answered'}}
+    produce, respond, _ = scripted([two_card_answer()] * 2, [fixed, fixed])
+    done = ingest.advance(root, child['job_id'], producer=FakeExecutor('gpt-test', responder=produce),
+                          reviewer=FakeExecutor('claude-test', responder=respond))
+    assert done['status'] == 'partial' and done['retry_progress']['progress'] is True
+    assert done['hint'] == f'sb ingest --retry {child["job_id"]}'
+    again = ingest.retry(root, parent)
+    assert again['hint'] == f'sb ingest --retry {child["job_id"]}' and again['latest_job'] == child['job_id']
+    grandchild = ingest.retry(root, child['job_id'])
+    assert grandchild['job_id'] == f'{parent}-retry2'
+    again = ingest.retry(root, parent)
+    assert again['job_id'] == child['job_id'] and again['latest_job'] == grandchild['job_id']
+    assert f'the newest job of the chain is {grandchild["job_id"]}' in again['message']
+    assert f'sb job advance {grandchild["job_id"]}' in again['message']  # not finished yet
+
+
+def two_pending_job(root):
+    """A partial parent with two cards still rejected after the repair round."""
+    review = first_review()
+    review['cards'][1].update(decision='revise', reason='numbers are off')
+    repair = {'cards': [FIXED_DIMMING, CARDS['lit-marker-cost']], 'new_topics': [],
+              'coverage': coverage(['lit-marker-cost'])[:1] + repair_candidate()['coverage']}
+    again = {'cards': [{'slug': 'marker-dimming', 'decision': 'revise', 'reason': 'still wrong'},
+                       {'slug': 'lit-marker-cost', 'decision': 'revise', 'reason': 'numbers are off'}],
+             'new_topics': [], 'coverage': {'decision': 'accept', 'reason': 'covered'}}
+    produce, respond, _ = scripted([first_candidate(), repair], [review, again])
+    prepared = ingest.prepare(root, root / '00_Inbox' / SOURCE_NAME)
+    result = ingest.advance(root, prepared['job_id'], producer=FakeExecutor('gpt-test', responder=produce),
+                            reviewer=FakeExecutor('claude-test', responder=respond))
+    assert result['status'] == 'partial' and len(result['pending']) == 2
+    return prepared['job_id']
+
+
+def two_card_answer():
+    # the parent wrote no card under the new topic, so the taxonomy does not have it: propose it again
+    return {'cards': [FIXED_DIMMING, CARDS['lit-marker-cost']], 'new_topics': [TOPIC_PROPOSAL],
+            'coverage': coverage(['lit-marker-cost'])[:1] + retry_answer()['coverage']}
+
+
+TOPIC_KEY = {k: TOPIC_PROPOSAL[k] for k in ('domain', 'pillar', 'name')}
 
 
 def test_a_retry_child_made_before_an_interruption_is_reused(tmp_path, monkeypatch):

@@ -65,13 +65,18 @@ Useful while a job runs:
 From the final state report:
 
 - new cards: count and titles (`produced`);
-- cards still pending, with the reviewer's reasons (`pending`);
+- cards still pending, with the reviewer's reasons (`pending`), and for a retry child whether it made progress (`retry_progress`);
 - material that needs a new pillar or domain (`needs_taxonomy`);
 - duplicates of existing cards (`duplicates`) and skipped passages (`out_of_scope`);
 - whether reviews were done by the producer's model family (`same_family: true` in `sb job show <job_id>`);
 - inbox items you skipped, with reasons.
 
 A `partial` job wrote the accepted cards and kept the rest pending. `sb ingest --retry <job_id> --executor host` starts a child job for the pending items only (same hand-off loop as above); `sb inbox list` shows such sources as `partial`, also when the file already left the inbox (then `in_inbox` is `false` and `path` is the copy in the sources folder).
+
+When a retry child ends `partial` too, its result says whether to go on:
+
+- with a `hint` (`sb ingest --retry <child>`), it wrote cards or settled items; retry the child, not the first job. `sb ingest --retry` on an older job of the chain does not start anything; its `message` names the newest job.
+- with `retry_progress.progress: false` and a `message`, it wrote no card and left as many items open as it was given. Stop retrying. Report the `pending` items with their reasons; a further retry helps only after the user changes what blocked them (for example the taxonomy). The user may also close the source with the items left open: `sb inbox skip <file> --reason "<why>"`.
 
 `sb recover <job_id> --rollback` undoes a written job byte for byte if the user asks. A rolled-back source can be ingested again with `sb ingest`; `sb job reset <job_id> --reason "<why>"` sets aside a stuck job that never wrote. Roll back a retry child (`<job_id>-retry1` …) before its parent; after a retry child is rolled back, `sb ingest --retry <job_id> --executor host` on the parent starts a new child.
 

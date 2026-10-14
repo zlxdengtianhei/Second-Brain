@@ -30,14 +30,28 @@ class Service:
         missing = Counter(c.domain for c in s.cards.values()
                           if not c.fm.get('pillar') or not c.fm.get('topic'))
         from . import inbox, reviews
-        inbox_counts = Counter(item['status'] for item in inbox.scan(self.root))
+        from . import layout as layouts
+        from .moc import build_mocs
+        items = inbox.scan(self.root)
+        inbox_counts = Counter(item['status'] for item in items)
         try:
             review = reviews.status(self.root, reviews.now_local())['totals']
         except (ValueError, OSError) as exc:
             review = {'unavailable': str(exc)}
+        issues, map_issues = list(s.issues), Counter()
+        if s.catalog:
+            try:
+                validate_catalog(s.catalog)
+            except ValueError as exc:
+                issues.append({'code': 'catalog_invalid', 'path': layouts.of(self.root).catalog, 'detail': str(exc)})
+            else:  # what `sb refresh` reports about the maps (counts only; it lists each one)
+                map_issues = Counter(i['code'] for i in build_mocs(s).issues)
         return {'cards': len(s.cards), 'missing_classification': sum(missing.values()),
-                'missing_by_domain': dict(sorted(missing.items())), 'issues': s.issues,
+                'missing_by_domain': dict(sorted(missing.items())), 'issues': issues,
+                'map_issues': dict(sorted(map_issues.items())),
+                **({'map_issues_hint': 'sb refresh lists each one'} if map_issues else {}),
                 'snapshot_fingerprint': s.fingerprint, 'inbox': dict(sorted(inbox_counts.items())),
+                'pending_items': sum(i.get('pending') or 0 for i in items if i['status'] == 'partial'),
                 'review': review, 'jobs': jobs.list_jobs(self.root)}
 
     def job_show(self, job_id: str) -> dict:

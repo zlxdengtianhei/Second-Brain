@@ -62,7 +62,8 @@ def done_index(root: Path) -> dict:
                 str(row.get('path') or '').startswith(f'{lay.inbox}/')
             done[row['sha256']] = {'status': row.get('status'), 'via': 'inbox_registry',
                                    'job_id': row.get('job_id'), 'reason': row.get('reason'),
-                                   'pending': row.get('pending'), 'path': row.get('path'), 'from_inbox': came}
+                                   'pending': row.get('pending'), 'path': row.get('path'), 'from_inbox': came,
+                                   'stalled': bool(row.get('stalled'))}
     return done
 
 
@@ -73,7 +74,10 @@ def _job_status(root: Path, job_id: str) -> str | None:
         return None
 
 
-def _partial_note(job_id: str) -> str:
+def _partial_note(job_id: str, stalled: bool = False) -> str:
+    if stalled:
+        return (f'some cards are pending, and the last retry ({job_id}) made no progress; read the reasons with '
+                f'sb job show {job_id} before trying again')
     return f'some cards are pending; sb ingest --retry {job_id}'
 
 
@@ -112,7 +116,8 @@ def scan(root: Path) -> list[dict]:
             item.update(status='skipped', reason=record.get('reason'))
         elif record and record['status'] == 'partial':
             item.update(status='partial', via=record['via'], job_id=record.get('job_id') or item['job_id'],
-                        pending=record.get('pending'), note=_partial_note(record.get('job_id') or item['job_id']))
+                        pending=record.get('pending'),
+                        note=_partial_note(record.get('job_id') or item['job_id'], record.get('stalled')))
         elif record:
             item.update(status='done', via=record['via'], result=record['status'])
         elif status in TERMINAL_DONE:
@@ -145,7 +150,7 @@ def scan(root: Path) -> list[dict]:
         item = {'path': rel, 'name': name, 'size': size, 'sha256': sha, 'job_id': job, 'via': record['via'],
                 **extra, 'in_inbox': False}
         if item['status'] == 'partial':
-            item['note'] = _partial_note(job)
+            item['note'] = _partial_note(job, record.get('stalled'))
         moved.append(item)
     return items + sorted(moved, key=lambda i: (i['name'], i['sha256']))
 

@@ -114,7 +114,9 @@ def prepare(root: Path, source: Path, *, settings: config.Settings | None = None
     if done and done['status'] in {'applied', 'done', 'partial'}:
         out = {'status': 'unchanged', 'result': done['status'], 'job_id': done.get('job_id') or job_id,
                'source_sha256': sha, 'via': done['via']}
-        if done['status'] == 'partial':
+        if done['status'] == 'partial' and done.get('stalled'):
+            out.update(pending=done.get('pending'), message=inbox._partial_note(out['job_id'], True))
+        elif done['status'] == 'partial':
             out.update(pending=done.get('pending'), hint=f'sb ingest --retry {out["job_id"]}')
         return out
     if done and done['status'] == 'skipped':
@@ -187,13 +189,17 @@ def retry(root: Path, job_id: str, *, settings: config.Settings | None = None) -
 
     The child (``<first job>-retry<N>``) reads the same frozen source and
     chunks, but a fresh catalog, taxonomy and routing from the vault as it is
-    now; its packets carry the open items with the reviewer's reasons and the
-    cards of each chunk that are already written. It has its own transaction,
-    so it can be rolled back on its own. Calling it again on the same parent
-    returns the existing child. A child that was rolled back, reset with
-    `sb job reset`, or made for an earlier run of the parent (the parent was
-    rolled back and the source ingested again) does not block a new child:
-    it is set aside like `sb job reset` does, and the new child takes its id.
+    now; its packets carry the open items with the reviewer's reasons, the
+    cards of each chunk that are already written, and the passages earlier
+    jobs of the source settled without a card (duplicates of existing cards,
+    material not worth keeping), so the child neither writes those again nor
+    reads them as missing. It has its own transaction, so it can be rolled
+    back on its own. Calling it again on the same parent returns the existing
+    child with a ``message`` naming the job to look at next. A child that was
+    rolled back, reset with `sb job reset`, or made for an earlier run of the
+    parent (the parent was rolled back and the source ingested again) does
+    not block a new child: it is set aside like `sb job reset` does, and the
+    new child takes its id.
     """
     settings = settings or config.current()
     root = Path(root)
@@ -203,7 +209,7 @@ def retry(root: Path, job_id: str, *, settings: config.Settings | None = None) -
     if parent.get('retried_by'):
         live = _live_child(root, job_id, parent, parent['retried_by'])
         if live is not None:
-            return _resumed_child(live)
+            return _resumed_child(root, job_id, live)
     old = jobs.read_input(root, job_id)
     lineage = old.get('retry') or {}
     first, number = lineage.get('root', job_id), lineage.get('round', 0) + 1
@@ -215,6 +221,12 @@ def retry(root: Path, job_id: str, *, settings: config.Settings | None = None) -
     written = {cid: list(cards) for cid, cards in (lineage.get('written') or {}).items()}
     for card in parent.get('produced') or []:
         written.setdefault(card['chunk'], []).append({'id': card['id'], 'title': card['title'], 'slug': card.get('slug')})
+    settled = {cid: {key: list(rows) for key, rows in kinds.items()}
+               for cid, kinds in (lineage.get('settled') or {}).items() if cid in open_items}
+    for cid in open_items:
+        for key, rows in _settled_rows(root, parent, cid).items():
+            bucket = settled.setdefault(cid, {'duplicates': [], 'out_of_scope': []}).setdefault(key, [])
+            bucket += [row for row in rows if row not in bucket]
     snapshot = read_snapshot(root)
     writable_snapshot(snapshot)
     validate_catalog(snapshot.catalog)
@@ -233,18 +245,21 @@ def retry(root: Path, job_id: str, *, settings: config.Settings | None = None) -
         for card in card_list:
             if card['id'] in snapshot.cards:
                 card['essence'] = essence(snapshot.cards[card['id']])
+                quote = _source_locator(snapshot.cards[card['id']], old['source']['sha256'])
+                if quote:
+                    card['source_quote'] = quote
     domains = sorted(snapshot.catalog['domains'])
     packet = {**old, 'chunks': chunks, 'catalog': snapshot.catalog,
               'taxonomy': taxonomy_packet(snapshot, domains), 'taxonomy_sha256': taxonomy_fingerprint(snapshot),
               'topic_counts': _topic_counts(snapshot), 'snapshot_fingerprint': snapshot.fingerprint,
               'retry': {'of': job_id, 'root': first, 'round': number,
                         'pending': {cid: open_items[cid] for cid in open_items},
-                        'written': written}}
+                        'written': written, 'settled': settled}}
     child = f'{first}-retry{number}'
     live = _live_child(root, job_id, parent, child)
     if live is not None:  # made before an interruption, before the parent recorded it
         jobs._internal_update(root, job_id, retried_by=child)
-        return _resumed_child(live)
+        return _resumed_child(root, job_id, live)
     state = jobs.create(root, child, KIND, packet)
     jobs._internal_update(root, job_id, retried_by=child)
     return {**state, 'retry_of': job_id, 'chunks': [c['chunk_id'] for c in chunks]}
@@ -286,6 +301,59 @@ def _reviewed_domains(root: Path, state: dict, packet: dict, base: str, items: l
     return [d for d in dict.fromkeys(named + list(last.values())) if isinstance(d, str)]
 
 
+def _settled_rows(root: Path, state: dict, base: str, upto_round: int | None = None) -> dict:
+    """Passages of chunk ``base`` that this job settled without writing a card (rounds before ``upto_round``).
+
+    ``duplicates``: the producers' ``duplicate`` coverage rows, and the cards a
+    reviewer judged ``duplicate`` (the last verdict on a slug counts, its
+    reason as ``review``), each with the existing ids that hold the
+    knowledge. ``out_of_scope``: rows the producers marked as not worth
+    keeping. A later round, and a retry child, are shown these so they do not
+    write those cards again or read the passages as missing. The producers'
+    own reasons are left out, as a reviewer must not see them.
+    """
+    dups, skipped, verdicts = [], [], {}
+    for slot, info in _slots(state, base)[:upto_round]:
+        if not info.get('candidate'):
+            continue
+        cand = jobs.artifact(root, state, 'candidate', slot)
+        for row in cand.get('coverage') or []:
+            if not isinstance(row, dict):
+                continue
+            if row.get('disposition') == 'duplicate':
+                dups.append({'source_quote': row.get('source_quote'),
+                             'duplicate_of': list(row.get('duplicate_of') or [])})
+            elif row.get('disposition') == 'out_of_scope':
+                skipped.append({'source_quote': row.get('source_quote')})
+        if not info.get('review'):
+            continue
+        decisions = {r.get('slug'): r for r in jobs.artifact(root, state, 'review', slot).get('cards', [])
+                     if isinstance(r, dict)}
+        for card in cand.get('cards') or []:
+            if not isinstance(card, dict) or card.get('slug') not in decisions:
+                continue
+            verdict = decisions[card['slug']]
+            verdicts[card['slug']] = None if verdict.get('decision') != 'duplicate' else {
+                'source_quote': (card.get('source_quotes') or [None])[0], 'title': card.get('title'),
+                'duplicate_of': [verdict.get('duplicate_of')], 'review': verdict.get('reason')}
+    out = {'duplicates': [], 'out_of_scope': []}
+    for row in dups + [v for v in verdicts.values() if v]:
+        if row not in out['duplicates']:
+            out['duplicates'].append(row)
+    for row in skipped:
+        if row not in out['out_of_scope']:
+            out['out_of_scope'].append(row)
+    return out
+
+
+def _source_locator(card, sha256: str) -> str | None:
+    """The passage of source ``sha256`` that ``card`` was made from (its first source quote)."""
+    for src in card.fm.get('sources') or []:
+        if isinstance(src, dict) and src.get('sha256') == sha256 and isinstance(src.get('locator'), str):
+            return src['locator']
+    return None
+
+
 def check_rollback(root: Path, job_id: str) -> None:
     """Refuse to roll back a job whose retry child still has its writes in the vault.
 
@@ -305,11 +373,56 @@ def check_rollback(root: Path, job_id: str) -> None:
                        f'Roll back the retry child first: sb recover {child} --rollback')
 
 
-def _resumed_child(state: dict) -> dict:
-    out = {**state, 'resumed': True}
-    if state['status'] == 'partial':
-        out['hint'] = f'the retry child is partial too: sb ingest --retry {state["job_id"]}'
-    return out
+def _resumed_child(root: Path, parent_id: str, state: dict) -> dict:
+    """The existing child of ``parent_id``, led by a ``message`` that names the job to look at next.
+
+    The child may have been retried in turn, so the message follows ``retried_by``
+    to the newest job of the chain. A finished child comes back as a short
+    summary (the whole state is in `sb job show`); an unfinished one whole, so
+    the caller can advance it.
+    """
+    latest = state
+    while latest.get('retried_by'):
+        try:
+            newer = jobs.load(root, latest['retried_by'])
+        except ValueError:
+            break
+        if newer['status'] == 'rolled_back':
+            break
+        latest = newer
+    name, status = latest['job_id'], latest['status']
+    head = f'{parent_id} was retried already' + (f' (by {state["job_id"]})' if latest is state else
+                                                  f'; the newest job of the chain is {name}')
+    extra = {}
+    if status == 'partial' and _stalled(latest):
+        message = (f'{head}. {name} is partial and made no progress, so another retry would likely repeat it. '
+                   + _STALLED_ADVICE.format(job=name))
+    elif status == 'partial':
+        message = f'{head}. {name} is partial; retry that job: sb ingest --retry {name}'
+        extra['hint'] = f'sb ingest --retry {name}'
+    elif status == 'applied':
+        message = f'{head}. {name} is applied; nothing is left to retry.'
+    elif status in {'failed', 'published'}:
+        message = f'{head}. {name} is {status}; see sb job show {name}.'
+    else:
+        message = f'{head}. {name} is not finished ({status}); continue it: sb job advance {name}'
+    lead = {'message': message, **extra, 'resumed': True, 'retry_of': parent_id, 'latest_job': name}
+    if state['status'] not in {'applied', 'partial', 'failed', 'published'}:
+        return {**lead, **state}
+    return {**lead, **{k: state.get(k) for k in ('job_id', 'kind', 'status', 'created_at', 'updated_at',
+                                                 'new_card_count', 'retry_progress')},
+            'open_items': len(state.get('pending') or []) + len(state.get('needs_taxonomy') or [])}
+
+
+#: What to do when a retry made no progress (``{job}`` is the stalled job).
+_STALLED_ADVICE = ('Read the reasons in `pending` (sb job show {job}). Retry again only after changing what blocked '
+                   'them, such as the taxonomy for a new topic or pillar; to leave them open and close the source, '
+                   'run sb inbox skip <file> --reason "<why>".')
+
+
+def _stalled(state: dict) -> bool:
+    """True for a retry child that wrote no card and settled none of the items it was given."""
+    return (state.get('retry_progress') or {}).get('progress') is False
 
 
 # --------------------------------------------------------------------------
@@ -458,15 +571,19 @@ def producer_packet(root: Path, state: dict, packet: dict, slot: str) -> dict:
            'rules': {'new_topics_per_source': packet['settings']['new_topics_per_source'],
                      'flashcards_per_card': [2, 4], 'id_prefix': packet['settings']['id_prefix']}}
     if packet.get('retry'):
-        out['retry'] = {'findings': packet['retry']['pending'].get(base, []),
-                        'written_cards': packet['retry']['written'].get(base, [])}
+        out['retry'] = _retry_view(packet, base)
     if rnd:
         prev_slot = _slot_name(base, rnd - 1)
         previous = jobs.artifact(root, state, 'candidate', prev_slot)
         findings = _findings(jobs.artifact(root, state, 'review', prev_slot))
+        kept = _accepted_so_far(root, state, base, rnd)
         out['previous_candidate'] = previous
         out['review_findings'] = findings
-        out['kept_slugs'] = sorted(_accepted_so_far(root, state, base, rnd))
+        out['kept_slugs'] = sorted(kept)
+        out['already_settled'] = _settled_rows(root, state, base, rnd)
+        refused = _unaccepted_topics(root, state, base, rnd)
+        out['refile_cards'] = [{**c, 'topic_review': refused[(c['domain'], c['pillar'], c['topic'])]}
+                               for c in kept.values() if (c['domain'], c['pillar'], c['topic']) in refused]
         wanted = list(chunk['candidate_domains'])
         for domain in _domains_named(packet, findings) + [c.get('domain') for c in previous.get('cards', [])]:
             if domain in packet['catalog']['domains'] and domain not in wanted:
@@ -493,13 +610,70 @@ def _findings(review: dict) -> dict:
             'coverage': review.get('coverage') if (review.get('coverage') or {}).get('decision') != 'accept' else None}
 
 
-def _neighbors_for(root: Path, snapshot, card: dict) -> list[dict]:
+#: Existing cards shown to the reviewer per candidate card, to judge duplicates.
+NEAR_DUPLICATES_PER_CARD = 3
+#: Bytes of propositions the reviewer packet carries for those cards in all; past it, the
+#: lower-ranked neighbours are shown by title and essence only (the drill source's 66 cards
+#: once made an 813 KB packet, 80% of it whole neighbour bodies).
+NEAR_DUPLICATE_PROPOSITION_BYTES = 150_000
+
+
+def _neighbor_ids(root: Path, snapshot, card: dict) -> list[str]:
     from ..index import search
     query = ' '.join([str(card.get('title') or ''), str(card.get('essence') or '')]
                      + [str(p) for p in (card.get('propositions') or [])[:3]])
-    hits = search(root, snapshot, query, 3) if query.strip() else []
-    return [{'id': h['id'], 'title': h['title'], 'domain': h['domain'],
-             'body': snapshot.cards[h['id']].body} for h in hits]
+    hits = search(root, snapshot, query, NEAR_DUPLICATES_PER_CARD) if query.strip() else []
+    return [h['id'] for h in hits]
+
+
+def _card_sections(body: str) -> dict:
+    """``{heading: text}`` of the ``## `` sections of a card body."""
+    out, current = {}, None
+    for line in body.split('\n'):
+        if line.startswith('## '):
+            current = line[3:].strip()
+            out.setdefault(current, [])
+        elif current is not None:
+            out[current].append(line)
+    return {k: '\n'.join(v).strip() for k, v in out.items()}
+
+
+def _card_digest(card) -> tuple[dict, list[str]]:
+    """``(title, domain and essence; propositions)`` of an existing card: what a duplicate judgement needs.
+
+    The diagram, related, contrast and review-card sections are left out.
+    """
+    parts = _card_sections(card.body)
+
+    def first(key):
+        return next((parts[h[key]] for h in cardfmt.HEADINGS.values() if parts.get(h[key])), '')
+    text = ' '.join(first('essence').split()) or essence(card)
+    props = [line[2:].strip() for line in first('propositions').split('\n') if line.startswith('- ')]
+    return {'title': card.title, 'domain': card.domain, 'essence': text[:600]}, props
+
+
+def _near_duplicates(root: Path, snapshot, cards: list) -> tuple[dict, dict]:
+    """``({slug: [existing ids]}, {id: digest})`` for the reviewer packet.
+
+    Each existing card appears once in the digest table, however many
+    candidates it is near. Propositions are added best rank first (every
+    candidate's closest neighbour before any second-closest) until
+    :data:`NEAR_DUPLICATE_PROPOSITION_BYTES` is spent.
+    """
+    near = {c['slug']: _neighbor_ids(root, snapshot, c)
+            for c in cards if isinstance(c, dict) and isinstance(c.get('slug'), str)}
+    table, budget = {}, NEAR_DUPLICATE_PROPOSITION_BYTES
+    for rank in range(NEAR_DUPLICATES_PER_CARD):
+        for ids in near.values():
+            if rank >= len(ids) or ids[rank] in table:
+                continue
+            digest_, props = _card_digest(snapshot.cards[ids[rank]])
+            cost = len(json.dumps(props, ensure_ascii=False).encode('utf-8'))
+            if props and cost <= budget:
+                digest_['propositions'] = props
+                budget -= cost
+            table[ids[rank]] = digest_
+    return near, table
 
 
 def review_packet(root: Path, state: dict, packet: dict, slot: str) -> dict:
@@ -510,10 +684,10 @@ def review_packet(root: Path, state: dict, packet: dict, slot: str) -> dict:
     snapshot = read_snapshot(root)
     domains = sorted({c['domain'] for c in candidate.get('cards', []) if c.get('domain') in packet['catalog']['domains']}
                      | {t['domain'] for t in candidate.get('new_topics', []) if t.get('domain') in packet['catalog']['domains']})
+    near, near_cards = _near_duplicates(root, snapshot, candidate.get('cards', []))
     out = {'chunk': {'id': base, 'text': _chunk_text(packet, base)},
            'candidate': shown,
-           'near_duplicates': {c['slug']: _neighbors_for(root, snapshot, c)
-                               for c in candidate.get('cards', []) if isinstance(c, dict) and c.get('slug')},
+           'near_duplicates': near, 'near_duplicate_cards': near_cards,
            'taxonomies': _candidate_taxonomies(packet, domains),
            'domains': [{'slug': d, 'question': m.get('question')}
                        for d, m in sorted(packet['catalog']['domains'].items())],
@@ -521,10 +695,27 @@ def review_packet(root: Path, state: dict, packet: dict, slot: str) -> dict:
            'other_chunks_cards': _other_cards(root, state, packet, base)}
     if rnd:
         kept = _accepted_so_far(root, state, base, rnd)
-        out['already_accepted_cards'] = [withhold_reasons(c) for c in kept.values()]
+        refiled = {c.get('slug') for c in candidate.get('cards', []) if isinstance(c, dict)}
+        out['already_accepted_cards'] = [withhold_reasons(c) for s, c in kept.items() if s not in refiled]
+        out['already_settled'] = _settled_rows(root, state, base, rnd)
     if packet.get('retry'):
-        out['already_written_cards'] = packet['retry']['written'].get(base, [])
+        out['retry'] = _retry_view(packet, base, reviewer=True)
     return out
+
+
+def _retry_view(packet: dict, base: str, *, reviewer: bool = False) -> dict:
+    """What earlier jobs of this source left for chunk ``base``: open findings, written cards, settled passages.
+
+    A reviewer does not see the producer's reason on a ``needs_taxonomy`` finding;
+    the other findings carry reviewers' reasons.
+    """
+    retry = packet['retry']
+    settled = (retry.get('settled') or {}).get(base) or {}
+    findings = retry['pending'].get(base, [])
+    if reviewer:
+        findings = [{k: v for k, v in f.items() if not (k == 'reason' and 'suggested_pillar' in f)} for f in findings]
+    return {'findings': findings, 'written_cards': retry['written'].get(base, []),
+            'duplicates': settled.get('duplicates', []), 'out_of_scope': settled.get('out_of_scope', [])}
 
 
 # --------------------------------------------------------------------------
@@ -619,7 +810,7 @@ def validate_candidate(packet: dict, payload: dict, *, slot: str, other_cards: l
         slug = c.get('slug')
         if not isinstance(slug, str) or not _SLUG.match(slug):
             errors.append(f'{where}.slug must match [a-z0-9][a-z0-9-]{{0,59}}')
-        elif slug in slugs or slug in other_slugs or slug in kept_slugs:
+        elif slug in slugs or slug in other_slugs:  # a kept slug files that card again (repair rounds)
             errors.append(f'{where}.slug {slug!r} is already used in this source')
         else:
             slugs.add(slug)
@@ -834,21 +1025,52 @@ def validate_submission(packet: dict, payload: dict, *, role: str, candidate=Non
     if role == 'reviewer':
         return validate_review(candidate, payload, existing_ids, packet['catalog']['domains'])
     base, rnd = _base(chunk), _round(chunk)
+    kept = _accepted_so_far(root, state, base, rnd) if rnd else {}
     return validate_candidate(packet, payload, slot=chunk,
                               other_cards=_other_cards(root, state, packet, base),
-                              kept_slugs=set(_accepted_so_far(root, state, base, rnd)) if rnd else set(),
+                              kept_slugs=set(kept),
                               existing_ids=existing_ids, existing_titles=existing_titles,
-                              known_topics=_proposed_topics(root, state, exclude=chunk))
+                              known_topics=_known_topics(root, state, chunk, payload, kept))
 
 
-def _proposed_topics(root, state, *, exclude: str | None = None) -> set:
-    """New topics proposed by the candidates of every other slot of this source."""
+def _known_topics(root, state, slot: str, payload, kept: dict) -> set:
+    """New topics proposed by other slots of this source that ``payload`` may use; they count toward the limit.
+
+    A proposal of another chunk always counts. A proposal of an earlier round
+    of this chunk counts only while a card is filed under it: a kept card the
+    answer does not file again, or a card of the answer. So a repair round can
+    replace a topic the review did not accept (rename it, or use a curated
+    one) by filing the kept cards again under the replacement.
+    """
+    own = {name for name, _ in _slots(state, _base(slot))}
+    cards = [c for c in payload.get('cards') or [] if isinstance(c, dict)] if isinstance(payload, dict) else []
+    refiled = {c.get('slug') for c in cards}
+    in_use = {(c.get('domain'), c.get('pillar'), c.get('topic')) for c in cards}
+    in_use |= {(c['domain'], c['pillar'], c['topic']) for s, c in kept.items() if s not in refiled}
     out = set()
-    for slot, info in (state.get('chunks') or {}).items():
-        if slot != exclude and info.get('candidate'):
-            for t in jobs.artifact(root, state, 'candidate', slot).get('new_topics', []):
-                out.add((t['domain'], t['pillar'], t['name']))
+    for other, info in (state.get('chunks') or {}).items():
+        if other == slot or not info.get('candidate') or card_diagrams.is_slot(other):
+            continue
+        for t in jobs.artifact(root, state, 'candidate', other).get('new_topics', []):
+            key = (t['domain'], t['pillar'], t['name'])
+            if other not in own or key in in_use:
+                out.add(key)
     return out
+
+
+def _unaccepted_topics(root, state, base: str, upto_round: int) -> dict:
+    """``{(domain, pillar, name): reason}`` of new topics not accepted by their latest review before ``upto_round``."""
+    verdicts = {}
+    for slot, info in _slots(state, base)[:upto_round]:
+        if not (info.get('candidate') and info.get('review')):
+            break
+        review = jobs.artifact(root, state, 'review', slot)
+        for t in jobs.artifact(root, state, 'candidate', slot).get('new_topics', []):
+            key = (t['domain'], t['pillar'], t['name'])
+            row = next((r for r in review.get('new_topics') or []
+                        if (r.get('domain'), r.get('pillar'), r.get('name')) == key), None)
+            verdicts[key] = None if row and row.get('decision') == 'accept' else (row or {}).get('reason', 'not judged')
+    return {k: v for k, v in verdicts.items() if v is not None}
 
 
 # --------------------------------------------------------------------------
@@ -892,7 +1114,8 @@ def chunk_outcome(root: Path, state: dict, packet: dict, base: str) -> dict:
     topic_state: dict = {}
     open_cards: dict = {}
     open_coverage = None
-    dups, needs_tax, skipped = [], [], []
+    dups: dict = {}
+    needs_tax, skipped = [], []
     merged_rounds = 0
     for slot, info in slots:
         if not info.get('candidate'):
@@ -908,15 +1131,18 @@ def chunk_outcome(root: Path, state: dict, packet: dict, base: str) -> dict:
         review = jobs.require_independent_review(root, state, slot)
         cand = jobs.artifact(root, state, 'candidate', slot)
         decisions = {r['slug']: r for r in review.get('cards', [])}
+        # A rejected card this round does not repeat was split, merged or dropped by the repair;
+        # this round's coverage verdict, on the whole chunk, says whether its knowledge is missing.
+        open_cards = {}
         for c in cand.get('cards', []):
             d = decisions[c['slug']]
-            open_cards.pop(c['slug'], None)
             accepted.pop(c['slug'], None)
+            dups.pop(c['slug'], None)
             if d['decision'] == 'accept':
                 accepted[c['slug']] = {**c, '_slot': slot}
             elif d['decision'] == 'duplicate':
-                dups.append({'slug': c['slug'], 'title': c.get('title'), 'duplicate_of': d.get('duplicate_of'),
-                             'reason': d['reason'], 'chunk': base})
+                dups[c['slug']] = {'slug': c['slug'], 'title': c.get('title'), 'duplicate_of': d.get('duplicate_of'),
+                                   'reason': d['reason'], 'chunk': base}
             else:
                 open_cards[c['slug']] = {'slug': c['slug'], 'title': c.get('title'), 'reason': d['reason'],
                                          'chunk': base}
@@ -935,8 +1161,10 @@ def chunk_outcome(root: Path, state: dict, packet: dict, base: str) -> dict:
         cov = review.get('coverage') or {}
         open_coverage = None if cov.get('decision') == 'accept' else {'scope': 'coverage', 'chunk': base,
                                                                        'reason': cov.get('reason')}
+    # a new topic the review did not accept matters while an accepted card is filed under it
+    unaccepted = {k for k, t in topic_state.items() if t['decision'] != 'accept'}
     findings = bool(open_cards) or open_coverage is not None or \
-        any(t['decision'] != 'accept' for t in topic_state.values())
+        any((c['domain'], c['pillar'], c['topic']) in unaccepted for c in accepted.values())
     if findings and used < max_rounds and merged_rounds == len(slots):
         out['next'] = ('repair', _slot_name(base, len(slots)))
         return out
@@ -950,7 +1178,7 @@ def chunk_outcome(root: Path, state: dict, packet: dict, base: str) -> dict:
             pending.append({'slug': slug, 'title': card['title'], 'chunk': base,
                             'reason': f'its new topic {key[2]!r} was not accepted: '
                                       f'{topic_state[key]["review_reason"]}'})
-    out.update(settled=True, accepted=accepted, pending=pending, duplicates=dups,
+    out.update(settled=True, accepted=accepted, pending=pending, duplicates=list(dups.values()),
                topics={k: v for k, v in topic_state.items() if v['decision'] == 'accept'},
                needs_taxonomy=needs_tax, skipped=skipped)
     return out
@@ -970,8 +1198,10 @@ def _step(root: Path, job_id: str, action: tuple, producer, reviewer) -> None:
     state = jobs.load(root, job_id)
     packet = jobs.read_input(root, job_id)
     if kind == 'review':
-        call_executor(root, job_id, reviewer, role='reviewer', step='review',
-                      prompt_text=_prompt('review_cards.md', state),
+        text = _prompt('review_cards.md', state)
+        if packet.get('retry'):
+            text += '\n' + _prompt_only('retry_review_cards.md')
+        call_executor(root, job_id, reviewer, role='reviewer', step='review', prompt_text=text,
                       packet=review_packet(root, state, packet, slot),
                       output_schema=schemas.REVIEW_CARDS, chunk=slot)
         return
@@ -1388,13 +1618,21 @@ def apply_job(root: Path, job_id: str, settled: list[dict] | None = None) -> dic
              'collected_at': now, 'job_id': job_id}, ensure_ascii=False) + '\n').encode('utf-8')))
     needs_taxonomy = [x for o in settled for x in o['needs_taxonomy']]
     status = 'partial' if (pending or needs_taxonomy) else 'applied'
+    progress = None
+    if packet.get('retry'):
+        # a retry that writes no card and leaves as many items open as it was given would only repeat itself
+        given = sum(len(items) for items in packet['retry']['pending'].values())
+        left = len(pending) + len(needs_taxonomy)
+        progress = {'open_before': given, 'open_after': left, 'cards_written': len(produced),
+                    'progress': bool(produced) or left < given}
+    stalled = status == 'partial' and progress is not None and not progress['progress']
     # a retry child runs after the parent may have moved the file: name where the source is now
     row_path = source['inbox_path'] if inbox_now == source_raw else (
         source_rel if packet.get('retry') else source['inbox_path'] or source['filename'])
     changes.append(inbox.appended(root, lay.inbox_registry, inbox.registry_line(
         {'sha256': source['sha256'], 'path': row_path, 'status': status,
          'job_id': job_id, 'cards': [p['id'] for p in produced], 'pending': len(pending) + len(needs_taxonomy),
-         'at': now})))
+         'at': now, **({'stalled': True} if stalled else {})})))
     reg_raw = read_bytes(root, lay.registry)
     if reg_raw is None:
         raise IngestError('notes_registry.json is missing')
@@ -1430,6 +1668,14 @@ def apply_job(root: Path, job_id: str, settled: list[dict] | None = None) -> dic
               'inbox_moved': move, 'projection_metrics': projection_metrics,
               'diagrams': [row for row in drawn['report'] if row['ref'] in {p['slug'] for p in produced}],
               'same_family': bool(state.get('same_family'))}
+    if progress is not None:
+        result['retry_progress'] = progress
+    if stalled:
+        result['message'] = (f'This retry wrote no card and left {progress["open_after"]} of the '
+                             f'{progress["open_before"]} items it was given open, so another retry would likely '
+                             'repeat it. ' + _STALLED_ADVICE.format(job=job_id))
+    elif status == 'partial':
+        result['hint'] = f'sb ingest --retry {job_id}'
     try:
         done = jobs.finish_transaction(root, job_id, result, changes, checks=snapshot_checks(snapshot, changes))
     except Conflict as exc:

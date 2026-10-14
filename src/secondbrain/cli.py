@@ -261,6 +261,7 @@ def _doctor(args, root: Path) -> dict:
         report['state_root'] = str(state_root(root))
     except ValueError as exc:
         report['state_root_error'] = str(exc)
+    report['catalog'] = _catalog_check(root)
     for role in ('producer', 'reviewer'):
         endpoint = getattr(settings, role)
         if endpoint is None:
@@ -282,6 +283,20 @@ def _doctor(args, root: Path) -> dict:
     if args.live:
         report['live'] = live_check(settings)
     return report
+
+
+def _catalog_check(root: Path) -> str:
+    """``valid``, ``missing``, or why the catalog file (for example after a hand edit) is not valid."""
+    from . import layout as layouts
+    from .catalog import validate_catalog
+    path = root / layouts.of(root).catalog
+    if not path.is_file():
+        return 'missing (sb init writes it)'
+    try:
+        validate_catalog(json.loads(path.read_text(encoding='utf-8')))
+    except (ValueError, UnicodeDecodeError) as exc:
+        return f'invalid: {exc}'
+    return 'valid'
 
 
 def live_check(settings, transport=None) -> dict:

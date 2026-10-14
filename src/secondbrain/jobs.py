@@ -549,7 +549,9 @@ def list_jobs(root: Path) -> list[dict]:
 
     Transaction-only records (init/refresh flows write a journal without a job
     state) are listed as ``kind: transaction``; a broken job entry is reported
-    as ``unreadable`` with its reason.
+    as ``unreadable`` with its reason. A job retried by a child that still
+    counts (not rolled back or set aside) shows ``retried_by`` and an empty
+    ``pending``: its open items are the child's now.
     """
     out: list[dict] = []
     try:
@@ -571,9 +573,17 @@ def list_jobs(root: Path) -> list[dict]:
                                         'paths': [x['path'] for x in transaction['changes']]})
                             continue
                     state = load(root, job_id)
-                    out.append({k: state.get(k) for k in ['job_id', 'kind', 'status', 'created_at', 'updated_at', 'pending']})
+                    entry = {k: state.get(k) for k in ['job_id', 'kind', 'status', 'created_at', 'updated_at', 'pending']}
+                    if state.get('retried_by'):
+                        entry['retried_by'] = state['retried_by']
+                    out.append(entry)
                 except (ValueError, OSError) as exc:
                     out.append({'job_id': job_id, 'status': 'unreadable', 'error': str(exc)})
     except FileNotFoundError:
         return []
+    # a job whose pending items a retry child took over has none of its own left open
+    statuses = {e['job_id']: e.get('status') for e in out}
+    for entry in out:
+        if statuses.get(entry.get('retried_by')) not in (None, 'rolled_back', 'unreadable'):
+            entry['pending'] = []
     return out

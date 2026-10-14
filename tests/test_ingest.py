@@ -24,7 +24,7 @@ from secondbrain.store import digest, recover
 from secondbrain.vault import parse_note, read_snapshot
 from tests.helpers import CLOCKS, CUSTOM_LAYOUT, DOMAIN, EXISTING, MOC, PILLAR, TOPIC, pin_clock
 from tests.ingest_helpers import (ALL_REASONS, CARDS, DIMMING_IR, FIXED_DIMMING, NEW_TOPIC, OTHER_MOC,
-                                  SOURCE_NAME, build_ingest_vault, diagram_answer, first_candidate,
+                                  SOURCE_NAME, build_ingest_vault, coverage, diagram_answer, first_candidate,
                                   first_review, packet_in, repair_candidate, repair_review, scripted, tree,
                                   with_diagrams)
 
@@ -285,10 +285,10 @@ def test_relation_to_a_pending_card_is_not_written(tmp_path):
     review['cards'][1]['decision'] = 'revise'
     review['cards'][1]['reason'] = 'numbers are off'
     review['cards'][2] = {'slug': 'marker-dimming', 'decision': 'accept', 'reason': 'fine'}
-    producer, reviewer, _ = executors([first_candidate(), {'cards': [], 'new_topics': [], 'coverage': [
-        {'source_quote': 'Markers cost one extra word of memory each', 'disposition': 'out_of_scope',
-         'reason': 'dropped'}]}], [review, {'cards': [], 'new_topics': [],
-                                           'coverage': {'decision': 'accept', 'reason': 'ok'}}])
+    again = {'cards': [CARDS['lit-marker-cost']], 'new_topics': [], 'coverage': coverage(['lit-marker-cost'])[:1]}
+    producer, reviewer, _ = executors([first_candidate(), again], [review, {
+        'cards': [{'slug': 'lit-marker-cost', 'decision': 'revise', 'reason': 'numbers are still off'}],
+        'new_topics': [], 'coverage': {'decision': 'accept', 'reason': 'ok'}}])
     prepared = ingest.prepare(root, root / '00_Inbox' / SOURCE_NAME)
     result = ingest.advance(root, prepared['job_id'], producer=producer, reviewer=reviewer)
     assert result['status'] == 'partial'
