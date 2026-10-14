@@ -121,6 +121,15 @@ def test_every_command_in_the_docs_exists():
         _check_values(where, command, tokens, _choices(parser))
 
 
+def test_installs_come_from_the_checkout():
+    # `secondbrain` on PyPI is an unrelated package: every install line is a path install
+    for path in DOCS:
+        text = path.read_text(encoding='utf-8')
+        assert not re.search(r'pip install +["\']?secondbrain\b', text), path.name
+        for line in re.findall(r'pip install[^\n`]*', text):
+            assert '-e ' in line or ' .' in line, (path.name, line)
+
+
 def test_readmes_link_to_each_other():
     english = (ROOT / 'README.md').read_text(encoding='utf-8')
     chinese = (ROOT / 'README.zh-CN.md').read_text(encoding='utf-8')
