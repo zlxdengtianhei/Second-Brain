@@ -371,6 +371,8 @@ def normalize_math(line: str) -> tuple[str, int]:
             # A name such as `TF_IDF` that the author put inside $…$ is math: normalize it
             # first, else it would be unwrapped as a name and never wrapped again
             inner = _latexify(inner)
+            if not _carries_subscript(inner):
+                continue   # the rules kept its script as written (`$PE_2i$`): keep the author's $…$
         out.append(line[cursor:m.start()])
         out.append(inner)
         cursor = m.end()

@@ -369,3 +369,10 @@ def test_groups_and_names_inside_math(src, want):
     new, _ = normalize_math(src)
     assert new == want
     assert normalize_math(new) == (new, 0)
+
+
+def test_name_inside_math_whose_script_stays_keeps_its_dollars():
+    """A name the author put inside $…$ is normalized first; when the rules keep its script as
+    written (an index, then a new symbol), it must stay inside its $…$ (it once lost both $)."""
+    line = "$PE_2i$ 与 $QK_iV$"
+    assert normalize_math(line) == (line, 0)
