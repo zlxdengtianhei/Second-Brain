@@ -34,11 +34,11 @@ Conservative rules (better to miss a formula than to break text):
 - Spaces and stray punctuation are trimmed from both ends of a segment, and
   unbalanced brackets are trimmed until balanced (no space just inside ``$…$``).
 - Problem 2 is repaired only where the run reads as one name: ``\\sum_je^{x}``,
-  ``Q_iK_i``, ``W_1x``, ``\\lambda_qR`` keep the one-token script TeX gives them, and
-  a formula already written as TeX gets braces only around clear words such as
-  ``model`` (see ``_brace_run``).
-- The argument of ``\\text{}``, ``\\operatorname{}`` and similar commands is a name
-  and never changes; names such as ``IVF_FLAT`` are identifiers, not math.
+  ``Q_iK_i``, ``W_1x``, ``\\lambda_qR`` keep the one-token script TeX gives them
+  (see ``_brace_run``); ``D_KL``, ``\\log_10``, ``\\mathbb{R}^768`` still get braces.
+- The argument of ``\\text{}``, ``\\mathrm{}`` and ``\\operatorname{}`` is a name
+  and never changes. Bare names such as ``IVF_FLAT`` are identifiers, not math;
+  inside ``$…$`` the author made them math, so they are normalized.
 """
 from __future__ import annotations
 
@@ -103,11 +103,12 @@ IDENT_WORDS = {
     "sr_due", "sr_interval", "sr_ease", "self_attention", "cross_entropy",
     "log_softmax", "10_Knowledge", "20_MOCs", "30_Exercises", "50_Reviews",
 }
-# Names joined by `_`: `max_len`, and also, in upper or mixed case and with digits, index and
-# model names such as `IVF_FLAT`, `IVF_SQ8`, `Visualized_BGE`. Each part has two or more
-# characters and each part after a `_` has a letter, so `W_Q`, `d_model`, `weight_i` (one-letter
-# base or index) and `log_10` stay math.
-SNAKE = re.compile(r"^[A-Za-z][A-Za-z0-9]+(_(?=[A-Za-z0-9]*[A-Za-z])[A-Za-z0-9]{2,})+$")
+SNAKE = re.compile(r"^[a-z]{2,}(_[a-z]{2,})+$")
+# Index and model names in upper or mixed case and with digits: `IVF_FLAT`, `IVF_SQ8`,
+# `Visualized_BGE`, `SYN_SENT`. Each part has two or more characters and each part after a `_`
+# has a letter, so `W_Q`, `d_model`, `weight_i` (one-letter base or index) and `log_10` stay
+# math; so do `Sigma_xy` and `Lambda_max`, whose base is a macro name.
+NAME = re.compile(r"^([A-Za-z][A-Za-z0-9]+)(_(?=[A-Za-z0-9]*[A-Za-z])[A-Za-z0-9]{2,})+$")
 
 # Protected spans: inline code, [[wiki]] links, URLs, HTML comments, markdown links
 PROTECT = [
@@ -123,6 +124,11 @@ LATEX_CMD = re.compile(r"\\[a-zA-Z]{2,}")
 # Inside the braces of `\text{}` and similar commands any character is allowed (CJK too);
 # the whole group is part of the formula
 TEXTLIKE_CMD = re.compile(r"\\(?:text|mathrm|mathbf|mathit|operatorname)\{[^{}]*\}")
+# Commands whose argument is a name or text, not math (`\\operatorname{sim}`, `\\text{max pooling}`).
+# `\\mathbf{}` and `\\mathit{}` are left out: their argument is math (`\\mathbf{W_qk}`).
+NAME_ARG_CMD = re.compile(r"(\\(?:text[a-z]*|mathrm|operatorname)\{)([^{}]*)(\})")
+#: Private-use characters stand in for hidden name arguments while the rules run.
+HIDDEN = re.compile("[\ue000-\uf8ff]")
 
 
 def _protected(line: str) -> list[tuple[int, int]]:
@@ -133,8 +139,13 @@ def _protected(line: str) -> list[tuple[int, int]]:
     return spans
 
 
-def _is_identifier(tok: str) -> bool:
-    return tok in IDENT_WORDS or tok.startswith(IDENT_PREFIX) or bool(SNAKE.match(tok))
+def _is_identifier(tok: str, names: bool = True) -> bool:
+    """Whether ``tok`` is an identifier, not math. ``names=False`` counts names such as
+    `TF_IDF` as math: the caller found them inside ``$…$``, where the author made them math."""
+    if tok in IDENT_WORDS or tok.startswith(IDENT_PREFIX) or SNAKE.match(tok):
+        return True
+    m = NAME.match(tok) if names else None
+    return bool(m) and m.group(1) not in MACRO_WORDS
 
 
 def _is_math_chunk(chunk: str) -> bool:
@@ -162,14 +173,14 @@ def _is_math_chunk(chunk: str) -> bool:
     return all(len(r) == 1 or r in MACRO_WORDS for r in LETTER_RUN_RE.findall(stripped))
 
 
-def _carries_subscript(chunk: str) -> bool:
+def _carries_subscript(chunk: str, names: bool = True) -> bool:
     """Whether the chunk shows it really is a formula: a real subscript or superscript, or a LaTeX command.
 
     Subscripts alone are not enough: `P(D\\mid\\theta)` has a command and no
     subscript, and without this check it stays outside math with `\\mid` shown
     literally (an independent check found this form on 14 lines).
     """
-    if any(not _is_identifier(m.group(0)) for m in MATH_TOKEN.finditer(chunk)):
+    if any(not _is_identifier(m.group(0), names) for m in MATH_TOKEN.finditer(chunk)):
         return True
     return bool(LATEX_CMD.search(chunk))
 
@@ -214,17 +225,21 @@ def _brace_run(m: re.Match, as_tex: bool) -> str:
     `\\lambda_qR` is λ_q times R. The run is left as it is when
     - it is followed by `_`: its last character is the base of the next subscript
       (braces would make a double subscript, which does not render);
-    - it goes from digits to letters (`1x`) or from a lowercase to an uppercase letter (`qR`):
-      an index, then a new symbol;
-    - the formula is already written as TeX (its author follows the one-token rule) and the
-      run is not a clear word of three or more letters in one case (`model`, `CLS`).
-    Otherwise (`d_model`, `h_CLS`, `d_head = d_model / a`) it is one name and gets braces.
+    - it is a subscript that goes from digits to letters (`W_1x`) or from a lowercase to an
+      uppercase letter (`\\lambda_qR`): an index, then a new symbol;
+    - the formula is already written as TeX and the run is followed by `^`: the author follows
+      the one-token rule, so its last character is the base of the superscript (`\\sum_je^{x}`);
+      a clear word of three or more letters in one case still gets braces (`d_model^2`).
+    Otherwise it is one name and gets braces, also in a formula written as TeX:
+    `d_model`, `h_CLS`, `D_KL(p‖q)=E_{x~p}[…]`, `\\log_10`, `\\mathbb{R}^768`, `10000^2i`.
     """
     sign, run = m.group(1), m.group(2)
     following = m.string[m.end():m.end() + 1]
-    if following == "_" or re.match(r"\d+[A-Za-z]", run) or re.search(r"[a-z][A-Z]", run):
+    if following == "_":
         return m.group(0)
-    if as_tex and not re.fullmatch(r"[a-z]{3,}|[A-Z]{3,}", run):
+    if sign == "_" and (re.match(r"\d+[A-Za-z]", run) or re.search(r"[a-z][A-Z]", run)):
+        return m.group(0)
+    if as_tex and following == "^" and not re.fullmatch(r"[a-z]{3,}|[A-Z]{3,}", run):
         return m.group(0)
     return f"{sign}{{{run}}}"
 
@@ -232,20 +247,26 @@ def _brace_run(m: re.Match, as_tex: bool) -> str:
 def _latexify(expr: str) -> str:
     """Normalize notation inside a segment: braces around subscripts, backslashes before bare macro names.
 
-    The argument of `\\text{}`, `\\mathrm{}`, `\\operatorname{}` and similar commands is a name, not
-    math, so nothing inside it changes: `\\operatorname{sim}` must not become `\\operatorname{\\sim}` (∼).
+    The argument of `\\text{}`, `\\mathrm{}` and `\\operatorname{}` is a name, not math, so
+    nothing inside it changes: `\\operatorname{sim}` must not become `\\operatorname{\\sim}` (∼).
+    The argument is hidden behind a private-use character while the rules run, so rules that
+    span a group still work: `\\sqrt(\\text{d}_k)` → `\\sqrt{\\text{d}_k}`.
     """
     as_tex = bool(WRITTEN_AS_TEX.search(expr))
-    out, cursor = [], 0
-    for m in TEXTLIKE_CMD.finditer(expr):
-        out += [_latexify_math(expr[cursor:m.start()], as_tex), m.group(0)]
-        cursor = m.end()
-    out.append(_latexify_math(expr[cursor:], as_tex))
-    return "".join(out)
+    hidden: list[str] = []
+    if not HIDDEN.search(expr):
+        def hide(m: re.Match) -> str:
+            hidden.append(m.group(2))
+            return m.group(1) + chr(0xE000 + len(hidden) - 1) + m.group(3)
+        expr = NAME_ARG_CMD.sub(hide, expr)
+    expr = _latexify_math(expr, as_tex)
+    if hidden:
+        expr = HIDDEN.sub(lambda m: hidden[ord(m.group(0)) - 0xE000], expr)
+    return expr
 
 
 def _latexify_math(expr: str, as_tex: bool) -> str:
-    """:func:`_latexify` on a piece outside text-like command groups."""
+    """The rules of :func:`_latexify`, on a text whose name arguments are hidden."""
     expr = MACRO_RE.sub(lambda m: "\\" + m.group(1), expr)
     expr = OPERATOR_RE.sub(lambda m: "\\operatorname{" + m.group(1) + "}", expr)
     expr = re.sub(r"\\sqrt\(([^()\n]{1,30})\)",
@@ -343,12 +364,17 @@ def normalize_math(line: str) -> tuple[str, int]:
     for m in DOLLAR_INLINE.finditer(line):
         if any(s < m.end() and m.start() < e for s, e in spans):
             continue
-        if not _carries_subscript(m.group(1)):
-            continue   # it could not be wrapped again (e.g. `$A$`): keep it as it is
+        inner = m.group(1)
+        if not _carries_subscript(inner):
+            if not _carries_subscript(inner, names=False):
+                continue   # it could not be wrapped again (e.g. `$A$`): keep it as it is
+            # A name such as `TF_IDF` that the author put inside $…$ is math: normalize it
+            # first, else it would be unwrapped as a name and never wrapped again
+            inner = _latexify(inner)
         out.append(line[cursor:m.start()])
-        out.append(m.group(1))
+        out.append(inner)
         cursor = m.end()
-        stripped.append(m.group(1))
+        stripped.append(inner)
     out.append(line[cursor:])
     plain = "".join(out)
     if stripped:

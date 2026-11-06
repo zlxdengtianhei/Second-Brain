@@ -316,3 +316,56 @@ def test_word_subscripts_still_get_braces(src, want):
     new, _ = normalize_math(src)
     assert new == want
     assert normalize_math(new) == (new, 0)
+
+
+# ---------------------------------------------------------------------------
+# Second round (independent review of the first fix). A formula written as TeX
+# still gets braces around a script that reads as one name; only a run that is
+# followed by `^` keeps TeX's one-token reading there (`\sum_je^{x}`). The first
+# line is real card text from an older vault: the first fix wrote D_K L.
+# ---------------------------------------------------------------------------
+STILL_REPAIRED_IN_TEX = [
+    ("- P3. KL 公式外乘 p(x) 是因为 KL 是在真实分布 p 下求期望 D_KL(p‖q)=E_{x~p}[log(p(x)/q(x))]，真实世界经常发生的事件应占更大权重。",
+     "- P3. KL 公式外乘 p(x) 是因为 KL 是在真实分布 p 下求期望 $D_{KL}(p‖q)=E_{x~p}[\\log(p(x)/q(x))]$，真实世界经常发生的事件应占更大权重。"),
+    ("复杂度 $O(\\log_10 N)$", "复杂度 $O(\\log_{10} N)$"),
+    ("向量 $\\mathbf{x}\\in\\mathbb{R}^768$", "向量 $\\mathbf{x}\\in\\mathbb{R}^{768}$"),
+    ("RNN：$h_t=\\tanh(W_hh h_{t-1}+W_xh x_t)$", "RNN：$h_t=\\tanh(W_{hh} h_{t-1}+W_{xh} x_t)$"),
+    ("FFN 维度 $d_ff=4\\cdot d_{model}$", "FFN 维度 $d_{ff}=4\\cdot d_{model}$"),
+    ("权重 $\\hat{y}=\\sum_j w_ij x_j$", "权重 $\\hat{y}=\\sum_j w_{ij} x_j$"),
+    ("约 $\\approx 2^10$ 个", "约 $\\approx 2^{10}$ 个"),
+    ("平方 $\\sqrt{d_model^2}$", "平方 $\\sqrt{d_{model}^2}$"),
+    # a superscript keeps the old reading: 10000^{2i}
+    ("位置编码 PE(pos,2i)=sin(pos/10000^2i/d_model)", "位置编码 $PE(pos,2i)=\\sin(pos/10000^{2i}/d_{model})$"),
+]
+
+
+@pytest.mark.parametrize("src,want", STILL_REPAIRED_IN_TEX)
+def test_scripts_that_read_as_one_name_are_braced_in_tex_too(src, want):
+    new, _ = normalize_math(src)
+    assert new == want
+    assert normalize_math(new) == (new, 0)
+
+
+def test_index_then_capital_symbol_keeps_one_token_subscript():
+    """`λ_qR` is λ_q times R(…); no `_` follows, so only the lower-to-upper rule keeps it."""
+    src = "λ_qR(w(q)) + λ_dR(w(d)) 是稀疏约束"
+    assert normalize_math(src)[0] == "$λ_qR(w(q)) + λ_dR(w(d))$ 是稀疏约束"
+
+
+# Name arguments are hidden only while the rules run, so rules that span a group still work;
+# \mathbf{} and \mathit{} hold math; a name the author put inside $…$ is math.
+GROUPS_AND_AUTHOR_MATH = [
+    ("缩放 $\\sqrt(\\text{d}_k)$", "缩放 $\\sqrt{\\text{d}_k}$"),
+    ("上标 $h^(\\text{enc})_t$", "上标 $h^{(\\text{enc})}_t$"),
+    ("$\\mathrm{log}_10 x$", "$\\mathrm{log}_{10} x$"),
+    ("$\\mathbf{sigma}^2$ 与 $\\mathbf{W_qk}$", "$\\mathbf{\\sigma}^2$ 与 $\\mathbf{W_{qk}}$"),
+    ("$Loss_KD$ 与 $TF_IDF$", "$Loss_{KD}$ 与 $TF_{IDF}$"),
+    ("协方差 Sigma_xy 与 Lambda_max", "协方差 $\\Sigma_{xy}$ 与 $\\Lambda_\\max$"),
+]
+
+
+@pytest.mark.parametrize("src,want", GROUPS_AND_AUTHOR_MATH)
+def test_groups_and_names_inside_math(src, want):
+    new, _ = normalize_math(src)
+    assert new == want
+    assert normalize_math(new) == (new, 0)
