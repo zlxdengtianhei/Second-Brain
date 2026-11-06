@@ -33,6 +33,12 @@ Conservative rules (better to miss a formula than to break text):
   one chunk has a real subscript and is not an identifier.
 - Spaces and stray punctuation are trimmed from both ends of a segment, and
   unbalanced brackets are trimmed until balanced (no space just inside ``$…$``).
+- Problem 2 is repaired only where the run reads as one name: ``\\sum_je^{x}``,
+  ``Q_iK_i``, ``W_1x``, ``\\lambda_qR`` keep the one-token script TeX gives them, and
+  a formula already written as TeX gets braces only around clear words such as
+  ``model`` (see ``_brace_run``).
+- The argument of ``\\text{}``, ``\\operatorname{}`` and similar commands is a name
+  and never changes; names such as ``IVF_FLAT`` are identifiers, not math.
 """
 from __future__ import annotations
 
@@ -97,7 +103,11 @@ IDENT_WORDS = {
     "sr_due", "sr_interval", "sr_ease", "self_attention", "cross_entropy",
     "log_softmax", "10_Knowledge", "20_MOCs", "30_Exercises", "50_Reviews",
 }
-SNAKE = re.compile(r"^[a-z]{2,}(_[a-z]{2,})+$")
+# Names joined by `_`: `max_len`, and also, in upper or mixed case and with digits, index and
+# model names such as `IVF_FLAT`, `IVF_SQ8`, `Visualized_BGE`. Each part has two or more
+# characters and each part after a `_` has a letter, so `W_Q`, `d_model`, `weight_i` (one-letter
+# base or index) and `log_10` stay math.
+SNAKE = re.compile(r"^[A-Za-z][A-Za-z0-9]+(_(?=[A-Za-z0-9]*[A-Za-z])[A-Za-z0-9]{2,})+$")
 
 # Protected spans: inline code, [[wiki]] links, URLs, HTML comments, markdown links
 PROTECT = [
@@ -192,8 +202,50 @@ def _trim(expr: str) -> str:
     return expr.strip()
 
 
+#: A formula already written as TeX: it has a command (`\frac`, `\text`) or a braced script (`_{`, `^{`).
+WRITTEN_AS_TEX = re.compile(r"\\[a-zA-Z]{2,}|[_^]\{")
+
+
+def _brace_run(m: re.Match, as_tex: bool) -> str:
+    """`_` or `^` and the run of two or more characters after it, braced when the run reads as one name.
+
+    TeX gives a script one token, so a run is often a one-character script and then more math:
+    `\\sum_je^{x}` is ∑ over j of e^x, `Q_iK_i` is Q_i times K_i, `W_1x` is W_1 times x,
+    `\\lambda_qR` is λ_q times R. The run is left as it is when
+    - it is followed by `_`: its last character is the base of the next subscript
+      (braces would make a double subscript, which does not render);
+    - it goes from digits to letters (`1x`) or from a lowercase to an uppercase letter (`qR`):
+      an index, then a new symbol;
+    - the formula is already written as TeX (its author follows the one-token rule) and the
+      run is not a clear word of three or more letters in one case (`model`, `CLS`).
+    Otherwise (`d_model`, `h_CLS`, `d_head = d_model / a`) it is one name and gets braces.
+    """
+    sign, run = m.group(1), m.group(2)
+    following = m.string[m.end():m.end() + 1]
+    if following == "_" or re.match(r"\d+[A-Za-z]", run) or re.search(r"[a-z][A-Z]", run):
+        return m.group(0)
+    if as_tex and not re.fullmatch(r"[a-z]{3,}|[A-Z]{3,}", run):
+        return m.group(0)
+    return f"{sign}{{{run}}}"
+
+
 def _latexify(expr: str) -> str:
-    """Normalize notation inside a segment: braces around subscripts, backslashes before bare macro names."""
+    """Normalize notation inside a segment: braces around subscripts, backslashes before bare macro names.
+
+    The argument of `\\text{}`, `\\mathrm{}`, `\\operatorname{}` and similar commands is a name, not
+    math, so nothing inside it changes: `\\operatorname{sim}` must not become `\\operatorname{\\sim}` (∼).
+    """
+    as_tex = bool(WRITTEN_AS_TEX.search(expr))
+    out, cursor = [], 0
+    for m in TEXTLIKE_CMD.finditer(expr):
+        out += [_latexify_math(expr[cursor:m.start()], as_tex), m.group(0)]
+        cursor = m.end()
+    out.append(_latexify_math(expr[cursor:], as_tex))
+    return "".join(out)
+
+
+def _latexify_math(expr: str, as_tex: bool) -> str:
+    """:func:`_latexify` on a piece outside text-like command groups."""
     expr = MACRO_RE.sub(lambda m: "\\" + m.group(1), expr)
     expr = OPERATOR_RE.sub(lambda m: "\\operatorname{" + m.group(1) + "}", expr)
     expr = re.sub(r"\\sqrt\(([^()\n]{1,30})\)",
@@ -211,11 +263,12 @@ def _latexify(expr: str) -> str:
     # (a fourth review round found 9 such lines).
     expr = re.sub(r"([_^])(\([^()\n]{1,20}\))",
                   lambda m: f"{m.group(1)}{{{m.group(2)}}}", expr)
-    # `d_model` → `d_{model}`; `w_<t` → `w_{<t}`; braced or single-character subscripts stay
-    expr = re.sub(rf"([_^])([<>]?[A-Za-z0-9{GREEK}]{{2,}})",
+    # `w_<t` → `w_{<t}`: a script of `<` or `>` alone is never meant, so the run always goes with it
+    expr = re.sub(rf"([_^])([<>][A-Za-z0-9{GREEK}]+)",
                   lambda m: f"{m.group(1)}{{{m.group(2)}}}", expr)
-    expr = re.sub(rf"([_^])([<>][A-Za-z0-9{GREEK}])",
-                  lambda m: f"{m.group(1)}{{{m.group(2)}}}", expr)
+    # `d_model` → `d_{model}` when the run reads as one name (see _brace_run);
+    # braced or single-character subscripts stay
+    expr = re.sub(rf"([_^])([A-Za-z0-9{GREEK}]{{2,}})", lambda m: _brace_run(m, as_tex), expr)
     # Nothing to do after commands such as \theta followed by }; the braces after \frac and
     # similar commands are already in the source text
     return expr

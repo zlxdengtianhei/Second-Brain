@@ -252,3 +252,67 @@ def test_sqrt_parentheses_become_a_radical_group():
     expected = '按 $\\sqrt{d_k}$ 缩放；代码 `sqrt(d_k)` 保留。'
     assert normalize_math(text)[0] == expected
     assert normalize_math(expected)[0] == expected
+
+
+# ---------------------------------------------------------------------------
+# Regression: formulas already right were changed into other formulas (found in
+# a real vault, 2026-11-06). TeX gives a script one token, so a run after `_` is
+# often a one-character script followed by more math; braces must not swallow it.
+# The argument of \operatorname{} and similar commands is a name, not math.
+# ---------------------------------------------------------------------------
+KEEP_AS_WRITTEN = [
+    # InfoNCE: ∑ over j of e^{…}, not ∑ over "je"
+    r"$\mathcal L=-\log\frac{e^{s(q,d^+)/\tau}}{e^{s(q,d^+)/\tau}+\sum_je^{s(q,d_j^-)/\tau}}$",
+    r"$\sum_je^{s(q,d_j^-)/\tau}$",
+    # Q_i K_i, L_i, h_i, T_j: braces made a double subscript (MathJax error)
+    r"$\text{head}_i=\operatorname{softmax}\left(\frac{Q_iK_i^\top}{\sqrt{64}}\right)V_i$",
+    r"$L_{\max}=\max_iL_i$",
+    r"$v=\frac1n\sum_ih_i$",
+    r"$\widetilde{\mathrm{dist}}(q,x)=\sum_{j=1}^mT_j[c_j]$",
+    "$h_2=f(W_2h_1+b_2)$",
+    "$s_i=W_sh_i$",
+    # W_1 times x, λ_q times R(…)
+    r"$\text{FFN}(x)=W_2\,\text{GELU}(W_1x+b_1)+b_2$",
+    "$h_1=f(W_1x+b_1)$",
+    r"$\mathcal L=\mathcal L_{\text{rank}}+\lambda_qR(\mathbf w(q))+\lambda_dR(\mathbf w(d))$",
+    # sim is the similarity function here, not the relation \sim (∼)
+    r"$\operatorname{sim}(v_q,v_+)>\operatorname{sim}(v_q,v_-)$",
+    r"$S(q,d)=\sum_i\max_j\operatorname{sim}(q_i,d_j)$",
+    r"$\text{max pooling}$",
+]
+
+
+@pytest.mark.parametrize("line", KEEP_AS_WRITTEN)
+def test_formula_already_right_is_kept(line):
+    assert normalize_math(line) == (line, 0)
+    assert normalize_math(f"- P1. 公式 {line}。") == (f"- P1. 公式 {line}。", 0)
+
+
+NAMES = [
+    "Milvus 的 IVF_FLAT、IVF_SQ8、IVF_PQ 三种索引",
+    "能载入内存、追求高吞吐 → IVF_FLAT 或 IVF_SQ8。",
+    "Visualized_BGE 可以编码纯文本、纯图像或图文组合",
+    "The client enters SYN_SENT.",
+]
+
+
+@pytest.mark.parametrize("line", NAMES)
+def test_upper_and_mixed_case_names_are_not_math(line):
+    assert normalize_math(line) == (line, 0)
+
+
+STILL_REPAIRED = [
+    ("NSP 用 h_CLS 做二分类", "NSP 用 $h_{CLS}$ 做二分类"),
+    ("已经写成 $d_model$ 的也要修", "已经写成 $d_{model}$ 的也要修"),
+    ("缩放用 $\\sqrt{d_model}$", "缩放用 $\\sqrt{d_{model}}$"),
+    ("平方 d_model^2 与 h_CLS^T", "平方 $d_{model}^2$ 与 $h_{CLS}^T$"),
+    ("对数 log_10 N 次", "对数 $\\log_{10} N$ 次"),
+    ("x_i1 与 w_ij", "$x_{i1}$ 与 $w_{ij}$"),
+]
+
+
+@pytest.mark.parametrize("src,want", STILL_REPAIRED)
+def test_word_subscripts_still_get_braces(src, want):
+    new, _ = normalize_math(src)
+    assert new == want
+    assert normalize_math(new) == (new, 0)
