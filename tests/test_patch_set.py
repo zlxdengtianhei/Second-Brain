@@ -200,6 +200,56 @@ def test_p10_a_disputed_card_is_judged_again_and_the_whole_merge_check_round_is_
     assert first and all(e['n'] in decisions.superseded(record) for e in first)
 
 
+def second_existing(root, cid='card_w'):
+    """Another existing card in sb format (a copy of the first under another id and title), in the registry."""
+    import json
+    src = next((root / '10_Knowledge').rglob(f'{EXISTING}.md'))
+    (src.parent / f'{cid}.md').write_text(src.read_text(encoding='utf-8').replace(f'id: {EXISTING}', f'id: {cid}')
+                                          .replace('title: ', 'title: W ', 1), encoding='utf-8')
+    reg = root / layouts.DEFAULT.registry
+    data = json.loads(reg.read_text(encoding='utf-8'))
+    first = next(n for n in data['notes'] if n['id'] == EXISTING)
+    data['notes'].append({**first, 'id': cid, 'path': first['path'].replace(EXISTING, cid), 'title': 'W ' + first['title']})
+    reg.write_text(json.dumps(data, ensure_ascii=False), encoding='utf-8')
+    return cid
+
+
+def test_p10_as_designed_the_other_patch_of_a_replaced_round_is_given_again_and_counts_once(tmp_path):
+    """Design section 1.5, P10: D extends the existing card and is disputed; F extends another existing card W;
+    E is distinct. Round 1 patches W and disputes D; D is judged again; round 2 judges D and E and patches W again.
+    W's patch has one live entry, from round 2; F goes into W once; D, E and F each have one outcome."""
+    root, job_id, _ = job(tmp_path)
+    w = second_existing(root)
+
+    def produce(task):
+        out = two_chunk_producer(task)
+        for c in out['cards']:
+            if c['slug'] == 'lit-marker-cost':  # F
+                c['relations'] = list(c['relations']) + [{'type': 'similar_to', 'target': w, 'note': 'n'}]
+        return out
+    levels = {**LEVELS, 'lit-marker-cost': {'overlap': 'extends', 'with': [w]}}
+    checks = []
+
+    def check(packet):
+        return keep_all(packet, _disputes=('lantern-queue',)) if not checks[1:] else keep_all(packet)
+    done = run(root, job_id, reviewer(checks, check=check, levels=levels), with_diagrams(produce))
+    assert done['status'] == 'applied', done.get('pending')
+    assert [c.chunk for c in checks] == ['xc01', 'xc01.r1']  # no round asked again: every record was accepted
+    record = done['decision_record']
+    patches = [(e['object'], e['slot'], e['n'] in decisions.superseded(record))
+               for e in record if e['kind'] == 'value' and e['value'] == 'patch']
+    assert patches == [(w, 'xc01', True), (w, 'xc01.r1', False)]
+    assert {o: e['slot'] for o, e in decisions.values(record, 'patch').items()} == {w: 'xc01.r1'}
+    assert done['outcomes'] == {'lantern-queue': 'write', 'queue-order': 'drop', 'filler-note': 'write',
+                                'lit-marker-cost': 'patch', 'arrival-order': 'write'}
+    assert done['patch_set'] == {'lit-marker-cost': 'patched'}
+    assert [(m['id'], m['from']) for m in done['merged_into_existing']] == [(w, ['lit-marker-cost'])]
+    added = CARDS['lit-marker-cost']['propositions'][0]
+    assert cardfmt.propositions_of(card_of(root, w).body).count(added) == 1
+    assert 'lit-marker-cost' not in {c.fm.get('slug') for c in read_snapshot(root).cards.values()}
+    assert not [c for c in read_snapshot(root).cards.values() if c.title == CARDS['lit-marker-cost']['title']]
+
+
 def test_a_card_still_disputed_after_the_last_round_stays_pending(tmp_path):
     root, job_id, before = job(tmp_path)
     again = {'lantern-queue': lambda p: {'slug': 'lantern-queue', 'overlap': 'extends', 'with': [EXISTING],
