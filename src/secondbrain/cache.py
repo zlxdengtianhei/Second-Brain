@@ -2,8 +2,8 @@
 
 Stores, per card file, ``(stat key, sha256, frontmatter, raw bytes, body
 offset)`` in the vault's external state root (``cache/snapshot.pkl``), so a
-warm snapshot only reads and parses files whose (size, mtime, ctime, inode)
-changed. The cache never lives in the vault (vaults get synced) and is never
+warm snapshot compares file bytes and only parses content that changed. The
+cache never lives in the vault (vaults get synced) and is never
 trusted for writes: transactions compare real file hashes before writing.
 
 The file is unpickled with an allow-list of the types a YAML safe loader can

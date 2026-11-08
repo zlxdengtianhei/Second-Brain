@@ -443,7 +443,7 @@ def _scan_md(root: str, issues: list, knowledge: str = KNOWLEDGE_RELPATH):
     """Yield ``(relpath, fullpath, stat)`` for every regular ``.md`` card file.
 
     Same traversal, order and issue codes as :func:`_walk_md`, but only stats
-    the files; bytes are read later, and only on a parse-cache miss.
+    the files; bytes are read later while building the snapshot.
     """
     root = os.path.normpath(str(root))
     base = os.path.join(root, *knowledge.split("/"))
@@ -594,9 +594,9 @@ def read_snapshot(root, *, catalog=None, use_cache=None) -> Snapshot:
     present (a missing file is recorded as an explicit issue, not an error).
 
     Card parsing goes through the parse cache in the vault's external state
-    root (``use_cache``; default on unless ``SECONDBRAIN_NO_CACHE=1``): only
-    files whose (size, mtime, ctime, inode) changed are read and parsed. The
-    cache only speeds up reads; every write re-checks real file hashes.
+    root (``use_cache``; default on unless ``SECONDBRAIN_NO_CACHE=1``): file
+    bytes are compared with the cache and only changed content is parsed. The
+    cache only speeds up parsing; every write re-checks real file hashes.
     """
     from . import cache as parse_cache
     from . import layout as layouts
@@ -647,17 +647,19 @@ def read_snapshot(root, *, catalog=None, use_cache=None) -> Snapshot:
     parsed = 0
     for rel, full, st in _scan_md(root, issues, lay.knowledge):
         key = (st.st_size, st.st_mtime_ns, st.st_ctime_ns, st.st_ino)
+        try:
+            with open(full, "rb") as handle:
+                raw = handle.read()
+        except OSError as exc:
+            issues.append({"code": "read_error", "path": rel, "detail": str(exc)})
+            continue
         hit = cached.get(rel)
-        if hit is not None and hit[0] == key:
-            _key, sha, fm, raw, body_start = hit
+        # Stat timestamps can stay in the same tick across a same-size write.
+        # Bytes, rather than the stat key, are authoritative for cache hits.
+        if hit is not None and hit[3] == raw:
+            _key, sha, fm, _cached_raw, body_start = hit
             body = raw[body_start:].decode("utf-8")
         else:
-            try:
-                with open(full, "rb") as handle:
-                    raw = handle.read()
-            except OSError as exc:
-                issues.append({"code": "read_error", "path": rel, "detail": str(exc)})
-                continue
             try:
                 fm, body, body_start = _parse_note(raw)
             except VaultError as exc:

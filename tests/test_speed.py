@@ -89,6 +89,31 @@ def test_warm_snapshot_reparses_only_changed_cards(tmp_path, monkeypatch):
     same(removed, vault.read_snapshot(root, use_cache=False))
 
 
+def test_warm_snapshot_reparses_same_size_change_with_unchanged_stat(tmp_path, monkeypatch):
+    root = build_vault(tmp_path)
+    path = card(root, 'card_0', '## 本质\n正文 0\n')
+    calls = counting(monkeypatch)
+    vault.read_snapshot(root)
+    assert len(calls) == 2
+
+    before = path.stat()
+    path.write_bytes(path.read_bytes().replace('正文 0'.encode(), '正文 X'.encode()))
+    os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns))
+    real_lstat = os.lstat
+
+    def same_coarse_timestamp(name, *args, **kwargs):
+        # A filesystem may not advance mtime/ctime for two writes in one tick.
+        if os.fspath(name) == os.fspath(path):
+            return before
+        return real_lstat(name, *args, **kwargs)
+
+    monkeypatch.setattr(os, 'lstat', same_coarse_timestamp)
+    changed = vault.read_snapshot(root)
+    assert len(calls) == 3
+    assert changed.cards['card_0'].body == '## 本质\n正文 X\n'
+    same(changed, vault.read_snapshot(root, use_cache=False))
+
+
 def test_cache_lives_outside_the_vault_and_damage_only_costs_a_rebuild(tmp_path, monkeypatch):
     root = build_vault(tmp_path)
     first = vault.read_snapshot(root)
