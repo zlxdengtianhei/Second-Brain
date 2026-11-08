@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import re
 
-from .. import decisions
+from .. import decisions, review_notes
 from ..cards import KINDS
 from ..evidence import check_verbatim
 from ..schemas import shape_checked
@@ -50,7 +50,7 @@ CARD_SCHEMA = {
 REVIEW_SCHEMA = {
     'type': 'object', 'required': ['decision', 'restates', 'reason'],
     'properties': {'decision': {'type': 'string', 'enum': ['accept', 'revise']},
-                   'restates': {'type': 'boolean'}, 'reason': _STR}}
+                   'restates': {'type': 'boolean'}, 'reason': _STR, 'notes': review_notes.NOTES}}
 
 
 def is_slot(name: str | None) -> bool:
@@ -118,7 +118,10 @@ def validate_review(payload) -> dict:
         raise ValueError('the review must be {"decision": "accept"|"revise", "restates": true|false, "reason": "..."}')
     if payload['decision'] == 'accept' and payload['restates']:
         raise ValueError('a card that restates the propositions of the card it narrows is not accepted; revise it')
-    return payload
+    wrong = review_notes.problems(payload.get('notes'), 'review')
+    if wrong:
+        raise ValueError('the review was rejected by validation:\n- ' + '\n- '.join(wrong))
+    return review_notes.turned(payload)  # an accept with a blocking note goes back (D-18 3)
 
 
 def record(item: dict, card: dict, review: dict, entries: list, *, slot: str, run: str | None,

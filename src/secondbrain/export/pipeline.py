@@ -29,7 +29,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .. import config, jobs, schemas, vault
+from .. import config, jobs, review_notes, schemas, vault
 from ..executors.base import ExecutorFailure
 from ..locks import job_lock
 from ..runner import AwaitingSubmission, fail_call, finish_call, prompt, start_call
@@ -149,6 +149,7 @@ def smooth_paragraphs(candidate: dict) -> list[tuple[str, str]]:
             + [(f"transition/{t['section']}", t['text']) for t in candidate.get('transitions') or []])
 
 
+@schemas.shape_checked(schemas.EXPORT_REVIEW, what='review')
 def _validate_review(candidate: dict, payload: dict, want: list[str] | None = None) -> dict:
     items = payload.get('items')
     if not isinstance(items, list):
@@ -162,7 +163,11 @@ def _validate_review(candidate: dict, payload: dict, want: list[str] | None = No
     for x in items:
         if x.get('decision') not in {'accept', 'revise'} or not str(x.get('reason') or '').strip():
             raise ValueError(f"item {x.get('id')}: decision must be accept or revise, with a reason")
-    return payload
+    wrong = [p for x in items for p in review_notes.problems(x.get('notes'), f"item {x.get('id')}")]
+    if wrong:
+        raise ValueError('the review was rejected by validation:\n- ' + '\n- '.join(wrong))
+    # a paragraph accepted with a note of a blocking kind goes back, the note its reason (D-18 3)
+    return {**payload, 'items': [review_notes.turned(x) for x in items]}
 
 
 def _validate_smooth(packet: dict, payload: dict, allowed_drops: set) -> dict:
@@ -272,7 +277,7 @@ def _plan(root, job_id, state, packet, errors_for, feedback) -> list[tuple]:
         if not slot.get('review'):
             pending.append(uid)
             steps.append(('review', uid, note(uid, 'review', head + prompt('export_review.md')),
-                          review_packet(packet, unit, candidate), schemas.REVIEW_BY_ID, 'reviewer'))
+                          review_packet(packet, unit, candidate), schemas.EXPORT_REVIEW, 'reviewer'))
             continue
         review = jobs.require_independent_review(root, state, uid)
         revise = [x for x in review['items'] if x['decision'] == 'revise']
@@ -298,7 +303,7 @@ def _plan(root, job_id, state, packet, errors_for, feedback) -> list[tuple]:
     candidate = jobs.artifact(root, state, 'candidate', SMOOTH)
     if not smooth.get('review'):
         steps.append(('review', SMOOTH, note(SMOOTH, 'review', head + prompt('export_smooth_review.md')),
-                      smooth_review_packet(root, job_id, state, packet, candidate), schemas.REVIEW_BY_ID,
+                      smooth_review_packet(root, job_id, state, packet, candidate), schemas.EXPORT_REVIEW,
                       'reviewer'))
         return steps
     review = jobs.require_independent_review(root, state, SMOOTH)
@@ -322,7 +327,9 @@ def _settled(root, job_id, chunk, slot, review, revise, found) -> bool:
         return False
     rounds = int(slot.get('round', 0))
     history = list(slot.get('history') or []) + [{'round': rounds, 'revise': len(revise),
-                                                   'paragraphs': len(review['items']), 'findings': len(found)}]
+                                                   'paragraphs': len(review['items']), 'findings': len(found),
+                                                   'turned': [{'id': x['id'], **x['turned']['note']}
+                                                              for x in revise if x.get('turned')]}]
     if not revise and not found:
         _set_chunk(root, job_id, chunk, status='accepted', history=history, unresolved=None)
         return True

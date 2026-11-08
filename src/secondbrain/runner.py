@@ -36,10 +36,12 @@ class _ContinueJob(RuntimeError):
 
 
 def prompt(name: str) -> str:
-    """A prompt file; the shared definition of the repeat scale is put in from :mod:`secondbrain.overlap`."""
-    from .overlap import PLACEHOLDER, definition
+    """A prompt file, with the shared definitions put in: the repeat scale (:mod:`secondbrain.overlap`) and the
+    kinds of a reviewer's notes (:mod:`secondbrain.review_notes`), so every prompt that uses one says the same."""
+    from . import overlap, review_notes
     text = resources.files('secondbrain').joinpath('prompts', name).read_text(encoding='utf-8')
-    return text.replace(PLACEHOLDER, definition().rstrip('\n'))
+    return text.replace(overlap.PLACEHOLDER, overlap.definition().rstrip('\n')).replace(
+        review_notes.PLACEHOLDER, review_notes.definition())
 
 
 def withhold_reasons(value):

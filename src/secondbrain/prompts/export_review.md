@@ -10,4 +10,7 @@ For each paragraph decide:
 
 Reason: for `revise`, quote the problem words and say what the card says instead, or that no cited card says it. For `accept`, one short sentence. Be concrete. Do not ask for style changes, and do not ask for content the cards do not have.
 
-Answer: `{"items": [{"id": "<paragraph id>", "decision": "accept" | "revise", "reason": "…"}]}` with exactly one item per paragraph.
+<!-- notes.definition -->
+For a paragraph, `not_a_unit` does not apply.
+
+Answer: `{"items": [{"id": "<paragraph id>", "decision": "accept" | "revise", "reason": "…", "notes": [...]}]}` with exactly one item per paragraph.

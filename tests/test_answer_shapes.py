@@ -90,6 +90,7 @@ def chunk_roles(tmp_path):
     state, packet = jobs.load(root, prepared['job_id']), jobs.read_input(root, prepared['job_id'])
     good, review = first_candidate(), first_review()
     review['cards'][0]['conflicts'] = [{'with': EXISTING, 'detail': 'a number differs'}]
+    review['cards'][0]['notes'] = [{'category': 'minor', 'text': 'the essence could be shorter'}]
     review['new_topics'] = [{**{k: t[k] for k in ('domain', 'pillar', 'name')}, 'decision': 'accept', 'reason': 'ok'}
                             for t in good.get('new_topics') or []]
 
@@ -112,7 +113,8 @@ def merge_and_split_roles(tmp_path):
                                 'arrival-order': {'overlap': 'extends', 'with': 'lit-marker-cost', 'reason': 'r',
                                                   'carry': {'propositions': list(ARRIVAL['propositions'])}}})
     card = {'card': {**SPLIT_CARD, 'slug': 'lantern-skip-ahead-b', 'title': 'Skipping ahead, once more'}}
-    verdict = {'decision': 'accept', 'restates': False, 'reason': 'faithful'}
+    verdict = {'decision': 'accept', 'restates': False, 'reason': 'faithful',
+               'notes': [{'category': 'minor', 'text': 'the title could be shorter'}]}
 
     def gate(role, chunk, candidate=None):
         return lambda payload: ingest.validate_submission(packet, payload, role=role, candidate=candidate, root=root,

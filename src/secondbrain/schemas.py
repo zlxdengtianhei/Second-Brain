@@ -5,6 +5,8 @@ on meaning (verbatim quotes, legal categories, full coverage).
 """
 from __future__ import annotations
 
+from . import review_notes
+
 _STR = {'type': 'string'}
 _NSTR = {'type': ['string', 'null']}
 _DECISION = {'type': 'string', 'enum': ['accept', 'revise']}
@@ -97,8 +99,9 @@ def _amend_schema() -> dict:
     return SCHEMA
 
 
-#: The problems a focused repair-round review sends a card back for, beyond an earlier finding not fixed.
-BLOCKING = ('fact', 'unreadable', 'quote', 'not_a_unit')
+#: The problems a focused repair-round review sends a card back for, beyond an earlier finding not fixed; the same
+#: four kinds of a reviewer's note send an accepted card back (secondbrain.review_notes, decision D-18 3).
+BLOCKING = review_notes.BLOCKING
 AMEND = _amend_schema()
 
 REVIEW_CARDS = {
@@ -109,7 +112,7 @@ REVIEW_CARDS = {
             'properties': {'slug': _STR, 'decision': _DECISION, 'suggested_domain': _NSTR, 'reason': _STR,
                            'overlap': {'type': ['string', 'null'], 'enum': [*_LEVELS, None]},
                            'with': {'type': ['array', 'null'], 'items': _STR}, 'conflicts': _CONFLICTS,
-                           'amend': AMEND, 'notes': {'type': ['array', 'null'], 'items': _STR},
+                           'amend': AMEND, 'notes': review_notes.NOTES,
                            'fixed': {'type': ['array', 'null'], 'items': {
                                'type': 'object', 'required': ['finding', 'fixed'],
                                'properties': {'finding': _STR, 'fixed': {'type': 'boolean'}}}},
@@ -121,6 +124,11 @@ REVIEW_CARDS = {
                      'properties': {'decision': _DECISION, 'reason': _STR,
                                     'missing': {'type': 'array', 'items': _STR}}},
     }}
+
+#: `sb export`: the review of a unit or of the smoothing step, one item per paragraph, each with its notes.
+EXPORT_REVIEW = _items({'type': 'object', 'required': ['id', 'decision', 'reason'],
+                        'properties': {'id': _STR, 'decision': _DECISION, 'reason': _STR,
+                                       'notes': review_notes.NOTES}})
 
 #: `sb export`: one writing unit (paragraphs per part), and the smoothing step.
 EXPORT_WRITE = {'type': 'object', 'required': ['parts'],

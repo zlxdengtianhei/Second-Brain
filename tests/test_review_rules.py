@@ -214,10 +214,10 @@ def test_the_reviewers_fixes_are_shown_to_the_merge_check():
     from secondbrain.pipelines import source_check
     card = {**CARDS[COST], '_amended': [{'op': 'refile', 'before': {}, 'after': {}}]}
     settled = [{'chunk': 'c01', 'accepted': {COST: card}, 'topics': {},
-                'notes': [{'slug': COST, 'note': 'the essence is long'}]}]
+                'notes': [{'slug': COST, 'category': 'minor', 'note': 'the essence is long'}]}]
     frozen = source_check.frozen_input(settled, {'filename': 'f'}, relation_views={})
     assert frozen['cards'][0]['amended'][0]['op'] == 'refile'
-    assert frozen['cards'][0]['review_notes'] == ['the essence is long']
+    assert frozen['cards'][0]['review_notes'] == ['[minor] the essence is long']
 
 
 # --- focused review -------------------------------------------------------------------------------------------------
@@ -226,14 +226,14 @@ def test_a_focused_review_sends_a_card_back_only_for_an_unfixed_finding_or_a_blo
              'new_topics': [], 'coverage': {'decision': 'accept', 'reason': 'ok'}}
     noted = {'cards': [{'slug': 'marker-dimming', 'decision': 'accept', 'overlap': 'distinct', 'reason': 'fixed',
                         'fixed': [{'finding': 'dimmed, not deleted', 'fixed': True}],
-                        'notes': ['the essence could be shorter']}],
+                        'notes': [{'category': 'minor', 'text': 'the essence could be shorter'}]}],
              'new_topics': [], 'coverage': {'decision': 'accept', 'reason': 'ok'}}
     root, job_id, done, seen = run(tmp_path, [first_candidate(), repair_candidate()], [first_review(), loose, noted])
     assert done['status'] == 'applied', done.get('pending')
     error = jobs.load(root, job_id)['chunks']['c01.r1']['last_review_error']
     assert 'revised only for an earlier finding that is not fixed' in error
     assert done['review_notes'] == [{'chunk': 'c01', 'slot': 'c01.r1', 'slug': 'marker-dimming',
-                                     'note': 'the essence could be shorter'}]
+                                     'category': 'minor', 'note': 'the essence could be shorter'}]
     assert jobs.load(root, job_id)['review_notes'] == done['review_notes']  # what `sb job show` prints
 
 

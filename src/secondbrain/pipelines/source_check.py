@@ -149,7 +149,7 @@ def frozen_input(settled: list[dict], source: dict, *, relation_views: dict,
     notes_of: dict = {}
     for o in settled:  # what the chunk reviewers noted without sending a card back, for this check to read
         for n in o.get('notes') or []:
-            notes_of.setdefault(n['slug'], []).append(n['note'])
+            notes_of.setdefault(n['slug'], []).append(f"[{n['category']}] {n['note']}" if n.get('category') else n['note'])
     cards, counts = [], {}
     for chunk, slug, c in accepted:
         key = (c['domain'], c['pillar'], c['topic'])

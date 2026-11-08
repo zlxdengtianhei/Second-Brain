@@ -30,7 +30,7 @@ import yaml
 from dataclasses import asdict
 
 from .. import cards as cardfmt
-from .. import config, decisions, inbox, jobs, labels, overlap, schemas
+from .. import config, decisions, inbox, jobs, labels, overlap, review_notes, schemas
 from .. import layout as layouts
 from ..catalog import category_pairs, open_relation_types, relation_meanings, taxonomy_packet, validate_catalog
 from ..classification import projection_changes, snapshot_checks, taxonomy_fingerprint, writable_snapshot
@@ -1320,6 +1320,7 @@ def validate_review(candidate: dict, review: dict, existing_ids: set, domains=()
                                   'and ask for the link')
         # a revised card's level is not read: it is judged again once the card is right
         errors += _conflict_errors(row['slug'], row.get('conflicts'), existing_ids)
+        errors += review_notes.problems(row.get('notes'), row['slug'])
     if sorted(seen) != sorted(slugs):
         errors.append('the review must judge every candidate card exactly once')
     keys = [(t.get('domain'), t.get('pillar'), t.get('name')) for t in candidate.get('new_topics', [])]
@@ -1440,7 +1441,10 @@ def validate_submission(packet: dict, payload: dict, *, role: str, candidate=Non
     if role == 'reviewer':
         review = validate_review(candidate, payload, existing_ids, packet['catalog']['domains'])
         _check_focused(packet, state, chunk, review)
-        return _made_amends(root, packet, state, chunk, candidate, review, existing_domains)
+        review = _made_amends(root, packet, state, chunk, candidate, review, existing_domains)
+        # an accepted card with a note of a blocking kind is sent back, the note its reason (D-18 3); it is stored
+        # so, with what the reviewer answered under `turned`, and every later step reads a revise
+        return {**review, 'cards': [review_notes.turned(r) for r in review.get('cards') or []]}
     base, rnd = _base(chunk), _round(chunk)
     kept = _accepted_so_far(root, state, base, rnd) if rnd else {}
     others = _other_cards(root, state, packet, base)
@@ -1559,7 +1563,8 @@ def record_decisions(packet: dict, payload: dict, *, role: str, candidate, root,
     for card in candidate.get('cards') or []:
         slug, row = card['slug'], rows[card['slug']]
         decisions.record(entries, 'verdict', slug, {'decision': row['decision'], 'chunk': base, 'reason': row['reason'],
-                                                    **({'amend': row['amend']} if row.get('amend') else {})},
+                                                    **({'amend': row['amend']} if row.get('amend') else {}),
+                                                    **({'turned': row['turned']} if row.get('turned') else {})},
                          role='reviewer', slot=chunk, run=run['run_id'],
                          reason=_again(entries, 'verdict', slug, chunk, facts), facts=facts)
         if row['decision'] != 'accept':
@@ -1708,6 +1713,7 @@ def chunk_outcome(root: Path, state: dict, packet: dict, base: str) -> dict:
     max_rounds = rules.max_repair_rounds
     used = len(slots) - 1  # content repair rounds begun; format retries are counted per slot (_retries_left)
     out = {'chunk': base, 'settled': False, 'next': None, 'accepted': {}, 'pending': [], 'amended': [], 'notes': [],
+           'turned': [],
            'duplicates': [], 'topics': {}, 'needs_taxonomy': [], 'skipped': [], 'conflicts': []}
     if not slots or not slots[0][1].get('candidate'):
         if not _retries_left(info0, rules):
@@ -1727,6 +1733,7 @@ def chunk_outcome(root: Path, state: dict, packet: dict, base: str) -> dict:
     needs_tax, skipped = [], []
     conflicts: dict = {}
     notes: list = []
+    turned: list = []  # accepted cards the program sent back for a blocking note (D-18 3)
     unreviewed = None
     merged_rounds = 0
     for slot, info in slots:
@@ -1759,7 +1766,11 @@ def chunk_outcome(root: Path, state: dict, packet: dict, base: str) -> dict:
                     conflicts[(c['slug'], row['with'])] = {'slug': c['slug'], 'title': c.get('title'),
                                                           'with': row['with'], 'detail': row['detail'],
                                                           'by': by, 'chunk': base}
-            notes += [{'chunk': base, 'slot': slot, 'slug': c['slug'], 'note': n} for n in d.get('notes') or []]
+            notes += [{'chunk': base, 'slot': slot, 'slug': c['slug'], 'category': n['category'], 'note': n['text']}
+                      for n in d.get('notes') or []]
+            if d.get('turned'):
+                turned.append({'chunk': base, 'slot': slot, 'round': _round(slot), 'slug': c['slug'],
+                               'category': d['turned']['note']['category'], 'note': d['turned']['note']['text']})
             if d['decision'] == 'accept':  # whether it is written is the outcome of its level (secondbrain.overlap)
                 accepted[c['slug']] = {**amends.apply(c, d.get('amend')), '_slot': slot,
                                        **({'_amend': d['amend'], '_amended': amends.changes(c, d['amend'])}
@@ -1820,6 +1831,7 @@ def chunk_outcome(root: Path, state: dict, packet: dict, base: str) -> dict:
     out['amended'] = [{'slug': s, 'chunk': base, 'slot': c['_slot'], **row} for s, c in accepted.items()
                       for row in c.get('_amended') or []]
     out['notes'] = notes
+    out['turned'] = turned
     out.update(settled=True, accepted=accepted, pending=pending, duplicates=list(dups.values()),
                topics={k: v for k, v in topic_state.items() if v['decision'] == 'accept'},
                needs_taxonomy=needs_tax, skipped=skipped, conflicts=list(conflicts.values()))
@@ -2256,6 +2268,21 @@ def split_outcome(root: Path, state: dict, packet: dict, item: dict) -> dict:
         return {'settled': False, 'next': ('repair', _slot_name(base, len(slots))), 'card': None, 'pending': None}
     return {'settled': True, 'next': None, 'card': None,
             'pending': f'the split card was not accepted: {(last[1] if last else {}).get("reason", "")}'}
+
+
+def _split_turned(root: Path, job_id: str) -> list[dict]:
+    """The split cards the program sent back for a blocking note of their review (D-18 3), every round."""
+    state = jobs.load(root, job_id)
+    out = []
+    for slot, info in sorted((state.get('chunks') or {}).items()):
+        if not split.is_slot(_base(slot)) or not info.get('review'):
+            continue
+        review = jobs.artifact(root, state, 'review', slot)
+        if review.get('turned'):
+            item = _split_item(state, slot)
+            out.append({'chunk': item['chunk'], 'slot': slot, 'round': _round(slot), 'slug': item['slug'],
+                        'category': review['turned']['note']['category'], 'note': review['turned']['note']['text']})
+    return out
 
 
 def _split_stage(root: Path, job_id: str, packet: dict, settled: list[dict], producer, reviewer,
@@ -3023,6 +3050,8 @@ def _apply_job(root: Path, job_id: str, settled: list[dict] | None = None) -> di
               'outcomes': outcomes, 'decision_record': entries,
               'amended': [r for o in settled for r in o.get('amended') or []],
               'review_notes': [n for o in settled for n in o.get('notes') or []],
+              # cards accepted with a note of a blocking kind, sent back by the program: which note, card, round
+              'notes_turned': [t for o in settled for t in o.get('turned') or []] + _split_turned(root, job_id),
               'refused_topics': [t for o in settled for t in o.get('refused_topics') or []],
               'merged_into_existing': merged_into_existing,
               'split': [{'slug': f['card']['slug'], 'id': ids.get(f['card']['slug']), 'from': s, 'of': ids.get(f['target'], f['target']),
