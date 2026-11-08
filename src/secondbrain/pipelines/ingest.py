@@ -21,7 +21,6 @@ from __future__ import annotations
 import base64
 import json
 import re
-import unicodedata
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -39,6 +38,7 @@ from ..evidence import check_verbatim
 from ..executors.base import CHUNK_TOO_LARGE, INVALID_OUTPUT, ExecutorFailure
 from ..locks import job_lock
 from ..store import Change, Conflict, digest, read_bytes
+from ..textnorm import plain, same_text
 from ..vault import Card, append_list_items, parse_note, read_snapshot
 from .. import retrieval
 from . import amend as amends
@@ -952,11 +952,6 @@ def _retry_view(packet: dict, base: str, *, reviewer: bool = False) -> dict:
 # --------------------------------------------------------------------------
 # S4 validation (pure on the frozen packet + current vault titles/ids)
 # --------------------------------------------------------------------------
-def _norm(name: str) -> str:
-    text = unicodedata.normalize('NFKC', name).casefold()
-    return ''.join(ch for ch in text if ch.isalnum())
-
-
 def _text_fields(card: dict) -> list[str]:
     out = [card.get('title'), card.get('essence'), card.get('intuition')]
     out += list(card.get('propositions') or []) + list(card.get('confusions') or [])
@@ -968,9 +963,9 @@ def _text_fields(card: dict) -> list[str]:
 
 
 def _vault_ids_titles(root) -> tuple[set, set, dict]:
-    """Existing card ids, folded titles, and ``{id: domain}``."""
+    """Existing card ids, titles as :func:`secondbrain.textnorm.plain` gives them, and ``{id: domain}``."""
     snap = read_snapshot(root)
-    return (set(snap.cards), {c.title.casefold() for c in snap.cards.values() if c.title},
+    return (set(snap.cards), {plain(c.title) for c in snap.cards.values() if c.title},
             {cid: c.domain for cid, c in snap.cards.items()})
 
 
@@ -1000,7 +995,7 @@ def validate_candidate(packet: dict, payload: dict, *, slot: str, other_cards: l
     if not isinstance(coverage, list) or not coverage:
         raise IngestError('coverage must list how every part of the chunk is handled')
     other_slugs = {c['slug'] for c in other_cards}
-    other_titles = {str(c.get('title') or '').casefold() for c in other_cards}
+    other_titles = {plain(c.get('title')) for c in other_cards}
     domain_of = dict(target_domains or {})
     domain_of.update({c['slug']: c.get('domain') for c in cards if isinstance(c, dict) and isinstance(c.get('slug'), str)})
     proposed = {}
@@ -1026,9 +1021,9 @@ def validate_candidate(packet: dict, payload: dict, *, slot: str, other_cards: l
             errors.append(f'{where}.name must be a one-line string')
             continue
         existing = [x for p in pillars.values() for x in p.get('topics', []) if isinstance(x, str)]
-        n = _norm(name)
-        clash = [x for x in existing if _norm(x) == n or (len(n) >= 2 and len(_norm(x)) >= 2 and
-                                                          (n in _norm(x) or _norm(x) in n))]
+        n = plain(name)  # the same words, or one name inside the other
+        clash = [x for x in existing if same_text(x, name) or (len(n) >= 2 and len(plain(x)) >= 2 and
+                                                               (n in plain(x) or plain(x) in n))]
         if clash:
             errors.append(f'{where}.name {name!r} duplicates or overlaps existing topic {clash[0]!r}; use it instead')
         for key in ('boundary', 'reason'):
@@ -1063,7 +1058,7 @@ def validate_candidate(packet: dict, payload: dict, *, slot: str, other_cards: l
         if problem:
             errors.append(f'{where}: {problem}')
         else:
-            folded = c['title'].casefold()
+            folded = plain(c['title'])  # titles that say the same words clash (same_text)
             if folded in titles or folded in other_titles:
                 errors.append(f'{where}: title repeats another card of this source')
             elif folded in existing_titles:
@@ -1835,6 +1830,7 @@ def chunk_outcome(root: Path, state: dict, packet: dict, base: str) -> dict:
         for c in jobs.artifact(root, state, 'candidate', slot).get('cards', []):
             if c['slug'] not in open_cards and c['slug'] not in accepted:
                 pending.append({'slug': c['slug'], 'title': c.get('title'), 'reason': why, 'chunk': base})
+    refused: dict = {}
     for slug, card in list(accepted.items()):
         key = (card['domain'], card['pillar'], card['topic'])
         if key in topic_state and topic_state[key]['decision'] != 'accept' and slug not in held:
@@ -1842,6 +1838,9 @@ def chunk_outcome(root: Path, state: dict, packet: dict, base: str) -> dict:
             pending.append({'slug': slug, 'title': card['title'], 'chunk': base,
                             'reason': f'its new topic {key[2]!r} was not accepted: '
                                       f'{topic_state[key]["review_reason"]}'})
+            refused.setdefault(key, {'domain': key[0], 'pillar': key[1], 'name': key[2], 'chunk': base,
+                                     'reason': topic_state[key]['review_reason'], 'cards': 0})['cards'] += 1
+    out['refused_topics'] = list(refused.values())  # for the owner's list (needs_taxonomy), with its cards
     out['amended'] = [{'slug': s, 'chunk': base, 'slot': c['_slot'], **row} for s, c in accepted.items()
                       for row in c.get('_amended') or []]
     out['notes'] = notes
@@ -2498,10 +2497,12 @@ def _assign_ids(prefix: str, slugs: list[str], taken: set) -> dict:
 
 
 def _unique_title(title: str, taken: set) -> str:
+    """``title``, or with `` (2)``, `` (3)`` ... when a card of the vault says the same words (``taken``: their
+    :func:`secondbrain.textnorm.plain` forms)."""
     candidate, n = title, 2
-    while candidate.casefold() in taken:
+    while plain(candidate) in taken:
         candidate, n = f'{title} ({n})', n + 1
-    taken.add(candidate.casefold())
+    taken.add(plain(candidate))
     return candidate
 
 
@@ -2635,7 +2636,7 @@ def _apply_job(root: Path, job_id: str, settled: list[dict] | None = None) -> di
     accepted = keep
     topics = [t for t in topics if any((c['domain'], c['pillar'], c['topic']) == t for _, _, c in accepted)]
     ids = _assign_ids(settings['id_prefix'], [s for _, s, _ in accepted], set(snapshot.cards))
-    titles_taken = {c.title.casefold() for c in snapshot.cards.values()}
+    titles_taken = {plain(c.title) for c in snapshot.cards.values()}
     titles = {s: _unique_title(c['title'], titles_taken) for _, s, c in accepted}
     source = packet['source']
     source_rel = lay.source_path(source['sha256'], source['filename'])
@@ -2994,6 +2995,7 @@ def _apply_job(root: Path, job_id: str, settled: list[dict] | None = None) -> di
               'outcomes': outcomes, 'decision_record': entries,
               'amended': [r for o in settled for r in o.get('amended') or []],
               'review_notes': [n for o in settled for n in o.get('notes') or []],
+              'refused_topics': [t for o in settled for t in o.get('refused_topics') or []],
               'merged_into_existing': merged_into_existing,
               'split': [{'slug': f['card']['slug'], 'id': ids.get(f['card']['slug']), 'from': s, 'of': f['target'],
                          'slot': f['slot']} for s, f in fates.items() if f['how'] == 'split'],

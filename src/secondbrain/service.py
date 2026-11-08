@@ -8,8 +8,14 @@ from pathlib import Path
 
 from . import classification, jobs
 from .catalog import validate_catalog
+from .moc import MAX_TOPIC
 from .store import Change, apply_changes, digest, read_bytes
 from .vault import card_packet, read_snapshot
+
+
+#: Why an item waits for the owner (the design's ``owner_reason``); the first two can be on a card.
+OWNER_REASONS = ('source_unclear', 'possible_repeat', 'conflict', 'pending', 'needs_taxonomy')
+CARD_REASONS = OWNER_REASONS[:2]
 
 
 class Service:
@@ -47,9 +53,18 @@ class Service:
             else:  # what `sb refresh` reports about the maps (counts only; it lists each one)
                 map_issues = Counter(i['code'] for i in build_mocs(s).issues)
         from .pipelines.ingest import open_conflicts
+        from .topics import hints
         conflicts = open_conflicts(self.root, s)
         waiting = self.needs_review()
+        owner = Counter(i['owner_reason'] for i in self.owner_items(scanned=items, conflicts=conflicts))
+        topic_hints = hints(s)
         return {'cards': len(s.cards), 'missing_classification': sum(missing.values()),
+                'owner_items': {r: owner[r] for r in OWNER_REASONS if owner[r]},
+                **({'owner_items_hint': 'what waits for you, one list: sb status --owner-items'} if owner else {}),
+                'topics': {'oversize': topic_hints['oversize'], 'empty': len(topic_hints['empty']),
+                           'outside_taxonomy': topic_hints['outside_taxonomy']},
+                **({'topics_hint': f'topics past one map page ({MAX_TOPIC} cards): sb curate --domain <domain> '
+                                   'gets proposals for how to split them'} if topic_hints['oversize'] else {}),
                 'missing_by_domain': dict(sorted(missing.items())), 'issues': issues,
                 'map_issues': dict(sorted(map_issues.items())),
                 **({'map_issues_hint': 'sb refresh lists each one'} if map_issues else {}),
@@ -63,6 +78,46 @@ class Service:
                 **({'conflicts_hint': 'new and existing cards disagree here; each stays listed until the existing '
                                       f'card\'s text changes ({layouts.of(self.root).conflicts})'} if conflicts else {}),
                 'review': review, 'jobs': jobs.list_jobs(self.root)}
+
+    def owner_items(self, *, scanned=None, conflicts=None) -> list[dict]:
+        """Everything that waits for the owner, one list; each item has its ``owner_reason`` (:data:`OWNER_REASONS`).
+
+        Derived, not stored: needs-review cards by the reasons on them (``source_unclear``, ``possible_repeat``;
+        a card marked before reasons were recorded counts as ``source_unclear``), open conflicts (``conflict``),
+        and from the latest job of each partly written source its pending items (``pending``) and its passages
+        and refused new topics that need a place in the taxonomy (``needs_taxonomy``).
+        """
+        from . import inbox
+        from .pipelines.ingest import open_conflicts
+        s = self.snapshot()
+        items = []
+        for c in sorted(s.cards.values(), key=lambda c: c.path):
+            if c.fm.get('status') != 'needs-review':
+                continue
+            reasons = c.fm.get('review_reason') or []
+            reasons = [reasons] if isinstance(reasons, str) else [r for r in reasons if isinstance(r, str)]
+            card = {'id': c.id, 'title': c.title, 'path': c.path}
+            for reason in [r for r in reasons if r in CARD_REASONS] or ['source_unclear']:
+                items.append({'owner_reason': reason, **card,
+                              **({} if reasons else {'detail': 'marked needs-review with no reason recorded'})})
+        for row in open_conflicts(self.root, s) if conflicts is None else conflicts:
+            items.append({'owner_reason': 'conflict', **row})
+        for source in inbox.scan(self.root) if scanned is None else scanned:
+            if source['status'] != 'partial':
+                continue
+            where = {'source': source['name'], 'job_id': source['job_id']}
+            try:
+                job = jobs.load(self.root, source['job_id'])
+            except (ValueError, OSError):
+                items.append({'owner_reason': 'pending', **where, 'count': source.get('pending'),
+                              'detail': 'the job record is gone; sb ingest --retry starts from the source'})
+                continue
+            items += [{'owner_reason': 'pending', **where, **row} for row in job.get('pending') or []]
+            items += [{'owner_reason': 'needs_taxonomy', 'kind': 'passage', **where, **row}
+                      for row in job.get('needs_taxonomy') or []]
+            items += [{'owner_reason': 'needs_taxonomy', 'kind': 'refused_topic', **where, **row}
+                      for row in job.get('refused_topics') or []]
+        return items
 
     def needs_review(self) -> list[dict]:
         """Every card marked ``status: needs-review``; the review queue leaves them out until they are confirmed."""

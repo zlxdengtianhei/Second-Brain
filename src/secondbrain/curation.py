@@ -135,6 +135,10 @@ def prepare(root: Path, domains: list[str], *, job_id: str,
         "taxonomy_scope": actual,
         "snapshot_fingerprint": snapshot.fingerprint,
     }
+    from .topics import proposals
+    splits = proposals(snapshot, actual)
+    if splits:  # topics past one map page, with how their cards group by their relations (a hint, H12)
+        packet["split_proposals"] = splits
     state = jobs.create(root, job_id, "curation", packet)
     return {**state, "domains": actual, "card_count": len(cards)}
 

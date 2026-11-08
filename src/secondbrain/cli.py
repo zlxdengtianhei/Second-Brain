@@ -37,6 +37,9 @@ def parser():
     init.add_argument('--catalog', type=Path, required=True)
     stat = sub.add_parser('status'); stat.add_argument('--job')
     stat.add_argument('--needs-review', action='store_true', help='List every card marked status: needs-review')
+    stat.add_argument('--owner-items', action='store_true',
+                      help='List everything that waits for you: unclear sources, possible repeats, conflicts, '
+                           'pending items, material without a place in the taxonomy')
     lang = sub.add_parser('language', help="The vault's generated-text language; --set switches it")
     lang.add_argument('--set', choices=['en', 'zh'], dest='set_language',
                       help='Record this language in the catalog (then rewrite pages with refresh and docs)')
@@ -423,7 +426,8 @@ def main(argv=None):
             from .service import initialize
             result = initialize(root, json.loads(args.catalog.read_text()))
         elif cmd == 'status':
-            result = service.needs_review() if args.needs_review else service.status(args.job)
+            result = service.needs_review() if args.needs_review else service.owner_items() \
+                if args.owner_items else service.status(args.job)
         elif cmd == 'language':
             from .service import set_language
             result = set_language(root, args.set_language) if args.set_language else labels.describe(root)
