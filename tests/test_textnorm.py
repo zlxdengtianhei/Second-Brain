@@ -69,3 +69,20 @@ def test_a_patch_that_differs_from_the_card_only_in_a_symbol_is_not_dropped():
     assert problem is None
     assert props == ['If a > b, swap them.', 'A new fact.']   # the third says P1 again, word for word
     assert [f['q'] for f in flashcards] == ['When is a > b swapped?']
+
+
+# --- D-15 ④: an English ! or ' right after a digit or a one-letter Latin name is part of it (n!, f', A') ----------
+@pytest.mark.parametrize('a, b', [
+    ('Factor is n!', 'Factor is n'), ("f'(x) is positive", 'f(x) is positive'),
+    ("A' is the complement", 'A is the complement'), ('5! orders', '5 orders'), ("x' = 2x", 'x = 2x'),
+])
+def test_a_factorial_or_a_prime_is_part_of_its_name(a, b):
+    assert not same_text(a, b)
+
+
+@pytest.mark.parametrize('a, b', [
+    ('Done!', 'Done'), ('“term”', 'term'), ('完成！', '完成'), ('Done！', 'Done'),
+    ("Don't stop.", 'dont stop'), ("'term'", 'term'), ("It's fine!", 'its fine'),
+])
+def test_a_sentence_end_a_quote_or_an_apostrophe_in_a_word_still_does_not_count(a, b):
+    assert same_text(a, b)

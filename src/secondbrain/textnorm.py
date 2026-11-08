@@ -14,8 +14,25 @@ DROP = frozenset(',.;:?!"\'' + ''.join(map(chr, (0x3002, 0x3001, 0x201C, 0x201D,
                                                   0x300E, 0x300F, 0x2026, 0x2014))))
 #: Marks of the table kept between two digits, where they belong to a number (3.5, 1,000, 3:2).
 IN_NUMBERS = frozenset('.,:')
+#: Marks of the table kept right after a digit or a one-letter Latin name (D-15 4): a factorial (n!, 5!) or a prime
+#: (f', A'). After a longer word they end a sentence or stand in a word (Done!, don't) and are left out.
+AFTER_NAMES = frozenset("!'")
 #: A formula ($$...$$, $...$) or inline code (`...`): compared as written, only its spaces made one.
 _VERBATIM = re.compile(r'\$\$.+?\$\$|\$[^$]+\$|`[^`]+`', re.S)
+
+
+def _latin(ch: str) -> bool:
+    return ch.isascii() and ch.isalpha()
+
+
+def _part_of_a_name(folded: str, i: int) -> bool:
+    """Whether the mark at ``i`` follows a digit, or a one-letter Latin name (not the end of a longer word)."""
+    if i == 0:
+        return False
+    before = folded[i - 1]
+    if before.isdigit():
+        return True
+    return _latin(before) and not (i > 1 and (_latin(folded[i - 2]) or folded[i - 2].isdigit()))
 
 
 def _prose(text: str) -> str:
@@ -25,7 +42,8 @@ def _prose(text: str) -> str:
         if ch.isspace():
             continue
         if ch in DROP and not (ch in IN_NUMBERS and 0 < i < len(folded) - 1
-                               and folded[i - 1].isdigit() and folded[i + 1].isdigit()):
+                               and folded[i - 1].isdigit() and folded[i + 1].isdigit()) \
+                and not (ch in AFTER_NAMES and _part_of_a_name(folded, i)):
             continue
         out.append(ch)
     return ''.join(out)
