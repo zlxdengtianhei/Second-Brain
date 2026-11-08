@@ -593,3 +593,10 @@ def test_the_real_mathjax_checker_tells_valid_formulas_from_broken_ones(vault_ro
     result = pipeline.advance(vault_root, job["job_id"], producer=FakeExecutor("gpt-w", responder=bad_writer),
                               reviewer=FakeExecutor("claude-r", responder=reviewer()), checker=checker)
     assert result["report"]["finding_codes"]["formula_parse_error"] == 1 and result["report"]["checker"] == "mathjax"
+
+
+def test_a_card_no_paragraph_cites_is_listed_at_the_end_of_the_article(vault_root, tmp_path):
+    _, result, _, _ = run(vault_root, skip={"syn_003"}, rounds=0, out=tmp_path / "o")
+    assert result["report"]["unused"] == ["合成卡 003"]
+    md = Path(result["files"]["markdown"]).read_text(encoding="utf-8")
+    assert md.endswith(f"## {labels.export('zh')['unused']}\n\n- [[合成卡 003]]\n")

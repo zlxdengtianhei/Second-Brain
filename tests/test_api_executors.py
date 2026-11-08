@@ -201,6 +201,7 @@ def test_parse_json_text_reads_raw_tex_backslashes_only_when_asked_and_strict_pa
     # strict first: a valid answer is never re-read, so its \n stays a line break and its \\n a backslash and n
     assert parse_json_text(good, tex_backslashes=True) == {'p': '$\\frac{a}{b}$\n', 'q': 'a\\nb'}
     assert escape_tex(good) == good
+    assert parse_json_text('{"p": "one\\ntwo"}', tex_backslashes=True) == {'p': 'one\ntwo'}  # strict first
     assert escape_tex('\\u00e9 \\" \\\\ \\n') == '\\u00e9 \\" \\\\ \\n'
     assert 'near' in json_problem('{"p": "a" "b"}') and json_problem('') == 'the answer is empty'
 

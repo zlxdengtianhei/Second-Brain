@@ -78,3 +78,35 @@ def test_every_role_reads_fifteen_cards_per_query_by_default(tmp_path):
     old_job = {'settings': {}}  # frozen before the setting existed: each role's old count
     per_card, _ = ingest._review_candidates(root, snapshot, old_job, [card])
     assert len(per_card['x']) == 5
+
+
+def test_a_new_job_freezes_fifteen_and_the_producer_reads_fifteen_per_passage(tmp_path):
+    import json
+    from secondbrain import layout as layouts
+    root = summary_vault(tmp_path)
+    registry = root / layouts.DEFAULT.registry  # a vault sb can write to: every card registered
+    data = json.loads(registry.read_text(encoding='utf-8'))
+    data['notes'] += [{'id': f'demo_{t}', 'path': layouts.DEFAULT.card_path(DOMAIN, f'demo_{t}.md'),
+                       'title': f'The {t}', 'domain': DOMAIN} for t in TERMS]
+    registry.write_text(json.dumps(data, ensure_ascii=False), encoding='utf-8')
+    (root / '00_Inbox').mkdir(exist_ok=True)
+    (root / '00_Inbox' / 'mixups.md').write_text('# Mix-ups\n\n' + SUMMARY, encoding='utf-8')
+    job = ingest.prepare(root, root / '00_Inbox' / 'mixups.md')
+    from secondbrain import jobs
+    packet = jobs.read_input(root, job['job_id'])
+    assert packet['settings']['candidates_k'] == 15
+    rows = packet['chunks'][0]['candidates']
+    assert max(len(r) for r in rows.values()) == 15 and 'chunk' not in rows
+
+
+def test_a_retry_reviewer_sees_fifteen_written_cards_per_card(tmp_path):
+    root = summary_vault(tmp_path)
+    snapshot = read_snapshot(root)
+    card = {'slug': 'x', 'title': 'quarnel order', 'essence': 'quarnel keeps order',
+            'propositions': ['A quarnel keeps its own order.'], 'relations': []}
+    written = {'c01': [{'id': f'demo_{t}', 'slug': f's-{t}', 'title': f'The {t}'} for t in TERMS]}
+    packet = {'settings': {'candidates_k': 15, 'candidates_chars': 400000, 'candidates_hop': 0,
+                           'candidates_shelf': False, 'review_named': True, 'review_words_view': 'full'},
+              'retry': {'written': written}}
+    per_card, _ = ingest._review_candidates(root, snapshot, packet, [card])
+    assert sum('written' in e['via'] for e in per_card['x']) == 15
