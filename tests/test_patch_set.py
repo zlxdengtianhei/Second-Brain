@@ -277,7 +277,9 @@ def test_a_source_card_the_same_as_a_patch_set_card_goes_with_it_into_the_existi
 
     def check(packet):
         return keep_all(packet, _patches={EXISTING: {'propositions': LANTERN['propositions'][:1]
-                                                     + [ARRIVAL['propositions'][0]]}}, **rows)
+                                                     + [ARRIVAL['propositions'][0]],
+                                                     'already': [{'text': LANTERN['propositions'][1], 'as': 'P1'}]}},
+                        **rows)
     done = run(root, job_id, reviewer(check=check))
     assert done['status'] == 'applied', done.get('pending')
     assert done['outcomes']['arrival-order'] == 'merge_carry'
@@ -303,6 +305,45 @@ def test_an_existing_card_that_would_grow_past_twelve_propositions_is_left_and_a
     assert decisions.current(record, 'overlap.split', 'lantern-queue')['data'] == {
         'overlap': 'distinct', 'with': [EXISTING], 'card': SPLIT_CARD['slug']}
     assert decisions.current(record, 'split.verdict', 'lantern-queue')['role'] == 'split_reviewer'
+
+
+def test_h7_a_patch_cut_down_to_the_limit_is_sent_back_and_the_program_splits_what_does_not_fit(tmp_path):
+    """H7 (on f5b3024): the merge check cut a patch so the existing card ended at exactly 12 propositions, leaving
+    out a new one, and the card was patched without a split. Now that answer is sent back (carry completeness,
+    design section 4.1), and the whole patch, 13 propositions, goes to a split slot."""
+    root, job_id, before = job(tmp_path, n_props=11)
+    checks, seen = [], []
+
+    def check(packet):
+        if len(checks) == 1:  # the cut answer: only what still fits under 12
+            return keep_all(packet, _patches={EXISTING: {'propositions': [LANTERN['propositions'][1]],
+                                                         'flashcards': LANTERN['flashcards']}})
+        return keep_all(packet)
+    done = run(root, job_id, reviewer(checks, check=check), producer(seen=seen))
+    assert done['status'] == 'applied', done.get('pending')
+    error = jobs.load(root, job_id)['chunks']['xc01']['last_validation_error']
+    assert f"leaves out {LANTERN['propositions'][0]!r}" in error and 'program splits' in error
+    assert len(checks) == 2 and [t.chunk for t in seen] == ['sp01']
+    assert unchanged(root, before) and done['split'][0]['from'] == 'lantern-queue'
+    assert len(cardfmt.propositions_of(card_of(root, EXISTING).body)) == 11
+
+
+def test_a_proposition_the_existing_card_already_says_is_named_not_carried(tmp_path):
+    root, job_id, _ = job(tmp_path)
+    checks = []
+    run(root, job_id, reviewer(checks, check=lambda p: {**keep_all(p), 'patches': [], 'disputes': []}))
+    frozen = checks[0].packet
+    said = {'target': EXISTING, 'propositions': [LANTERN['propositions'][1]]}
+    for already, problem in (([{'text': LANTERN['propositions'][0], 'as': 'P2'}], None),
+                             ([{'text': LANTERN['propositions'][0], 'as': 'P9'}], r'P1–P2'),
+                             ([{'text': 'Something else.', 'as': 'P1'}], 'copied exactly'),
+                             ([], 'leaves out')):
+        answer = {**keep_all(frozen), 'patches': [{**said, 'already': already}]}
+        if problem is None:
+            assert source_check.validate_answer(frozen, answer) is answer
+        else:
+            with pytest.raises(ValueError, match=problem):
+                source_check.validate_answer(frozen, answer)
 
 
 def test_a_split_card_the_reviewer_rejects_is_rewritten_in_each_round_then_stays_pending(tmp_path):

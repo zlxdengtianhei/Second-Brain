@@ -534,11 +534,13 @@ def test_the_answer_must_settle_every_card_without_chains(cards, topics, message
 def test_a_card_merged_into_may_hold_twice_the_flashcards_of_a_new_card():
     big = {**frozen_card('b'), 'flashcards': [{'q': f'b q{i}?', 'a': f'b a{i}'} for i in range(1, 7)]}
     frozen = {**FROZEN, 'cards': [FROZEN['cards'][0], big, FROZEN['cards'][2]]}
-    two = {'flashcards': [{'q': 'a q1?', 'a': 'a a1'}, {'q': 'a q2?', 'a': 'a a2'}]}
+    said = {'already': [{'text': t, 'as': 'P1'} for t in frozen_card('a')['propositions']]}  # b says them
+    two = {'flashcards': [{'q': 'a q1?', 'a': 'a a1'}, {'q': 'a q2?', 'a': 'a a2'}], **said}
     assert source_check.validate_answer(frozen, answer(same('a', 'b', carry=two)))  # 6 + 2 = 8
     with pytest.raises(ValueError, match='b would have 2 propositions and 9 flashcards'):
         source_check.validate_answer(frozen, answer({**same('a', 'b', carry=two), **same(
-            'c', 'b', carry={'flashcards': [{'q': 'c q1?', 'a': 'c a1'}]})}))
+            'c', 'b', carry={'flashcards': [{'q': 'c q1?', 'a': 'c a1'}],
+                             'already': [{'text': t, 'as': 'P1'} for t in frozen_card('c')['propositions']]})}))
 
 
 def test_every_card_needs_a_decision_and_an_isolated_one_a_link_or_a_reason():
@@ -621,7 +623,8 @@ def test_a_carried_question_the_kept_card_already_asks_word_for_word_is_skipped(
                {'chunk': 'c02', 'accepted': {'b': card('b', again)}, 'topics': {}}]
     frozen = source_check.frozen_input(settled, {'filename': 'f'}, relation_views={})
     reply = {'cards': [{'slug': 'a', 'overlap': 'distinct', 'alone': 'a fact of its own'},
-                       {'slug': 'b', 'overlap': 'extends', 'with': ['a'], 'reason': 'r', 'carry': {'flashcards': again}}],
+                       {'slug': 'b', 'overlap': 'extends', 'with': ['a'], 'reason': 'r',
+                        'carry': {'flashcards': again, 'already': [{'text': 'b one', 'as': 'P1'}]}}],
              'new_topics': []}
     assert source_check.validate_answer(frozen, reply) is reply
     kept, report, _ = applied(settled, frozen, reply)
@@ -630,3 +633,18 @@ def test_a_carried_question_the_kept_card_already_asks_word_for_word_is_skipped(
     assert report['merged'][0]['carried'] == {'propositions': 0, 'flashcards': 1}
     assert report['merged'][0]['repeats_skipped'] == 1
     assert kept['_carried'] == [{'locator': 'b quote', 'propositions': [], 'flashcards': [2]}]
+
+
+def test_an_extends_card_accounts_for_every_proposition_and_a_card_too_large_to_merge_is_kept_apart():
+    # carry completeness (design section 4.1, H7): carried, used in replace, or named in already
+    frozen = FROZEN
+    props = frozen_card('a')['propositions']
+    with pytest.raises(ValueError, match="a.carry leaves out"):
+        source_check.validate_answer(frozen, answer(same('a', 'b', carry={'propositions': props[:1]})))
+    full = {'propositions': props[:1], 'already': [{'text': t, 'as': 'P1'} for t in props[1:]]}
+    assert source_check.validate_answer(frozen, answer(same('a', 'b', carry=full)))
+    # past the limit the answer is told to keep the card apart, not to carry less
+    big = {**frozen_card('b'), 'propositions': [f'b p{i}' for i in range(1, 12)]}
+    wide = {**FROZEN, 'cards': [FROZEN['cards'][0], big, FROZEN['cards'][2]]}
+    with pytest.raises(ValueError, match='Do not carry less than a card adds: judge a distinct and link it to b'):
+        source_check.validate_answer(wide, answer(same('a', 'b', carry={'propositions': props})))

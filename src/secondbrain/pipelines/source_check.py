@@ -60,6 +60,11 @@ _WIKILINK = re.compile(r'\[\[([^\[\]|#]+)((?:#[^\[\]|]*)?)((?:\|[^\[\]]*)?)\]\]'
 _STR = {'type': 'string'}
 _NSTR = {'type': ['string', 'null']}
 _FLASHCARD = {'type': 'object', 'required': ['q', 'a'], 'properties': {'q': _STR, 'a': _STR}}
+#: Carry completeness: a proposition of an ``extends`` card that is not carried (nor used in ``replace``) is named
+#: with the proposition of the target that already says it (``{"text": <word for word>, "as": "P3"}``).
+_ALREADY = {'type': 'array', 'items': {'type': 'object', 'required': ['text', 'as'],
+                                       'properties': {'text': _STR, 'as': _STR}}}
+
 SCHEMA = {
     'type': 'object', 'required': ['cards', 'new_topics'],
     'properties': {
@@ -73,7 +78,8 @@ SCHEMA = {
                     'flashcards': {'type': 'array', 'items': _FLASHCARD},
                     'replace': {'type': 'array', 'items': {
                         'type': 'object', 'required': ['proposition', 'by'],
-                        'properties': {'proposition': _STR, 'by': _STR}}}}},
+                        'properties': {'proposition': _STR, 'by': _STR}}},
+                    'already': _ALREADY}},
                 'links': {'type': ['array', 'null'], 'items': {
                     'type': 'object', 'required': ['target', 'type'],
                     'properties': {'target': _STR, 'type': _STR, 'note': _NSTR}}},
@@ -89,7 +95,8 @@ SCHEMA = {
                            'flashcards': {'type': 'array', 'items': _FLASHCARD},
                            'replace': {'type': 'array', 'items': {
                                'type': 'object', 'required': ['proposition', 'by'],
-                               'properties': {'proposition': _STR, 'by': _STR}}}}}},
+                               'properties': {'proposition': _STR, 'by': _STR}}},
+                           'already': _ALREADY}}},
         'disputes': {'type': 'array', 'items': {
             'type': 'object', 'required': ['slug', 'reason'], 'properties': {'slug': _STR, 'reason': _STR}}},
     }}
@@ -229,13 +236,20 @@ def validate_answer(frozen: dict, payload: Any, closed: Callable[[str, str, str]
                 errors.append(f'{at}.by must be one of its propositions, copied exactly, and not also in '
                               'carry.propositions')
             replaced.add((into, number))
+        if rows[slug]['overlap'] == 'extends':
+            target = cards.get(into) or patch_cards.get(into)
+            errors += _incomplete(f'cards: {slug}.carry', cards[slug]['propositions'], props,
+                                  carry.get('replace') or [], carry.get('already'),
+                                  len(target['propositions']) if target else 0, into)
         if into in totals:
             totals[into][0] += len(props)
             totals[into][1] += len(flashcards)
     for slug, (props, flashcards) in totals.items():
         if props > MAX_PROPOSITIONS or flashcards > MAX_FLASHCARDS:
+            into_it = sorted(s for s, into in merged.items() if into == slug)
             errors.append(f'cards: {slug} would have {props} propositions and {flashcards} flashcards with what is '
-                          f'carried to it; at most {MAX_PROPOSITIONS} and {MAX_FLASHCARDS}. Carry fewer')
+                          f'carried to it; at most {MAX_PROPOSITIONS} and {MAX_FLASHCARDS}. Do not carry less than a '
+                          f'card adds: judge {", ".join(into_it)} distinct and link it to {slug} instead')
     domain = _final_domains(frozen, topics)
     linked = {(s, r['target']) for s, c in cards.items() for r in c['relations']}
     added = set()
@@ -319,6 +333,10 @@ def _check_patches(frozen: dict, payload: dict, rows: dict, merged: dict, errors
         if any(not isinstance(f, dict) or (f.get('q'), f.get('a')) not in cards_ for f in flashcards):
             errors.append(f'{at}.flashcards must be copied exactly from the cards that extend {target}')
         total = len((groups[target]['card'] or {}).get('propositions') or [])
+        wanted = [p for c in sources for p in c['propositions']] + [p for s in merged_in
+                                                                   for p in _row_items(rows, s, 'propositions')]
+        errors += _incomplete(at, list(dict.fromkeys(wanted)), added, row.get('replace') or [], row.get('already'),
+                              total, target)
         swapped = set()
         for k, swap in enumerate(row.get('replace') or []):
             ref, by = (swap.get('proposition'), swap.get('by')) if isinstance(swap, dict) else (None, None)
@@ -336,6 +354,30 @@ def _check_patches(frozen: dict, payload: dict, rows: dict, merged: dict, errors
         left = [c['slug'] for c in group['from'] if c['slug'] not in disputed]
         if left and target not in seen:
             errors.append(f'patches: give {target} its patch from {", ".join(left)}, or dispute them')
+
+
+def _incomplete(at: str, wanted: list, carried: list, replace: list, already, total: int, target: str) -> list[str]:
+    """Carry completeness (design section 4.1, H7): every proposition in ``wanted`` is carried, used in
+    ``replace``, or named in ``already`` with the proposition of ``target`` (P1-P``total``) that says it. The size
+    of the target is no reason to leave one out: the program splits a patch that does not fit."""
+    errors, named = [], set()
+    for k, row in enumerate(already or []):
+        text, ref = (row.get('text'), row.get('as')) if isinstance(row, dict) else (None, None)
+        number = int(ref[1:]) if isinstance(ref, str) and re.fullmatch(r'P[1-9]\d*', ref) else 0
+        if text not in wanted:
+            errors.append(f'{at}.already[{k}].text must be one of the propositions it would carry, copied exactly')
+        elif not 1 <= number <= total:
+            errors.append(f'{at}.already[{k}].as must name the proposition of {target} that says it (P1–P{total})')
+        else:
+            named.add(text)
+    covered = set(carried) | {r.get('by') for r in replace if isinstance(r, dict)} | named
+    left = [p for p in wanted if p not in covered]
+    if left:
+        errors.append(f'{at} leaves out {left[0]!r}' + (f' and {len(left) - 1} more' if len(left) > 1 else '')
+                      + f': carry every proposition, use it in replace, or name in already the proposition of '
+                        f'{target} that says it ({{"text": ..., "as": "P<n>"}}). Never leave one out for the size of '
+                        f'{target}: the program splits what does not fit')
+    return errors
 
 
 def _row_items(rows: dict, slug: str, key: str) -> list:
