@@ -191,6 +191,16 @@ def test_parse_json_text():
     assert parse_json_text('[1, 2]') is None and parse_json_text('no json') is None
 
 
+def test_parse_json_text_reads_raw_tex_backslashes_only_when_strict_parsing_fails():
+    from secondbrain.executors.api import escape_tex, json_problem
+    raw = '{"p": "$P(x_t\\mid x_1,\\dots)$ and $a\\ge b$, \\text{s}, \\{x\\}\\n下一行"}'
+    assert parse_json_text(raw) == {'p': '$P(x_t\\mid x_1,\\dots)$ and $a\\ge b$, \\text{s}, \\{x\\}\n下一行'}
+    good = json.dumps({'p': '$\\frac{a}{b}$\n'})
+    assert parse_json_text(good) == {'p': '$\\frac{a}{b}$\n'} and escape_tex(good) == good
+    assert escape_tex('\\u00e9 \\" \\\\ \\n') == '\\u00e9 \\" \\\\ \\n'
+    assert 'near' in json_problem('{"p": "a" "b"}') and json_problem('') == 'the answer is empty'
+
+
 def wrap_openai(output, model='gpt-test-2026-01-01'):
     body = copy.deepcopy(fixture('openai_chat_completion.json'))
     body['model'] = model

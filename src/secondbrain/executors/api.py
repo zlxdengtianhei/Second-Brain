@@ -31,25 +31,78 @@ def _error(code, message, retryable=False, status=None) -> dict:
     return {'code': code, 'message': message[:2000], 'retryable': retryable, 'http_status': status}
 
 
-def parse_json_text(text: str) -> dict | None:
-    """The JSON object in a model's text answer (code fences tolerated)."""
-    if not isinstance(text, str):
-        return None
+def _candidates(text: str) -> list[str]:
     stripped = text.strip()
     fence = re.match(r'^```(?:json)?\s*(.*?)\s*```$', stripped, re.S)
     if fence:
         stripped = fence.group(1)
+    out = [stripped]
+    start, end = stripped.find('{'), stripped.rfind('}')
+    if 0 <= start < end and (start, end) != (0, len(stripped) - 1):
+        out.append(stripped[start:end + 1])
+    return out
+
+
+def escape_tex(text: str) -> str:
+    """``text`` with the backslashes of TeX commands doubled (for JSON written with raw formulas).
+
+    A backslash before two or more ASCII letters (``\\mid``, ``\\text``, ``\\frac``) or before a
+    character JSON cannot escape (``\\{``, ``\\,``) is doubled; ``\\\\``, ``\\"``, ``\\/``,
+    ``\\uXXXX`` and a one-letter escape such as ``\\n`` stay.
+    """
+    out, i, n = [], 0, len(text)
+    while i < n:
+        ch = text[i]
+        if ch != '\\' or i + 1 >= n:
+            out.append(ch)
+            i += 1
+            continue
+        nxt = text[i + 1]
+        if nxt in '\\"/':
+            out.append(text[i:i + 2])
+            i += 2
+        elif nxt == 'u' and re.fullmatch(r'[0-9a-fA-F]{4}', text[i + 2:i + 6]):
+            out.append(text[i:i + 6])
+            i += 6
+        elif re.match(r'[A-Za-z]{2}', text[i + 1:i + 3]) or nxt not in 'bfnrt':
+            out.append('\\\\')
+            i += 1
+        else:
+            out.append(text[i:i + 2])
+            i += 2
+    return ''.join(out)
+
+
+def parse_json_text(text: str) -> dict | None:
+    """The JSON object in a model's text answer (code fences tolerated).
+
+    When strict parsing fails, the answer is read once more with the backslashes of TeX
+    commands doubled (:func:`escape_tex`): models often copy ``\\mid`` or ``\\ge`` into a JSON
+    string unescaped. A strict parse that succeeds is never re-read.
+    """
+    if not isinstance(text, str):
+        return None
+    for candidate in _candidates(text):
+        for attempt in (candidate, escape_tex(candidate)):
+            try:
+                value = json.loads(attempt)
+            except ValueError:
+                continue
+            return value if isinstance(value, dict) else None
+    return None
+
+
+def json_problem(text: str) -> str:
+    """Why ``text`` is not a JSON object: the parser's message and the text around the error."""
+    if not isinstance(text, str) or not text.strip():
+        return 'the answer is empty'
+    candidate = _candidates(text)[-1]
     try:
-        value = json.loads(stripped)
-    except ValueError:
-        start, end = stripped.find('{'), stripped.rfind('}')
-        if start < 0 or end <= start:
-            return None
-        try:
-            value = json.loads(stripped[start:end + 1])
-        except ValueError:
-            return None
-    return value if isinstance(value, dict) else None
+        value = json.loads(candidate)
+    except ValueError as exc:
+        pos = getattr(exc, 'pos', 0) or 0
+        return f'{exc}; near: {candidate[max(0, pos - 60):pos + 40]!r}'
+    return f'the answer is JSON but not an object ({type(value).__name__})'
 
 
 class ApiExecutor:
@@ -132,7 +185,10 @@ class ApiExecutor:
                           error=_error(INVALID_OUTPUT, 'the answer was cut off at max_output_tokens; '
                                        'raise it or lower ingest.chunk_chars', True))
         if not isinstance(output, dict):
+            detail = self._adapter.answer_text(data) if hasattr(self._adapter, 'answer_text') else None
             return Result(status='failed', model_reported=model, attestation='provider_response', usage=usage,
-                          error=_error(INVALID_OUTPUT, 'the answer is not a JSON object', True))
+                          error=_error(INVALID_OUTPUT, 'the answer is not a JSON object: '
+                                       + json_problem(detail) if detail is not None
+                                       else 'the answer is not a JSON object', True))
         return Result(status='completed', output=output, model_reported=model,
                       attestation='provider_response', usage=usage)

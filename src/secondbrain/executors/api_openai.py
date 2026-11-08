@@ -20,6 +20,10 @@ def unsupported_format(status: int, detail: str) -> bool:
     return status in (400, 422) and ('response_format' in detail or 'json_schema' in detail)
 
 
+def answer_text(data: dict) -> str:
+    return ((data.get('choices') or [{}])[0].get('message') or {}).get('content') or ''
+
+
 def parse(data: dict):
     choice = (data.get('choices') or [{}])[0]
     message = choice.get('message') or {}
