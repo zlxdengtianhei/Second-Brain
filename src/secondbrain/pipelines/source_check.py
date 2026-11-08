@@ -288,8 +288,16 @@ def validate_answer(frozen: dict, payload: Any, closed: Callable[[str, str, str]
                           '"alone" why it stands alone')
     _check_patches(frozen, payload, rows, merged, errors)
     if errors:
-        raise ValueError('; '.join(errors))
+        raise Refused(errors)
     return payload
+
+
+class Refused(ValueError):
+    """A merge-check answer the program checks refuse; ``problems`` lists each one."""
+
+    def __init__(self, problems: list[str]):
+        self.problems = list(problems)
+        super().__init__('; '.join(problems))
 
 
 def _check_patches(frozen: dict, payload: dict, rows: dict, merged: dict, errors: list) -> None:
@@ -540,6 +548,44 @@ def _topic_rows(items, known: set, errors: list) -> dict:
     return out
 
 
+def salvage(frozen: dict, payload: Any, closed: Callable[[str, str, str], str | None] | None = None
+            ) -> dict | None:
+    """The last answer the merge check may give, kept patch by patch (decision D-20), or None.
+
+    When the answer fails the program checks only in some of its patches, those patches are held back: the answer
+    without them is checked again with their existing cards taken out of the patch set, and when it passes it is
+    the answer, with ``held`` naming each held existing card, its cards and the problems found in its patch (the
+    lines of the refusal that name it). Nothing of a held patch is written into its card; its cards are written
+    next to it for the owner. Any problem outside the patches, or one the answer without them still has, gives
+    None: the answer is refused as before.
+    """
+    try:
+        validate_answer(frozen, payload, closed)
+        return payload
+    except Refused as exc:
+        lines = exc.problems
+    except ValueError:  # the shape, or the answer's frame
+        return None
+    if not isinstance(payload.get('patches'), list):
+        return None
+    patches = payload['patches']
+    bad = {int(n) for line in lines for n in re.findall(r'^patches\[(\d+)\]', line)}
+    groups = {g['target']: g for g in frozen.get('patch_set') or []}
+    if not bad or any(i >= len(patches) or not isinstance(patches[i], dict)
+                      or patches[i].get('target') not in groups for i in bad):
+        return None
+    held = [{'target': patches[i]['target'], 'cards': [c['slug'] for c in groups[patches[i]['target']]['from']],
+             'problems': [line for line in lines if line.startswith(f'patches[{i}]')]} for i in sorted(bad)]
+    gone = {h['target'] for h in held}
+    kept = {**payload, 'patches': [p for i, p in enumerate(patches) if i not in bad]}
+    try:
+        validate_answer({**frozen, 'patch_set': [g for g in frozen.get('patch_set') or [] if g['target'] not in gone]},
+                        kept, closed)
+    except ValueError:
+        return None
+    return {**kept, 'held': held}
+
+
 def record(frozen: dict, answer: dict, entries: list, *, slot: str, run: str | None) -> None:
     """Put the answer's values in the decision record: each card's level against the source, each topic's, the links."""
     topic_of = {t['id']: topic_key(t['domain'], t['pillar'], t['name']) for t in frozen['new_topics']}
@@ -570,6 +616,9 @@ def record(frozen: dict, answer: dict, entries: list, *, slot: str, run: str | N
                          role=ROLE, slot=slot, run=run)
     for row in answer.get('disputes') or []:
         decisions.record(entries, 'dispute', row['slug'], {'reason': row['reason']}, role=ROLE, slot=slot, run=run)
+    for row in answer.get('held') or []:  # D-20: the last answer, kept patch by patch
+        decisions.record(entries, 'patch.held', row['target'], {'cards': row['cards'], 'problems': row['problems']},
+                         role=ROLE, slot=slot, run=run)
 
 
 def apply(settled: list[dict], frozen: dict, entries: list) -> tuple[list[dict], dict]:
@@ -708,7 +757,8 @@ def apply(settled: list[dict], frozen: dict, entries: list) -> tuple[list[dict],
         'moved_relations': moved,
         'merged_into': dict(merged),
         'patches': {t: e['data'] for t, e in decisions.values(entries, 'patch').items()},
-        'disputes': {s: e['data']['reason'] for s, e in decisions.values(entries, 'dispute').items()}}
+        'disputes': {s: e['data']['reason'] for s, e in decisions.values(entries, 'dispute').items()},
+        'held': {t: e['data'] for t, e in decisions.values(entries, 'patch.held').items()}}
     return out, report
 
 

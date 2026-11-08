@@ -73,6 +73,9 @@ FINAL = {
     'dispute': Final('merge_check', ('dispute',),
                      'a card of the patch set the merge check cannot patch from: its reason'),
     'patch': Final('merge_check', ('dispute',), 'the one patch for an existing card: what is carried, replaced'),
+    'patch.held': Final('merge_check', ('dispute',),
+                        'an existing card whose patch still failed the program checks in the last answer the merge '
+                        'check may give (decision D-20): its cards are written next to it, and the problems'),
     'overlap.split': Final('split_reviewer', ('repair_round',), 'a split card against its existing card'),
     'split.verdict': Final('split_reviewer', ('repair_round',), 'a split card: accept or revise'),
 }

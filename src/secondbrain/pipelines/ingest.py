@@ -1449,8 +1449,16 @@ def validate_submission(packet: dict, payload: dict, *, role: str, candidate=Non
     if card_diagrams.is_slot(chunk):
         return card_diagrams.validate_answer(payload)
     if source_check.is_slot(chunk):
-        return source_check.validate_answer(candidate, payload, closed=lambda kind, domain, target: _closed_relation(
-            packet['catalog'], kind, domain, target))
+        closed = lambda kind, domain, target: _closed_relation(packet['catalog'], kind, domain, target)  # noqa: E731
+        try:
+            return source_check.validate_answer(candidate, payload, closed=closed)
+        except ValueError:
+            # the last answer the check may give: the patches that pass go in, the others are held (D-20)
+            saved = source_check.salvage(candidate, payload, closed) if _last_merge_answer(
+                root, state, packet, chunk) else None
+            if saved is None:
+                raise
+            return saved
     if _is_rejudge(chunk):
         return _validate_rejudge(candidate, payload, _vault_ids_titles(root)[0])
     if notes.is_slot(chunk):
@@ -1480,6 +1488,19 @@ def validate_submission(packet: dict, payload: dict, *, role: str, candidate=Non
     return validate_candidate(packet, payload, slot=chunk, other_cards=others, kept_slugs=set(kept),
                               existing_ids=existing_ids, existing_titles=existing_titles,
                               known_topics=_known_topics(root, state, chunk, payload, kept), target_domains=domains)
+
+
+def _merge_check_failures(root: Path, state: dict, slot: str) -> int:
+    """The answers of merge-check slot ``slot`` refused so far, and its runs given up without one (both modes)."""
+    runs = [jobs.load_run(root, state['job_id'], r) for r in state.get('runs') or []]
+    runs = [r for r in runs if r.get('chunk') == slot]
+    return sum(int(r.get('rejected_submits', 0)) for r in runs) + sum(
+        1 for r in runs if r['status'] in {'abandoned', 'failed'} and not int(r.get('rejected_submits', 0)))
+
+
+def _last_merge_answer(root: Path, state: dict, packet: dict, slot: str) -> bool:
+    """Whether an answer to ``slot`` now is the last one the merge check may give (``max_invalid_retries``)."""
+    return _merge_check_failures(root, state, slot) >= jobs.policy_of(packet).max_invalid_retries
 
 
 def _known_topics(root, state, slot: str, payload, kept: dict) -> set:
@@ -2666,6 +2687,7 @@ def _apply_job(root: Path, job_id: str, settled: list[dict] | None = None) -> di
     fates = _repeat_fates(root, state, packet, settled, check, snapshot)
     if (check or {}).get('status') == 'skipped':  # no patch was composed: its cards are written, as patch_set says
         outcomes = {**outcomes, **{s: 'write' for s, f in fates.items() if f['how'] == 'written'}}
+    outcomes = {**outcomes, **{s: 'write' for s, f in fates.items() if f.get('held')}}  # nor for a held patch
     accepted = [(o['chunk'], s, _final_card(entries, s, c)) for o in settled for s, c in o['accepted'].items()]
     accepted += [(o['chunk'], s, {**_final_card(entries, s, c), '_not_merged': fates[s]['reason']})
                  for o in settled for s, c in o.get('repeats', {}).items() if fates[s]['how'] == 'written']
@@ -3084,7 +3106,10 @@ def _apply_job(root: Path, job_id: str, settled: list[dict] | None = None) -> di
               'split': [{'slug': f['card']['slug'], 'id': ids.get(f['card']['slug']), 'from': s, 'of': ids.get(f['target'], f['target']),
                          'slot': f['slot']} for s, f in fates.items() if f['how'] == 'split'],
               'patch_set': {s: f['how'] for s, f in fates.items() if not f.get('of_source')},
-              'merge_set': {s: f['how'] for s, f in fates.items() if f.get('of_source')}}
+              'merge_set': {s: f['how'] for s, f in fates.items() if f.get('of_source')},
+              # D-20: the merge check's last answer, kept patch by patch: the cards that took it, the ones held
+              'patches_held': [{'target': t, 'cards': h['cards'], 'problems': h['problems']}
+                               for t, h in sorted(((check or {}).get('held') or {}).items())]}
     if progress is not None:
         result['retry_progress'] = progress
     if stalled:
@@ -3116,6 +3141,7 @@ def _repeat_fates(root: Path, state: dict, packet: dict, settled: list[dict], ch
     """
     patches = (check or {}).get('patches') or {}
     disputes = (check or {}).get('disputes') or {}
+    held = (check or {}).get('held') or {}
     plan = {i['slug']: i for i in state.get('split_plan') or []}
     out = {}
     for o in settled:
@@ -3125,6 +3151,10 @@ def _repeat_fates(root: Path, state: dict, packet: dict, settled: list[dict], ch
             old = snapshot.cards.get(target)
             if slug in disputes:
                 fate.update(how='pending', reason=f'the merge check could not add it to {target}: {disputes[slug]}')
+            elif target in held:  # D-20: written next to its card, needs-review, with what the program found
+                fate.update(how='written', held=True,
+                            reason=f'the merge check\'s patch for {target} did not pass the program checks in its '
+                                   f'last answer: {"; ".join(held[target]["problems"])}')
             elif not _merging(packet) or target not in patches or old is None:
                 why = ('its existing card no longer exists' if old is None else
                        'this job does not add to existing cards (merge_into_existing is off)' if not _merging(packet)

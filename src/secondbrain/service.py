@@ -93,12 +93,14 @@ class Service:
         from .pipelines.ingest import open_conflicts
         s = self.snapshot()
         items = []
+        waiting = {c.id for c in s.cards.values() if c.fm.get('status') == 'needs-review'}
+        why = self._not_merged(waiting) if waiting else {}
         for c in sorted(s.cards.values(), key=lambda c: c.path):
             if c.fm.get('status') != 'needs-review':
                 continue
             reasons = c.fm.get('review_reason') or []
             reasons = [reasons] if isinstance(reasons, str) else [r for r in reasons if isinstance(r, str)]
-            card = {'id': c.id, 'title': c.title, 'path': c.path}
+            card = {'id': c.id, 'title': c.title, 'path': c.path, **({'detail': why[c.id]} if c.id in why else {})}
             for reason in [r for r in reasons if r in CARD_REASONS] or ['source_unclear']:
                 items.append({'owner_reason': reason, **card,
                               **({} if reasons else {'detail': 'marked needs-review with no reason recorded'})})
@@ -120,6 +122,21 @@ class Service:
             items += [{'owner_reason': 'needs_taxonomy', 'kind': 'refused_topic', **where, **row}
                       for row in job.get('refused_topics') or []]
         return items + self._export_items()
+
+    def _not_merged(self, ids: set) -> dict:
+        """``{id: why}`` for the needs-review cards an ingest job wrote next to the existing card they extend: why
+        that card did not take them (its patch was held, decision D-20, or the card cannot take a patch)."""
+        out: dict = {}
+        for entry in jobs.list_jobs(self.root):
+            if entry.get('kind') != 'ingest' or entry.get('status') not in {'applied', 'partial'}:
+                continue
+            try:
+                rows = jobs.load(self.root, entry['job_id']).get('needs_review') or []
+            except (ValueError, OSError):
+                continue
+            out.update({r['id']: r['not_merged'] for r in rows if isinstance(r, dict) and r.get('id') in ids
+                        and r.get('not_merged') and r['id'] not in out})
+        return out
 
     def _export_items(self) -> list[dict]:
         """The flagged paragraphs of the latest finished export of each article (and tag)."""
