@@ -133,7 +133,7 @@ Folder names are relative to the vault. Folders must not overlap.
 | `api_key_cmd` | none | Command that prints the key (split like a shell command, not run through a shell, 30 s timeout). |
 | `max_output_tokens` | 32000 | Output limit per call. |
 | `timeout_s` | 600 | Timeout per call. |
-| `max_retries` | 2 | Transport retries inside the executor for rate limits, server errors, 401/403, timeouts and empty response bodies (with back-off, honouring `retry-after`); these do not consume `max_invalid_retries`. |
+| `max_retries` | 2 | Transport retries inside the executor for rate limits, server errors, 401/403, timeouts and empty response bodies (with back-off, honouring `retry-after`); these do not consume `max_invalid_retries`, and a merge-check run that ends in such a failure does not count as an answer. 0 to 10. |
 | `structured_output` | `auto` | `auto` tries JSON Schema output, then JSON mode, then plain text; or force `json_schema` or `json_object`. |
 
 A key written into the file (`api_key = ...`) is refused. Keys are read per request and never logged or stored.
@@ -146,7 +146,7 @@ A key written into the file (`api_key = ...`) is refused. Keys are read per requ
 | `allow_same_family_in_host_mode` | true | In host mode the model name is self-reported; a same-family pair is allowed and the job records `same_family: true`. |
 | `withhold_producer_reasons` | true | The reviewer does not see the producer's reasons. |
 | `max_repair_rounds` | 2 | Content repair rounds: how many times a card, a split card or an article unit that a reviewer sent back with a reason is written again. It also limits how often the merge check runs again after a dispute. `sb ingest --max-rounds N` (and `sb export --max-rounds N`) overrides it for one run. 0 to 10. |
-| `max_invalid_retries` | 2 | How many times an answer that failed the program's checks is asked for again, per slot: a chunk, a review, the merge check, a split card, a model note. It does not use a repair round. `sb job skip-source-check` works after this number plus one failures. 0 to 10. |
+| `max_invalid_retries` | 2 | How many times an answer that failed the program's checks is asked for again, per slot: a chunk, a review, the merge check, a judgement again after a dispute, a split card and its review, a model note, and a step of an export. The count is kept in the job, so running the job again does not start it over. It does not use a repair round. `sb job skip-source-check` works after this number plus one failures. 0 to 10. |
 | `focused_review` | true | The reviewer of a repair round says whether each earlier finding is fixed. It sends a card back only for a finding that is not fixed, or for a blocking problem (`fact`, `unreadable`, `quote`, `not_a_unit`); other problems go to notes. |
 | `amend` | true | With an accept, the reviewer may add, retype or remove a relation, file the card under an existing topic, or drop a review card. The program checks that the result is legal and applies the fix without a repair round ([ingest.md](ingest.md#review-rules)). |
 

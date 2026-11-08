@@ -81,7 +81,7 @@ One call sees the outline, the narrative of the map, and the first and last para
 
 ### A paragraph that never passed
 
-When the repair rounds are used up, the unit is kept as `escalated`. It is not dropped, and it is not printed as if it had passed. Each paragraph that the review or the program still did not pass gets a line before it, with the first sentence of the reason:
+When the repair rounds are used up, or a step's answers keep failing the program's checks past `[review] max_invalid_retries` (counted in the job, so running the export again goes on from the count), the unit is kept as `escalated`. A review that never gave a valid answer marks each paragraph it was to judge as not reviewed; a unit whose writer never gave one is left out of the article and named on your list instead. It is not dropped, and it is not printed as if it had passed. Each paragraph that the review or the program still did not pass gets a line before it, with the first sentence of the reason:
 
 ```text
 [This paragraph did not pass review: <reason>]
@@ -138,7 +138,7 @@ model = "reviewer-model"
 api_key_env = "SB_REVIEWER_API_KEY"
 ```
 
-`[export.writer]` and `[export.reviewer]` take the same keys as `[executor.producer]` ([configuration.md](configuration.md#executor-executorproducer-executorreviewer)). Each one that is not set falls back to `[executor.producer]` or `[executor.reviewer]`. In API mode the writer and the reviewer must come from different model families, as in ingest. `[layout] articles` sets the default folder. The review rules come from `[review]`: `max_repair_rounds` and the note kinds apply as in ingest.
+`[export.writer]` and `[export.reviewer]` take the same keys as `[executor.producer]` ([configuration.md](configuration.md#executor-executorproducer-executorreviewer)). Each one that is not set falls back to `[executor.producer]` or `[executor.reviewer]`. In API mode the writer and the reviewer must come from different model families, as in ingest. `[layout] articles` sets the default folder. The review rules come from `[review]`: `max_repair_rounds`, `max_invalid_retries` and the note kinds apply as in ingest.
 
 ## Host mode
 

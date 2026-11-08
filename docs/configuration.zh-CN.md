@@ -133,7 +133,7 @@ mode = "sequential"          # sequential | parallel
 | `api_key_cmd` | 无 | 输出 key 的命令（按 shell 命令的规则拆分，但不经过 shell 运行；超时 30 秒）。 |
 | `max_output_tokens` | 32000 | 每次调用的输出上限。 |
 | `timeout_s` | 600 | 每次调用的超时。 |
-| `max_retries` | 2 | 限流、服务器错误、401/403、超时和空响应体在执行器内重试的次数（带退避，遵守 `retry-after`）；不占用 `max_invalid_retries`。 |
+| `max_retries` | 2 | 限流、服务器错误、401/403、超时和空响应体在执行器内重试的次数（带退避，遵守 `retry-after`）；不占用 `max_invalid_retries`，合并核对的运行以这类失败结束时也不算一份答案。取值 0 到 10。 |
 | `structured_output` | `auto` | `auto` 先试 JSON Schema 输出，再试 JSON 模式，最后用纯文本；也可以强制用 `json_schema` 或 `json_object`。 |
 
 写进文件的 key（`api_key = ...`）会被拒绝。key 在每次请求时读取，从不写进日志，也从不保存。
@@ -146,7 +146,7 @@ mode = "sequential"          # sequential | parallel
 | `allow_same_family_in_host_mode` | true | 宿主模式下，模型名是自报的；生产者和复核者同属一个家族也允许，任务记录 `same_family: true`。 |
 | `withhold_producer_reasons` | true | 复核者看不到生产者的理由。 |
 | `max_repair_rounds` | 2 | 内容返修轮数：复核者附理由退回的卡、拆出的卡或文章写作单位，最多重写几次。合并核对因异议重跑的次数也受它限制。`sb ingest --max-rounds N`（以及 `sb export --max-rounds N`）可以在单次运行里覆盖它。取值 0 到 10。 |
-| `max_invalid_retries` | 2 | 答案没过程序校验时，最多重新要几次答案，按槽位计：块、复核、合并核对、拆出的卡、模型写的说明。不占返修轮。失败次数达到这个数加一之后，才能用 `sb job skip-source-check`。取值 0 到 10。 |
+| `max_invalid_retries` | 2 | 答案没过程序校验时，最多重新要几次答案，按槽位计：块、复核、合并核对、异议后的重判、拆出的卡及其复核、模型写的说明，以及导出的每一步。计数存在任务里，任务再跑时不从头计。不占返修轮。失败次数达到这个数加一之后，才能用 `sb job skip-source-check`。取值 0 到 10。 |
 | `focused_review` | true | 返修轮的复核者逐条说上一轮的问题改好没有。只有问题没改好，或有阻塞类问题（`fact`、`unreadable`、`quote`、`not_a_unit`）时，才退回卡片；别的问题记进备注。 |
 | `amend` | true | 复核者接受一张卡时，可以直接补、改或删一条关系，把卡改归到已有主题下，或删掉一组问答。程序核对结果合法后照改，不占返修轮（[ingest.zh-CN.md](ingest.zh-CN.md#复核规则)）。 |
 

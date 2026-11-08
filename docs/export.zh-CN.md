@@ -81,7 +81,7 @@ sb export --domain <slug> --no-formula-check  # 不做 MathJax 检查，照样�
 
 ### 一直没通过的段落
 
-返修轮用完后，这个单位保留下来，标为 `escalated`。它不会被删掉，也不会当作已通过照常印出。复核或程序检查仍没通过的每一段，前面加一行，写明理由的第一句：
+返修轮用完后，或某一步的答案一再没过程序校验、超过 `[review] max_invalid_retries`（计数存在任务里，导出再跑时接着计），这个单位保留下来，标为 `escalated`。复核一直没给出合格答案时，它要判的每一段都标为未复核；写作者一直没给出合格答案时，这个单位不进文章，改为在你的清单上列出它。它不会被删掉，也不会当作已通过照常印出。复核或程序检查仍没通过的每一段，前面加一行，写明理由的第一句：
 
 ```text
 [This paragraph did not pass review: <reason>]
@@ -138,7 +138,7 @@ model = "reviewer-model"
 api_key_env = "SB_REVIEWER_API_KEY"
 ```
 
-`[export.writer]` 和 `[export.reviewer]` 的配置项与 `[executor.producer]` 相同（[configuration.zh-CN.md](configuration.zh-CN.md#executorexecutorproducerexecutorreviewer)）。没设的那一个，分别用 `[executor.producer]` 或 `[executor.reviewer]`。API 模式下，写作者和复核者必须来自不同模型家族，与入库相同。`[layout] articles` 设定默认的输出目录。复核规则取自 `[review]`：`max_repair_rounds` 和备注类别与入库的用法相同。
+`[export.writer]` 和 `[export.reviewer]` 的配置项与 `[executor.producer]` 相同（[configuration.zh-CN.md](configuration.zh-CN.md#executorexecutorproducerexecutorreviewer)）。没设的那一个，分别用 `[executor.producer]` 或 `[executor.reviewer]`。API 模式下，写作者和复核者必须来自不同模型家族，与入库相同。`[layout] articles` 设定默认的输出目录。复核规则取自 `[review]`：`max_repair_rounds`、`max_invalid_retries` 和备注类别与入库的用法相同。
 
 ## 宿主模式
 
