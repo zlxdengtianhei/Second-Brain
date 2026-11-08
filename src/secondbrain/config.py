@@ -109,6 +109,12 @@ class IngestConfig:
     candidates_k: object = 'auto'
     candidates_chars: int = 40000
     candidates_hop: int = 0
+    #: The shelf (every card of a topic, by title) of each proposed card's topic in the reviewer packet.
+    candidates_shelf: bool = False
+    #: The reviewer packet holds every existing card the producer named (relations, coverage rows, conflicts,
+    #: overlap hints), whole; and the view of the cards the search found: "full" or "brief".
+    review_named: bool = True
+    review_words_view: str = 'full'
 
     def __post_init__(self):
         if self.after_ingest not in {'move', 'keep'}:
@@ -123,6 +129,10 @@ class IngestConfig:
             raise ValueError('ingest.candidates_chars must be a whole number from 1000 to 1000000')
         if not (isinstance(self.candidates_hop, int) and 0 <= self.candidates_hop <= 10):
             raise ValueError('ingest.candidates_hop must be a whole number from 0 to 10')
+        if not isinstance(self.candidates_shelf, bool) or not isinstance(self.review_named, bool):
+            raise ValueError('ingest.candidates_shelf and ingest.review_named must be true or false')
+        if self.review_words_view not in {'full', 'brief'}:
+            raise ValueError('ingest.review_words_view must be "full" or "brief"')
 
 
 @dataclass(frozen=True)
@@ -342,6 +352,9 @@ id_prefix = "kc_"
 candidates_k = "auto"        # existing cards per query, or "auto" (each role's built-in count)
 candidates_chars = 40000     # characters of retrieved card views per packet (named cards do not count)
 candidates_hop = 0           # second route: relation neighbours of the first N hits (0: off)
+candidates_shelf = false     # the reviewer also sees the titles of every card in each card's topic
+review_named = true          # the reviewer sees, whole, every existing card the producer named
+review_words_view = "full"   # full | brief: how the reviewer sees the cards the search found
 
 [cards]
 # language = "en"            # en | zh (card headings; text of maps, HOME and review pages).

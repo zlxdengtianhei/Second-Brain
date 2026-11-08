@@ -7,7 +7,8 @@ from __future__ import annotations
 
 import pytest
 
-from secondbrain.search import SearchError, neighbors, search
+from secondbrain.search import SearchError, search
+from secondbrain.search import cards_by_id as neighbors
 from secondbrain.vault import Card, Snapshot
 
 

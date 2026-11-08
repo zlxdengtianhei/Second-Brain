@@ -210,12 +210,12 @@ def prepare(root: Path, source: Path, *, settings: config.Settings | None = None
 
 def _candidate_settings(settings: config.Settings) -> dict:
     """The candidate-card settings a job freezes (see :mod:`secondbrain.retrieval`)."""
-    return {'candidates_k': settings.ingest.candidates_k, 'candidates_chars': settings.ingest.candidates_chars,
-            'candidates_hop': settings.ingest.candidates_hop}
+    return {key: getattr(settings.ingest, key) for key in _CANDIDATE_DEFAULTS}
 
 
-#: Candidate settings of a job frozen before they existed: the values that job ran with.
-_CANDIDATE_DEFAULTS = {'candidates_k': 'auto', 'candidates_chars': 40000, 'candidates_hop': 0}
+#: Candidate settings of a job frozen before they existed: the values that job ran with (no named cards).
+_CANDIDATE_DEFAULTS = {'candidates_k': 'auto', 'candidates_chars': 40000, 'candidates_hop': 0,
+                       'candidates_shelf': False, 'review_named': False, 'review_words_view': 'full'}
 
 
 def _frozen(packet: dict, key: str):
@@ -732,24 +732,61 @@ def _findings(review: dict) -> dict:
             'coverage': review.get('coverage') if (review.get('coverage') or {}).get('decision') != 'accept' else None}
 
 
-#: The view each route's candidates get in a reviewer packet: what a repeat or a conflict is judged on.
+#: The view each route's candidates get in a reviewer packet: what a repeat or a conflict is judged on
+#: (``words`` takes the frozen ``review_words_view``).
 REVIEWER_LEVELS = {'named': 'full', 'written': 'full', 'words': 'full', 'hop': 'brief', 'shelf': 'title'}
 
 
-def _review_candidates(root: Path, snapshot, packet: dict, cards: list) -> tuple[dict, dict]:
+def named_ids(card: dict, existing: set) -> list[str]:
+    """The existing cards a proposed card names: relation targets, conflicts and its overlap hint, in that order."""
+    out = [r.get('target') for r in card.get('relations') or [] if isinstance(r, dict)]
+    out += [r.get('with') for r in card.get('conflicts') or [] if isinstance(r, dict)]
+    hint = card.get('overlap_hint')
+    out += list(hint.get('with') or []) if isinstance(hint, dict) else []
+    return [i for i in dict.fromkeys(out) if isinstance(i, str) and i in existing]
+
+
+def coverage_named(candidate: dict, existing: set) -> list[str]:
+    """The existing cards the coverage rows say already hold a passage."""
+    out = []
+    for row in candidate.get('coverage') or []:
+        if isinstance(row, dict):
+            out += list(row.get('with') or row.get('duplicate_of') or [])
+    return [i for i in dict.fromkeys(out) if isinstance(i, str) and i in existing]
+
+
+def _review_candidates(root: Path, snapshot, packet: dict, cards: list, coverage: list | None = None
+                       ) -> tuple[dict, dict]:
     """``({slug: [{id, rank, via}]}, {id: view})`` for the reviewer packet.
 
-    Each existing card appears once in the view table, however many proposed
-    cards it is near. Past ``candidates_chars`` the lower-ranked cards are
-    shown at a shorter view (:func:`secondbrain.retrieval.fit`).
+    Each proposed card gets the existing cards it names (``via: named``, whole,
+    outside the budget) when ``review_named`` is on, then the first route's
+    ``k`` cards, the second route's and its topic's shelf when those are on.
+    ``coverage`` (ids the coverage rows name) is listed under the key
+    ``"#coverage"``. Each existing card appears once in the view table, however
+    many proposed cards it is near; past ``candidates_chars`` the lower-ranked
+    retrieved cards are shown at a shorter view (:func:`secondbrain.retrieval.fit`).
     """
     k = retrieval.k_for(_frozen(packet, 'candidates_k'), 'reviewer')
-    per_card = {c['slug']: retrieval.candidates(root, snapshot, retrieval.card_query(c), k=k,
-                                                hop_from=_frozen(packet, 'candidates_hop'))
-                for c in cards if isinstance(c, dict) and isinstance(c.get('slug'), str)}
-    table, _ = retrieval.fit(snapshot, retrieval.merge(per_card.values()), _frozen(packet, 'candidates_chars'),
-                             REVIEWER_LEVELS)
+    named = _frozen(packet, 'review_named')
+    existing = set(snapshot.cards)
+    per_card = {}
+    for c in cards:
+        if not (isinstance(c, dict) and isinstance(c.get('slug'), str)):
+            continue
+        shelf_of = (c.get('domain'), c.get('pillar'), c.get('topic')) if _frozen(packet, 'candidates_shelf') else None
+        per_card[c['slug']] = retrieval.candidates(
+            root, snapshot, retrieval.card_query(c), k=k, hop_from=_frozen(packet, 'candidates_hop'),
+            named=named_ids(c, existing) if named else (), shelf_of=shelf_of)
+    if named and coverage:
+        per_card[COVERAGE_KEY] = [{'id': i, 'rank': n, 'via': ['named']} for n, i in enumerate(coverage, 1)]
+    levels = {**REVIEWER_LEVELS, 'words': _frozen(packet, 'review_words_view')}
+    table, _ = retrieval.fit(snapshot, retrieval.merge(per_card.values()), _frozen(packet, 'candidates_chars'), levels)
     return {slug: retrieval.keep(rows, table) for slug, rows in per_card.items()}, table
+
+
+#: The key of the reviewer packet's ``candidates`` that lists the cards the coverage rows name (never a slug).
+COVERAGE_KEY = '#coverage'
 
 
 def review_packet(root: Path, state: dict, packet: dict, slot: str) -> dict:
@@ -760,7 +797,8 @@ def review_packet(root: Path, state: dict, packet: dict, slot: str) -> dict:
     snapshot = read_snapshot(root)
     domains = sorted({c['domain'] for c in candidate.get('cards', []) if c.get('domain') in packet['catalog']['domains']}
                      | {t['domain'] for t in candidate.get('new_topics', []) if t.get('domain') in packet['catalog']['domains']})
-    near, near_cards = _review_candidates(root, snapshot, packet, candidate.get('cards', []))
+    near, near_cards = _review_candidates(root, snapshot, packet, candidate.get('cards', []),
+                                          coverage_named(candidate, set(snapshot.cards)))
     out = {'chunk': {'id': base, 'text': _chunk_text(packet, base)},
            'candidate': shown,
            'candidates': near, 'candidate_cards': near_cards,
@@ -1380,9 +1418,16 @@ def _step(root: Path, job_id: str, action: tuple, producer, reviewer) -> None:
         text = _prompt('review_cards.md', state)
         if packet.get('retry'):
             text += '\n' + _prompt_only('retry_review_cards.md')
+        try:
+            shown = review_packet(root, state, packet, slot)
+        except retrieval.TooLarge as exc:
+            # the cards the producer named would crowd out the chunk: produce its halves instead
+            if slot == _base(slot) and len(_chunk_text(packet, slot)) >= 2 * MIN_SPLIT_CHARS:
+                _record_split(root, job_id, slot, str(exc))
+                return
+            raise
         call_executor(root, job_id, reviewer, role='reviewer', step='review', prompt_text=text,
-                      packet=review_packet(root, state, packet, slot),
-                      output_schema=schemas.REVIEW_CARDS, chunk=slot)
+                      packet=shown, output_schema=schemas.REVIEW_CARDS, chunk=slot)
         return
     text = _prompt('produce_cards.md', state)
     if packet.get('retry'):
@@ -2203,6 +2248,9 @@ def packet_for(root: Path, job_id: str, *, role: str, chunk: str | None, executo
                 _step(root, job_id, out['next'], executor, executor)
             except AwaitingSubmission as waiting:
                 return {**waiting.handoff, 'chunk': out['next'][1], 'step': out['next'][0]}
+            if ((jobs.load(root, job_id).get('chunks') or {}).get(c['chunk_id']) or {}).get('split'):
+                raise ValueError(f'{c["chunk_id"]} was split in halves (its named cards are too many for one '
+                                 'reviewer packet); ask for the producer packets of its halves')
             raise ValueError('The executor finished the step directly; use `sb job advance` instead')
         settled = [chunk_outcome(root, state, packet, c['chunk_id']) for c in effective_chunks(packet, state)]
         if role == 'reviewer' and all(o['settled'] for o in settled) and (not chunk or source_check.is_slot(chunk)):
