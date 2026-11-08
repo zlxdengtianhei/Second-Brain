@@ -2201,6 +2201,18 @@ def _split_plan(root: Path, job_id: str, packet: dict, settled: list[dict]) -> l
                          'place': {'domain': old.domain, 'pillar': old.fm.get('pillar'), 'topic': old.fm.get('topic')},
                          'carry': patches[target],
                          'card': {k: v for k, v in card.items() if not k.startswith('_')}})
+    kept = {s: c for o in checked for s, c in o['accepted'].items()}
+    for o in checked:  # a card of this source that would make the card it extends too large (decision D-15)
+        for slug, card in (o.get('split_merges') or {}).items():
+            into = kept[card['_with']]
+            shown = {'id': card['_with'], 'title': into['title'], 'essence': into.get('essence'),
+                     'propositions': list(into.get('propositions') or []),
+                     'flashcards': list(into.get('flashcards') or [])}
+            plan.append({'slot': split.slot_name(len(plan) + 1), 'slug': slug, 'chunk': o['chunk'],
+                         'with': card['_with'], 'of_source': True, 'existing_card': shown,
+                         'existing_propositions': shown['propositions'],
+                         'place': {'domain': into['domain'], 'pillar': into['pillar'], 'topic': into['topic']},
+                         'carry': card['_carry'], 'card': {k: v for k, v in card.items() if not k.startswith('_')}})
     jobs._internal_update(root, job_id, split_plan=plan)
     return plan
 
@@ -2259,8 +2271,10 @@ def _split_stage(root: Path, job_id: str, packet: dict, settled: list[dict], pro
         item, out = todo[0]
         kind, slot = out['next']
         snapshot = read_snapshot(root)
-        old = snapshot.cards[item['with']]
-        shown = {'existing_card': cardfmt.view(old, 'body' if kind != 'review' else 'full'),
+        # the card it extends: an existing card, or a card of this source (not written yet: its fields)
+        existing = item['existing_card'] if item.get('of_source') else \
+            cardfmt.view(snapshot.cards[item['with']], 'body' if kind != 'review' else 'full')
+        shown = {'existing_card': existing,
                  'chunk': {'id': item['chunk'], 'text': _chunk_text(packet, item['chunk'])},
                  **_note_part(root, state, packet, item['chunk']),
                  **_relation_views(packet['catalog'], [item['place']['domain']])}
@@ -2580,6 +2594,8 @@ def _apply_job(root: Path, job_id: str, settled: list[dict] | None = None) -> di
     snapshot = read_snapshot(root)
     writable_snapshot(snapshot)
     fates = _repeat_fates(root, state, packet, settled, check, snapshot)
+    if (check or {}).get('status') == 'skipped':  # no patch was composed: its cards are written, as patch_set says
+        outcomes = {**outcomes, **{s: 'write' for s, f in fates.items() if f['how'] == 'written'}}
     accepted = [(o['chunk'], s, _final_card(entries, s, c)) for o in settled for s, c in o['accepted'].items()]
     accepted += [(o['chunk'], s, {**_final_card(entries, s, c), '_not_merged': fates[s]['reason']})
                  for o in settled for s, c in o.get('repeats', {}).items() if fates[s]['how'] == 'written']
@@ -2587,8 +2603,9 @@ def _apply_job(root: Path, job_id: str, settled: list[dict] | None = None) -> di
                                                   '_split_of': f['target'], '_from': s})
                  for s, f in fates.items() if f['how'] == 'split']
     pending = [p for o in settled for p in o['pending']]
-    pending += [{'slug': s, 'title': next(c['title'] for o in settled for x, c in o.get('repeats', {}).items() if x == s),
-                 'chunk': f['chunk'], 'reason': f['reason']} for s, f in fates.items() if f['how'] == 'pending']
+    held = {x: c for o in settled for x, c in [*o.get('repeats', {}).items(), *o.get('split_merges', {}).items()]}
+    pending += [{'slug': s, 'title': held[s]['title'], 'chunk': f['chunk'], 'reason': f['reason']}
+                for s, f in fates.items() if f['how'] == 'pending']
     # a link to a card that went into its existing card goes there; to one rewritten as a split card, to that card
     into_existing = {s: f['target'] for s, f in fates.items() if f['how'] == 'patched'}
     alias = {s: f['card']['slug'] for s, f in fates.items() if f['how'] == 'split'}
@@ -2805,7 +2822,10 @@ def _apply_job(root: Path, job_id: str, settled: list[dict] | None = None) -> di
         merged_into_existing.append({
             'id': target, 'title': old.title, 'from': slugs, 'chunks': sorted({fates[x]['chunk'] for x in slugs}),
             'propositions': numbers[:len(add)], 'replaced': [f'P{n}' for n in sorted(swaps)],
-            'flashcards': len(add_f), 'relations': moved})
+            'flashcards': len(add_f), 'relations': moved,
+            # what the merge check said the card holds already (H7 judge: each one checked against its Pn)
+            'already': [{'text': a.get('text'), 'as': a.get('as')} for a in patch.get('already') or []
+                        if isinstance(a, dict)]})
     for chunk, slug, card in accepted:
         cid, title = ids[slug], titles[slug]
         relations = [cardfmt.Relation(r['type'], r['target'], title_of.get(r['target'], ''), r.get('note'), r.get('tier'))
@@ -2989,9 +3009,10 @@ def _apply_job(root: Path, job_id: str, settled: list[dict] | None = None) -> di
               'review_notes': [n for o in settled for n in o.get('notes') or []],
               'refused_topics': [t for o in settled for t in o.get('refused_topics') or []],
               'merged_into_existing': merged_into_existing,
-              'split': [{'slug': f['card']['slug'], 'id': ids.get(f['card']['slug']), 'from': s, 'of': f['target'],
+              'split': [{'slug': f['card']['slug'], 'id': ids.get(f['card']['slug']), 'from': s, 'of': ids.get(f['target'], f['target']),
                          'slot': f['slot']} for s, f in fates.items() if f['how'] == 'split'],
-              'patch_set': {s: f['how'] for s, f in fates.items()}}
+              'patch_set': {s: f['how'] for s, f in fates.items() if not f.get('of_source')},
+              'merge_set': {s: f['how'] for s, f in fates.items() if f.get('of_source')}}
     if progress is not None:
         result['retry_progress'] = progress
     if stalled:
@@ -3045,6 +3066,13 @@ def _repeat_fates(root: Path, state: dict, packet: dict, settled: list[dict], ch
                 problem, add, add_f = _patch_fits(old, patches[target])
                 fate.update(how='patched', add=add, add_flashcards=add_f) if problem is None else \
                     fate.update(how='written', reason=f'its existing card cannot take more: {problem}')
+            out[slug] = fate
+        for slug, card in (o.get('split_merges') or {}).items():  # a card of the source too large to merge into
+            fate = {'target': card['_with'], 'chunk': o['chunk'], 'of_source': True}
+            done = split_outcome(root, state, packet, plan[slug]) if slug in plan else \
+                {'card': None, 'pending': 'its split slot was never planned'}
+            fate.update(how='split', card=done['card'], slot=plan[slug]['slot']) if done['card'] else \
+                fate.update(how='pending', reason=done['pending'] or 'its split card is not finished')
             out[slug] = fate
     return out
 

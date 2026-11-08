@@ -248,12 +248,8 @@ def validate_answer(frozen: dict, payload: Any, closed: Callable[[str, str, str]
         if into in totals:
             totals[into][0] += len(props)
             totals[into][1] += len(flashcards)
-    for slug, (props, flashcards) in totals.items():
-        if props > MAX_PROPOSITIONS or flashcards > MAX_FLASHCARDS:
-            into_it = sorted(s for s, into in merged.items() if into == slug)
-            errors.append(f'cards: {slug} would have {props} propositions and {flashcards} flashcards with what is '
-                          f'carried to it; at most {MAX_PROPOSITIONS} and {MAX_FLASHCARDS}. Do not carry less than a '
-                          f'card adds: judge {", ".join(into_it)} distinct and link it to {slug} instead')
+    # past 12 propositions or 8 flashcards the program writes the extends card as a narrower card of its own
+    # (a split slot, decision D-15), so the size of a kept card is no reason to send an answer back
     domain = _final_domains(frozen, topics)
     linked = {(s, r['target']) for s, c in cards.items() for r in c['relations']}
     added = set()
@@ -566,7 +562,8 @@ def record(frozen: dict, answer: dict, entries: list, *, slot: str, run: str | N
                          role=ROLE, slot=slot, run=run)
     for row in answer.get('patches') or []:
         decisions.record(entries, 'patch', row['target'],
-                         {k: row.get(k) or [] for k in ('propositions', 'flashcards', 'replace')},
+                         {**{k: row.get(k) or [] for k in ('propositions', 'flashcards', 'replace')},
+                          **{k: row[k] for k in ('already', 'differs') if row.get(k)}},
                          role=ROLE, slot=slot, run=run)
     for row in answer.get('disputes') or []:
         decisions.record(entries, 'dispute', row['slug'], {'reason': row['reason']}, role=ROLE, slot=slot, run=run)
@@ -599,7 +596,7 @@ def apply(settled: list[dict], frozen: dict, entries: list) -> tuple[list[dict],
     lacking = sorted(s for _, s in judged if s not in levels)
     if lacking:
         raise ValueError(f'the decision record has no level against the source for {", ".join(lacking)}')
-    rows = {s: levels[s]['data'] for _, s in judged}
+    rows = {c['slug']: levels[c['slug']]['data'] for c in frozen['cards']}  # in the frozen order: one result
     merged = {s: r['with'][0] for s, r in rows.items() if r['overlap'] != 'distinct'}
     topic_rows = decisions.values(entries, 'topic.same')
     place_of = {topic_key(t['domain'], t['pillar'], t['name']): (t['domain'], t['pillar'], t['name'])
@@ -615,7 +612,7 @@ def apply(settled: list[dict], frozen: dict, entries: list) -> tuple[list[dict],
             target = dict(zip(('domain', 'pillar', 'topic'), refile[key]))
             decisions.step(entries, 'classification', slug, 'topic_merge_refile', role='program', slot=SLOT,
                            data={**target, 'from': list(key)})
-    carried, skipped_by, replacements = {}, {}, {}
+    carried, skipped_by, replacements, too_large = {}, {}, {}, {}
     for slug, into in merged.items():  # what an extends card adds goes to the card it extends
         carry = rows[slug].get('carry') or {}
         if into not in kept:  # a card of the patch set: what goes into its existing card is that card's patch
@@ -623,6 +620,12 @@ def apply(settled: list[dict], frozen: dict, entries: list) -> tuple[list[dict],
             continue
         keep = kept[into]
         props, flashcards = list(keep.get('propositions') or []), list(keep.get('flashcards') or [])
+        if len(props) + len(carry.get('propositions') or []) > MAX_PROPOSITIONS or \
+                len(flashcards) + len(carry.get('flashcards') or []) > MAX_FLASHCARDS:
+            # it does not fit: the card it extends stays as it is and this one goes to a split slot (D-15)
+            too_large[slug] = {'into': into, 'carry': carry}
+            carried[slug], replacements[slug] = (0, 0), 0
+            continue
         new_p, new_f, skipped = [], [], 0
         for swap in carry.get('replace') or []:  # this card's fuller wording takes the place of the kept one
             number = int(swap['proposition'][1:])
@@ -677,15 +680,20 @@ def apply(settled: list[dict], frozen: dict, entries: list) -> tuple[list[dict],
     for o in settled:
         accepted = {s: kept[s] for s in o['accepted'] if s in kept}
         topics = {k: v for k, v in o['topics'].items() if k not in refile}
-        out.append({**o, 'accepted': accepted, 'topics': topics})
+        split_merges = {s: {**original[s], '_with': too_large[s]['into'], '_carry': too_large[s]['carry']}
+                        for s in o['accepted'] if s in too_large}
+        out.append({**o, 'accepted': accepted, 'topics': topics, 'split_merges': split_merges})
     by_key = {(t['domain'], t['pillar'], t['name']): t for t in frozen['new_topics']}
     report = {
         'status': 'checked', 'cards': len(frozen['cards']),
         'merged': [{'slug': s, 'title': original[s]['title'], 'into': into, 'reason': rows[s]['reason'],
                     'carried': {'propositions': carried[s][0], 'flashcards': carried[s][1]},
                     **({'replaced': replacements[s]} if replacements[s] else {}),
-                    **({'repeats_skipped': skipped_by[s]} if skipped_by.get(s) else {})}
-                   for s, into in merged.items()],
+                    **({'repeats_skipped': skipped_by[s]} if skipped_by.get(s) else {}),
+                    **({'already': list((rows[s].get('carry') or {}).get('already') or [])}
+                       if (rows[s].get('carry') or {}).get('already') else {})}
+                   for s, into in merged.items() if s not in too_large],
+        'too_large': {s: v['into'] for s, v in too_large.items()},
         'rewritten_links': rewritten,
         'added_links': added,
         'alone': [{'slug': s, 'reason': rows[s]['alone']} for s in kept if rows[s].get('alone')],

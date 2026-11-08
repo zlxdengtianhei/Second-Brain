@@ -543,10 +543,13 @@ def test_a_card_merged_into_may_hold_twice_the_flashcards_of_a_new_card():
     said = {'already': [{'text': t, 'as': 'P1'} for t in frozen_card('a')['propositions']]}  # b says them
     two = {'flashcards': [{'q': 'a q1?', 'a': 'a a1'}, {'q': 'a q2?', 'a': 'a a2'}], **said}
     assert source_check.validate_answer(frozen, answer(same('a', 'b', carry=two)))  # 6 + 2 = 8
-    with pytest.raises(ValueError, match='b would have 2 propositions and 9 flashcards'):
-        source_check.validate_answer(frozen, answer({**same('a', 'b', carry=two), **same(
-            'c', 'b', carry={'flashcards': [{'q': 'c q1?', 'a': 'c a1'}],
-                             'already': [{'text': t, 'as': 'P1'} for t in frozen_card('c')['propositions']]})}))
+    nine = answer({**same('a', 'b', carry=two), **same(
+        'c', 'b', carry={'flashcards': [{'q': 'c q1?', 'a': 'c a1'}],
+                         'already': [{'text': t, 'as': 'P1'} for t in frozen_card('c')['propositions']]})})
+    assert source_check.validate_answer(frozen, nine)  # 9: not sent back; the program splits it (D-15)
+    settled = [{'chunk': 'c01', 'accepted': {c['slug']: c for c in frozen['cards']}, 'topics': {}}]
+    kept, report, _ = applied(settled, frozen, nine)
+    assert report['too_large'] == {'c': 'b'} and len(kept['b']['flashcards']) == 8 and 'c' not in kept
 
 
 def test_every_card_needs_a_decision_and_an_isolated_one_a_link_or_a_reason():
@@ -649,8 +652,7 @@ def test_an_extends_card_accounts_for_every_proposition_and_a_card_too_large_to_
         source_check.validate_answer(frozen, answer(same('a', 'b', carry={'propositions': props[:1]})))
     full = {'propositions': props[:1], 'already': [{'text': t, 'as': 'P1'} for t in props[1:]]}
     assert source_check.validate_answer(frozen, answer(same('a', 'b', carry=full)))
-    # past the limit the answer is told to keep the card apart, not to carry less
+    # past the limit the answer is not sent back: the program gives the card a split slot (decision D-15)
     big = {**frozen_card('b'), 'propositions': [f'b p{i}' for i in range(1, 12)]}
     wide = {**FROZEN, 'cards': [FROZEN['cards'][0], big, FROZEN['cards'][2]]}
-    with pytest.raises(ValueError, match='Do not carry less than a card adds: judge a distinct and link it to b'):
-        source_check.validate_answer(wide, answer(same('a', 'b', carry={'propositions': props})))
+    assert source_check.validate_answer(wide, answer(same('a', 'b', carry={'propositions': props})))

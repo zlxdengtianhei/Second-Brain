@@ -355,6 +355,64 @@ def test_a_proposition_the_existing_card_already_says_is_named_not_carried(tmp_p
                 source_check.validate_answer(frozen, answer)
 
 
+SPLIT_ORDER = {'slug': 'arrival-order-under-markers', 'title': 'Arrival order under lit markers', 'kind': 'mechanism',
+               'essence': 'A lantern queue keeps arrival order even while readers skip by markers.',
+               'propositions': ['Skipping by a marker does not change the order of the items.'],
+               'intuition': None, 'confusions': [],
+               'flashcards': [{'q': 'Does skipping change the order?', 'a': 'No.'},
+                              {'q': 'What order holds while readers skip?', 'a': 'Arrival order.'}],
+               'source_quotes': [ARRIVAL['source_quotes'][0]],
+               'relations': [{'type': 'part_of', 'target': 'lit-marker-cost', 'note': 'one case of it'}]}
+
+
+def test_d15_a_card_of_the_source_too_large_to_merge_into_goes_to_a_split_slot(tmp_path):
+    """Decision D-15: arrival-order extends lit-marker-cost (12 propositions), carrying 1: past the limit the program
+    leaves lit-marker-cost as it is and writes arrival-order as a narrower card through a split slot; the merge
+    check is not sent back and not asked to judge it distinct."""
+    root, job_id, _ = job(tmp_path)
+    pad = [f'Lit marker fact {i} holds.' for i in range(1, 11)]
+    checks, seen = [], []
+
+    def produce(task):
+        if split.is_slot(task.chunk.split('.')[0]):
+            seen.append(task)
+            return {'card': SPLIT_ORDER}
+        out = two_chunk_producer(task)
+        for c in out['cards']:
+            if c['slug'] == 'lit-marker-cost':
+                c['propositions'] = list(c['propositions']) + pad
+        return out
+
+    def check(packet):
+        return keep_all(packet, **{'arrival-order': {'overlap': 'extends', 'with': 'lit-marker-cost', 'reason': 'r',
+                                                     'carry': {'propositions': list(ARRIVAL['propositions'])}}})
+    done = run(root, job_id, reviewer(checks, check=check), with_diagrams(produce))
+    assert done['status'] == 'applied', done.get('pending')
+    assert len(checks) == 1 and done['source_check_refusals'] == []
+    assert [t.chunk for t in seen] == ['sp01']
+    shown = seen[0].packet['existing_card']
+    assert shown['id'] == 'lit-marker-cost' and len(shown['propositions']) == 12
+    assert done['merge_set'] == {'arrival-order': 'split'} and done['outcomes']['arrival-order'] == 'merge_carry'
+    cards_ = {c.title: c for c in read_snapshot(root).cards.values()}
+    lit = cards_[CARDS['lit-marker-cost']['title']]
+    assert len(cardfmt.propositions_of(lit.body)) == 12                       # left as it was
+    assert ARRIVAL['title'] not in cards_                                      # not written as it was
+    made = cards_[SPLIT_ORDER['title']]                                        # but as the narrower card
+    assert {'type': 'part_of', 'target': lit.id} in [{k: r[k] for k in ('type', 'target')} for r in made.fm['relations']]
+    [entry] = done['split']
+    assert entry['from'] == 'arrival-order' and entry['of'] == lit.id
+
+
+def test_when_the_merge_check_is_skipped_the_outcome_of_a_patch_set_card_follows_where_it_went(tmp_path):
+    """Second verdict, not blocking 4: the merge check failed validation every time and was skipped, so no patch
+    was composed and lantern-queue was written next to its existing card; the outcome says write, as patch_set."""
+    root, job_id, before = job(tmp_path)
+    done = run(root, job_id, reviewer(check=lambda p: {'cards': [], 'new_topics': []}))
+    assert done['source_check']['status'] == 'skipped'
+    assert done['patch_set'] == {'lantern-queue': 'written'} and done['outcomes']['lantern-queue'] == 'write'
+    assert unchanged(root, before) and len(done['source_check_refusals']) == 3
+
+
 def test_a_split_card_the_reviewer_rejects_is_rewritten_in_each_round_then_stays_pending(tmp_path):
     root, job_id, before = job(tmp_path, n_props=11)
     seen = []

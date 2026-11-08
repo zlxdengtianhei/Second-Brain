@@ -49,6 +49,8 @@ def test_a_patch_that_says_a_point_of_the_card_again_is_sent_back_and_the_card_s
                                              'Markers cost one word each.', LANTERN['propositions'][1]]
     assert [f['q'] for f in cardfmt.flashcards_of(body)] == ['In what order does the queue keep its items?',
                                                              LANTERN['flashcards'][1]['q']]
+    # each already row is in the result, for a judge to check that P1 says it (second verdict, not blocking 2)
+    assert done['merged_into_existing'][0]['already'] == [{'text': LANTERN['propositions'][0], 'as': 'P1'}]
     [refusal] = done['source_check_refusals']
     assert refusal['slot'] == 'xc01'
     assert f"{LANTERN['propositions'][0]!r} may say again what {EXISTING} P1 says" in refusal['message']
