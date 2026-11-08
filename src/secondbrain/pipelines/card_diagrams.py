@@ -15,6 +15,7 @@ from __future__ import annotations
 from typing import Any, Callable
 
 from ..diagrams import IR_JSON_SCHEMA, Card, build_packet, fenced, process, read_results
+from ..schemas import shape_checked
 
 SLOT_PREFIX = 'dg'
 #: Cards per model request (the diagram prompt is written for about ten).
@@ -32,6 +33,7 @@ def answer_schema() -> dict:
                 'properties': {'ref': {'type': 'string'}, 'ir': IR_JSON_SCHEMA}}}}}
 
 
+@shape_checked(lambda: answer_schema(), payload=0, what='diagram answer')
 def validate_answer(payload: Any) -> dict:
     """Shape check at submit time; per-card IR problems are handled by ``process``."""
     if not isinstance(payload, dict) or not isinstance(payload.get('results'), list):

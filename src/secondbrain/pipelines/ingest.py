@@ -971,6 +971,7 @@ def _vault_ids_titles(root) -> tuple[set, set, dict]:
             {cid: c.domain for cid, c in snap.cards.items()})
 
 
+@schemas.shape_checked(schemas.CARDS, what='candidate')
 def validate_candidate(packet: dict, payload: dict, *, slot: str, other_cards: list[dict],
                        kept_slugs: set, existing_ids: set, existing_titles: set,
                        known_topics: set = frozenset(), target_domains: dict | None = None) -> dict:
@@ -1268,6 +1269,7 @@ def _repeated_targets(catalog: dict, cards: list) -> list[str]:
     return errors
 
 
+@schemas.shape_checked(schemas.REVIEW_CARDS, what='review')
 def validate_review(candidate: dict, review: dict, existing_ids: set, domains=()) -> dict:
     """Shape checks of a review, and the values the program requires.
 
@@ -2036,6 +2038,7 @@ REJUDGE_SCHEMA = {'type': 'object', 'required': ['slug', 'overlap', 'with', 'rea
                                  'with': {'type': 'array', 'items': {'type': 'string'}}, 'reason': {'type': 'string'}}}
 
 
+@schemas.shape_checked(lambda: REJUDGE_SCHEMA, what='judgement again')
 def _validate_rejudge(frozen: dict, payload, existing_ids: set) -> dict:
     if not isinstance(payload, dict) or payload.get('slug') != frozen['card']['slug']:
         raise IngestError(f'the answer must judge {frozen["card"]["slug"]}')

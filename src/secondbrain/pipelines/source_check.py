@@ -44,6 +44,7 @@ from typing import Any, Callable
 
 from .. import decisions
 from ..overlap import LEVELS, TOPIC_LEVELS, with_problem
+from ..schemas import shape_checked
 from ..textnorm import near_same, plain, same_text
 
 SLOT = 'xc01'
@@ -186,6 +187,7 @@ def frozen_input(settled: list[dict], source: dict, *, relation_views: dict,
             'patch_set': [patch_set[t] for t in sorted(patch_set)]}
 
 
+@shape_checked(SCHEMA, what='merge check answer')
 def validate_answer(frozen: dict, payload: Any, closed: Callable[[str, str, str], str | None] | None = None) -> dict:
     """Raise ``ValueError`` listing every problem; return the payload.
 
@@ -261,7 +263,7 @@ def validate_answer(frozen: dict, payload: Any, closed: Callable[[str, str, str]
         existing = {e['id']: e.get('domain') for e in link_candidates(cards[slug], frozen)}
         for i, link in enumerate(links):
             at = f'cards: {slug}.links[{i}]'
-            target, kind = link.get('target') if isinstance(link, dict) else None, (link or {}).get('type')
+            target, kind = (link.get('target'), link.get('type')) if isinstance(link, dict) else (None, None)
             if target in merged:
                 errors.append(f'{at}: {target} is "{rows[target]["overlap"]}"; link {merged[target]}')
                 continue

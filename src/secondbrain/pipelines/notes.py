@@ -18,6 +18,7 @@ from __future__ import annotations
 import re
 
 from ..config import CONTEXT_NOTE_MODES as MODES  # noqa: F401  (the arms, kept with the setting)
+from ..schemas import shape_checked
 from .chunking import SUMMARY_CHARS
 
 CONCEPTS_SLOT = 'nt-concepts'
@@ -63,6 +64,7 @@ def concepts_packet(text: str, chunks: list[dict], filename: str) -> dict:
             'chunks': [{'id': c['chunk_id'], 'text': text[c['start']:c['end']]} for c in chunks]}
 
 
+@shape_checked(SUMMARY_SCHEMA, payload=0, what='summary')
 def validate_summary(payload) -> dict:
     summary = payload.get('summary') if isinstance(payload, dict) else None
     if not isinstance(summary, str) or not summary.strip():
@@ -72,6 +74,7 @@ def validate_summary(payload) -> dict:
     return payload
 
 
+@shape_checked(CONCEPTS_SCHEMA, payload=0, what='concept list')
 def validate_concepts(payload, chunk_ids) -> dict:
     rows = payload.get('concepts') if isinstance(payload, dict) else None
     if not isinstance(rows, list) or not rows:

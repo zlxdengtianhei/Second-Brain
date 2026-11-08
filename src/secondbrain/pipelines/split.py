@@ -21,6 +21,7 @@ import re
 from .. import decisions
 from ..cards import KINDS
 from ..evidence import check_verbatim
+from ..schemas import shape_checked
 from ..textnorm import same_text
 
 PREFIX = 'sp'
@@ -60,6 +61,7 @@ def slot_name(n: int) -> str:
     return f'{PREFIX}{n:02d}'
 
 
+@shape_checked(CARD_SCHEMA, what='split card')
 def validate_card(item: dict, payload, *, text: str, taken: set, catalog_types) -> dict:
     """Raise ``ValueError`` listing every problem; return the payload.
 
@@ -108,6 +110,7 @@ def validate_card(item: dict, payload, *, text: str, taken: set, catalog_types) 
     return payload
 
 
+@shape_checked(REVIEW_SCHEMA, payload=0, what='split review')
 def validate_review(payload) -> dict:
     if not isinstance(payload, dict) or payload.get('decision') not in ('accept', 'revise') or \
             not isinstance(payload.get('restates'), bool) or not isinstance(payload.get('reason'), str) or \

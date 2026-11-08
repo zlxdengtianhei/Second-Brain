@@ -147,18 +147,21 @@ def _has_type(value, kind: str) -> bool:
     return isinstance(value, _TYPES.get(kind, (object,)))
 
 
-def type_problems(value, schema: dict, where: str = '') -> list[str]:
+def type_problems(value, schema: dict, where: str = '', *, null: bool = True) -> list[str]:
     """Where ``value`` has another JSON type than ``schema`` gives that place, e.g. ``cards[0].topic must be a
     string, not dict``.
 
-    Only types: a missing value or a null is left to the pipeline's validator, and so are enums and required
-    keys. A validator runs this first, before anything puts an answer's value in a set or sorts it, so an
-    object where a name belongs is refused and asked again rather than stopping the run.
+    Only types: a missing key, enums and required keys are left to the pipeline's validator. A null is wrong
+    where the schema does not allow one, unless ``null`` (the default) leaves nulls to the validator too. A
+    validator runs this first, before anything puts an answer's value in a set or sorts it, so an object where a
+    name belongs is refused and asked again rather than stopping the run.
     """
-    if value is None:
-        return []
     kinds = schema.get('type')
     kinds = [kinds] if isinstance(kinds, str) else list(kinds or [])
+    if value is None:
+        if null or not kinds or 'null' in kinds:
+            return []
+        return [f'{where or "the answer"} must be {" or ".join(_SAID[k] for k in kinds if k in _SAID)}, not null']
     if kinds and not any(_has_type(value, k) for k in kinds):
         wanted = ' or '.join(_SAID[k] for k in kinds if k in _SAID)
         return [f'{where or "the answer"} must be {wanted}, not {type(value).__name__}']
@@ -166,8 +169,44 @@ def type_problems(value, schema: dict, where: str = '') -> list[str]:
     if isinstance(value, dict):
         for key, sub in (schema.get('properties') or {}).items():
             if key in value:
-                out += type_problems(value[key], sub, f'{where}.{key}' if where else key)
+                out += type_problems(value[key], sub, f'{where}.{key}' if where else key, null=null)
     elif isinstance(value, list) and isinstance(schema.get('items'), dict):
         for i, item in enumerate(value):
-            out += type_problems(item, schema['items'], f'{where}[{i}]')
+            out += type_problems(item, schema['items'], f'{where}[{i}]', null=null)
     return out
+
+
+class ShapeError(ValueError):
+    """An answer that does not have the shape its output schema gives: refused and asked again, like any answer
+    the validators refuse."""
+
+
+#: The exceptions a validator raises when it reads an answer of a shape it did not expect.
+SHAPE_SLIPS = (TypeError, AttributeError, KeyError, IndexError)
+
+
+def shape_checked(schema, *, payload: int = 1, what: str = 'answer'):
+    """Decorate the validator of one kind of model answer so that it never raises anything but a ``ValueError``.
+
+    Before the validator runs, the answer (positional argument ``payload``) is checked against ``schema`` (a
+    dict, or a function that returns it): every value of another JSON type, a null included where the schema
+    allows none, is named and the answer refused (:class:`ShapeError`). Should the validator still meet a shape
+    it does not expect (one of :data:`SHAPE_SLIPS`), that is a refusal too, naming the exception: the run asks
+    again instead of stopping.
+    """
+    import functools
+
+    def wrap(fn):
+        @functools.wraps(fn)
+        def checked(*args, **kwargs):
+            answer = args[payload] if len(args) > payload else kwargs.get('payload', kwargs.get('review'))
+            wrong = type_problems(answer, schema() if callable(schema) else schema, null=False)
+            if wrong:
+                raise ShapeError(f'The {what} was rejected by validation:\n- ' + '\n- '.join(wrong))
+            try:
+                return fn(*args, **kwargs)
+            except SHAPE_SLIPS as exc:
+                raise ShapeError(f'The {what} was rejected by validation: a value of an unexpected shape '
+                                 f'({type(exc).__name__}: {exc}); follow the schema') from exc
+        return checked
+    return wrap
