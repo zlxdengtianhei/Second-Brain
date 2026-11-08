@@ -187,12 +187,13 @@ def test_a_title_with_the_same_words_as_another_clashes_whatever_its_case_and_pu
     from secondbrain.textnorm import plain
     root = build_ingest_vault(tmp_path / 'vault')
     candidate = copy.deepcopy(first_candidate())
-    candidate['cards'][0]['title'] = 'Lantern-Queue!'
+    candidate['cards'][0]['title'] = '“Lantern, Queue!”'
     with pytest.raises(ingest.IngestError, match='repeats another card of this source'):
         check(root, candidate, other=[{'slug': 'x', 'title': 'lantern queue', 'domain': DOMAIN}])
-    with pytest.raises(ingest.IngestError, match="a card titled 'Lantern-Queue!' already exists"):
+    with pytest.raises(ingest.IngestError, match="a card titled '“Lantern, Queue!”' already exists"):
         check(root, candidate, titles={plain('Lantern queue')})
-    assert ingest._unique_title('Lantern-Queue', {plain('lantern queue')}) == 'Lantern-Queue (2)'
+    assert ingest._unique_title('Lantern, Queue', {plain('lantern queue')}) == 'Lantern, Queue (2)'
+    assert ingest._unique_title('Lantern-Queue', {plain('lantern queue')}) == 'Lantern-Queue'  # a hyphen counts
 
 
 def test_a_new_topic_with_the_same_words_as_a_curated_one_clashes(tmp_path):

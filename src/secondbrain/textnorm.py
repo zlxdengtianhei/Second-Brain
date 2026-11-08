@@ -5,16 +5,46 @@ import re
 import unicodedata
 
 
+#: Decision D-15: besides spaces, the only characters same_text leaves out (a closed table, after NFKC): sentence
+#: marks (, . ; : ? ! and the CJK full stop and enumeration comma; NFKC turns the full-width forms into the ASCII
+#: ones), quotes (straight, curly, CJK corner brackets), the ellipsis (NFKC makes it three dots) and the em dash.
+#: Everything else stays: brackets, # % & * @ \ _ ^ ~ + = < > | / -, digits and letters. Saying "the same" drops
+#: knowledge (the costliest error); saying "different" only keeps a repeat.
+DROP = frozenset(',.;:?!"\'' + ''.join(map(chr, (0x3002, 0x3001, 0x201C, 0x201D, 0x2018, 0x2019, 0x300C, 0x300D,
+                                                  0x300E, 0x300F, 0x2026, 0x2014))))
+#: Marks of the table kept between two digits, where they belong to a number (3.5, 1,000, 3:2).
+IN_NUMBERS = frozenset('.,:')
+#: A formula ($$...$$, $...$) or inline code (`...`): compared as written, only its spaces made one.
+_VERBATIM = re.compile(r'\$\$.+?\$\$|\$[^$]+\$|`[^`]+`', re.S)
+
+
+def _prose(text: str) -> str:
+    folded = unicodedata.normalize('NFKC', text).casefold()
+    out = []
+    for i, ch in enumerate(folded):
+        if ch.isspace():
+            continue
+        if ch in DROP and not (ch in IN_NUMBERS and 0 < i < len(folded) - 1
+                               and folded[i - 1].isdigit() and folded[i + 1].isdigit()):
+            continue
+        out.append(ch)
+    return ''.join(out)
+
+
 def plain(text) -> str:
-    """``text`` in one form (NFKC), case folded, without spaces (Unicode Z*, and tabs and line breaks) and
-    punctuation (Unicode P*). Letters, marks, digits and symbols (``<``, ``^``, ``+``, ``≤``, ``$``, ``→``) stay:
-    two texts that differ in a symbol do not say the same thing."""
-    folded = unicodedata.normalize('NFKC', str(text or '')).casefold()
-    return ''.join(ch for ch in folded if not ch.isspace() and unicodedata.category(ch)[0] not in 'PZ')
+    """``text`` in one form for comparing: outside formulas and code, NFKC, case folded, without spaces and the
+    characters of :data:`DROP`; a formula or inline code as written, with its spaces made one."""
+    raw, out, last = str(text or ''), [], 0
+    for m in _VERBATIM.finditer(raw):
+        out += [_prose(raw[last:m.start()]), ' '.join(m.group().split())]
+        last = m.end()
+    out.append(_prose(raw[last:]))
+    return ''.join(out)
 
 
 def same_text(a, b) -> bool:
-    """True when ``a`` and ``b`` are the same words, whatever their spaces, punctuation, case or character forms."""
+    """True when ``a`` and ``b`` are the same words, whatever their spaces, sentence marks, quotes, case or
+    character forms (:func:`plain`)."""
     return plain(a) == plain(b)
 
 
