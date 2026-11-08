@@ -41,7 +41,7 @@ from ..locks import job_lock
 from ..store import Change, Conflict, digest, read_bytes
 from ..vault import Card, append_list_items, parse_note, read_snapshot
 from .. import retrieval
-from . import card_diagrams, source_check, split
+from . import card_diagrams, chunking, notes, source_check, split
 from .chunking import chunk_text
 from .routing import route
 
@@ -201,7 +201,7 @@ def prepare(root: Path, source: Path, *, settings: config.Settings | None = None
                      'language': labels.effective_language(snapshot, settings),
                      'diagrams': settings.card_diagrams,
                      'after_ingest': settings.ingest.after_ingest,
-                     **_candidate_settings(settings.ingest),
+                     **_later_settings(settings.ingest),
                      # the whole review policy (with a --max-rounds given now) and the folder layout: every
                      # later step reads these, never the configuration (see secondbrain.decisions)
                      'review': asdict(config.review_policy()), 'layout': _layout_record(lay)},
@@ -213,9 +213,10 @@ def prepare(root: Path, source: Path, *, settings: config.Settings | None = None
             'inbox_path': inbox_path}
 
 
-def _candidate_settings(ingest: config.IngestConfig) -> dict:
-    """The candidate-card settings a job freezes (see :mod:`secondbrain.retrieval`)."""
-    return {key: getattr(ingest, key) for key in _CANDIDATE_DEFAULTS}
+def _later_settings(ingest: config.IngestConfig) -> dict:
+    """The ingest settings added after ``ingest/3`` that a job freezes (candidate cards, review packet, merging,
+    the context note)."""
+    return {key: getattr(ingest, key) for key in _FROZEN_DEFAULTS}
 
 
 def _layout_record(lay) -> dict:
@@ -229,15 +230,16 @@ def _frozen_run(root: Path, packet: dict):
 
 
 #: Candidate settings of a job frozen before they existed: the values that job ran with (no named cards).
-_CANDIDATE_DEFAULTS = {'candidates_k': 'auto', 'candidates_chars': 40000, 'candidates_hop': 0,
-                       'candidates_shelf': False, 'review_named': False, 'review_words_view': 'full',
-                       'merge_into_existing': False}
+#: What a job frozen before a setting existed did instead (``_frozen``).
+_FROZEN_DEFAULTS = {'candidates_k': 'auto', 'candidates_chars': 40000, 'candidates_hop': 0,
+                    'candidates_shelf': False, 'review_named': False, 'review_words_view': 'full',
+                    'merge_into_existing': False, 'context_note': 'off', 'context_note_chars': 2000}
 
 
 def _frozen(packet: dict, key: str):
     """A frozen setting of the job, or what a job frozen before the setting existed used."""
     settings = packet.get('settings') or {}
-    return settings[key] if key in settings else _CANDIDATE_DEFAULTS[key]
+    return settings[key] if key in settings else _FROZEN_DEFAULTS[key]
 
 
 #: The view each route's candidates get in a producer packet: enough to link and to see what exists.
@@ -704,6 +706,64 @@ def _other_cards(root: Path, state: dict, packet: dict, base: str) -> list[dict]
     return list(out.values())
 
 
+def _aux_slot(name: str) -> bool:
+    """True for a slot that is not a chunk's: diagrams, the merge check, a dispute, a split card, a model note."""
+    return card_diagrams.is_slot(name) or source_check.is_slot(name) or _is_rejudge(name) or \
+        split.is_slot(_base(name)) or notes.is_slot(name)
+
+
+def _note_due(state: dict, packet: dict, base: str) -> str | None:
+    """The model note chunk ``base`` waits for before it is produced (the ``summary`` and ``concepts`` arms), or None
+    when there is none or it is done or given up."""
+    slot = notes.slot_for(_frozen(packet, 'context_note'), effective_chunks(packet, state), base)
+    info = ((state.get('chunks') or {}).get(slot) or {}) if slot else {}
+    return None if slot is None or info.get('candidate') or info.get('skipped') else slot
+
+
+def _note_part(root: Path, state: dict, packet: dict, base: str) -> dict:
+    """``{"context_note": ...}`` for chunk ``base`` (nothing when off, or for a source of one chunk)."""
+    mode = _frozen(packet, 'context_note')
+    if mode == 'off':
+        return {}
+    chunks = effective_chunks(packet, state)
+    model = notes.slot_for(mode, chunks, base)
+    answer = jobs.artifact(root, state, 'candidate', model) if model and \
+        ((state.get('chunks') or {}).get(model) or {}).get('candidate') else None
+    note = chunking.context_note(packet['source']['text'], chunks, base, _frozen(packet, 'context_note_chars'),
+                                 summary=(answer or {}).get('summary') if mode == 'summary' else None,
+                                 concepts=(answer or {}).get('concepts', []) if mode == 'concepts' else None)
+    return {'context_note': note} if note else {}
+
+
+def _note_step(root: Path, job_id: str, state: dict, packet: dict, slot: str, producer) -> None:
+    """Ask the producer for a model note; an answer that keeps failing validation is given up (the chunk gets the
+    program's note alone)."""
+    from ..runner import call_executor
+    chunks = effective_chunks(packet, state)
+    text, filename = packet['source']['text'], packet['source']['filename']
+    if slot == notes.CONCEPTS_SLOT:
+        name, shown, schema = 'context_concepts.md', notes.concepts_packet(text, chunks, filename), notes.CONCEPTS_SCHEMA
+    else:
+        base = slot[len('nt-'):]
+        name, shown, schema = ('context_summary.md', notes.summary_packet(text, chunks, base, filename),
+                               notes.SUMMARY_SCHEMA)
+    info = (state.get('chunks') or {}).get(slot) or {}
+    prompt_text = _prompt_only(name)
+    if info.get('last_validation_error'):
+        prompt_text += '\n## Your previous answer was rejected by the validator\n\n' + info['last_validation_error'] + '\n'
+    try:
+        call_executor(root, job_id, producer, role='producer', step='produce', prompt_text=prompt_text, packet=shown,
+                      output_schema=schema, chunk=slot)
+    except ExecutorFailure as failure:
+        if failure.code != INVALID_OUTPUT:
+            raise
+        failed = int(info.get('invalid_outputs', 0)) + 1
+        fields = {'invalid_outputs': failed, 'last_validation_error': failure.error.get('message', '')[:4000]}
+        if failed > jobs.policy_of(packet).max_repair_rounds:
+            fields['skipped'] = f'the note failed validation {failed} times; the chunk has the program\'s note alone'
+        _mark_slot(root, job_id, slot, **fields)
+
+
 def producer_packet(root: Path, state: dict, packet: dict, slot: str) -> dict:
     base, rnd = _base(slot), _round(slot)
     chunk = _chunk(packet, base)
@@ -718,6 +778,7 @@ def producer_packet(root: Path, state: dict, packet: dict, slot: str) -> dict:
            **_relation_views(packet['catalog'], chunk['candidate_domains']),
            **_chunk_candidates(chunk),
            'other_chunks_cards': _other_cards(root, state, packet, base),
+           **_note_part(root, state, packet, base),
            **({'placement': packet['placement']} if packet.get('placement') else {}),
            'rules': {'new_topics_per_source': packet['settings']['new_topics_per_source'],
                      'flashcards_per_card': [2, 4], 'id_prefix': packet['settings']['id_prefix']}}
@@ -856,6 +917,7 @@ def review_packet(root: Path, state: dict, packet: dict, slot: str) -> dict:
                        for d, m in sorted(packet['catalog']['domains'].items())],
            **_relation_views(packet['catalog'], domains),
            'other_chunks_cards': _other_cards(root, state, packet, base),
+           **_note_part(root, state, packet, base),
            **({'placement': packet['placement']} if packet.get('placement') else {})}
     if rnd:
         kept = _accepted_so_far(root, state, base, rnd)
@@ -1288,6 +1350,10 @@ def validate_submission(packet: dict, payload: dict, *, role: str, candidate=Non
             packet['catalog'], kind, domain, target))
     if _is_rejudge(chunk):
         return _validate_rejudge(candidate, payload, _vault_ids_titles(root)[0])
+    if notes.is_slot(chunk):
+        if chunk == notes.CONCEPTS_SLOT:
+            return notes.validate_concepts(payload, [c['chunk_id'] for c in effective_chunks(packet, state)])
+        return notes.validate_summary(payload)
     if split.is_slot(chunk):
         item = _split_item(state, chunk)
         if role == 'reviewer':
@@ -1324,8 +1390,7 @@ def _known_topics(root, state, slot: str, payload, kept: dict) -> set:
     in_use |= {(c['domain'], c['pillar'], c['topic']) for s, c in kept.items() if s not in refiled}
     out = set()
     for other, info in (state.get('chunks') or {}).items():
-        if other == slot or not info.get('candidate') or card_diagrams.is_slot(other) or \
-                source_check.is_slot(other) or _is_rejudge(other) or split.is_slot(_base(other)):
+        if other == slot or not info.get('candidate') or _aux_slot(other):
             continue
         for t in jobs.artifact(root, state, 'candidate', other).get('new_topics', []):
             key = (t['domain'], t['pillar'], t['name'])
@@ -1547,7 +1612,8 @@ def chunk_outcome(root: Path, state: dict, packet: dict, base: str) -> dict:
                        'the producer output failed validation in every allowed round: '
                        + str(info0.get('last_validation_error') or '')[:2000]}])
             return out
-        out['next'] = ('produce', base)
+        note = _note_due(state, packet, base)
+        out['next'] = ('note', note) if note else ('produce', base)
         return out
     accepted: dict = {}
     held: set = set()
@@ -1648,6 +1714,9 @@ def _step(root: Path, job_id: str, action: tuple, producer, reviewer) -> None:
     kind, slot = action
     state = jobs.load(root, job_id)
     packet = jobs.read_input(root, job_id)
+    if kind == 'note':
+        _note_step(root, job_id, state, packet, slot, producer)
+        return
     if kind == 'review':
         text = _prompt('review_cards.md', state)
         if packet.get('retry'):
@@ -1760,7 +1829,7 @@ def _advance(root: Path, job_id: str, *, producer, reviewer, apply: bool = True)
                 break
             base = todo[0]
             out = chunk_outcome(root, state, packet, base)
-            if out['settled']:
+            if out['settled'] or out['next'][1] in {h['chunk'] for h in handoffs}:  # one note serves many chunks
                 visited.add(base)
                 continue
             try:
@@ -2042,6 +2111,7 @@ def _split_stage(root: Path, job_id: str, packet: dict, settled: list[dict], pro
         old = snapshot.cards[item['with']]
         shown = {'existing_card': cardfmt.view(old, 'body' if kind != 'review' else 'full'),
                  'chunk': {'id': item['chunk'], 'text': _chunk_text(packet, item['chunk'])},
+                 **_note_part(root, state, packet, item['chunk']),
                  **_relation_views(packet['catalog'], [item['place']['domain']])}
         try:
             if kind == 'review':
@@ -2086,6 +2156,9 @@ def _source_check_input(root: Path, packet: dict, settled: list[dict]) -> dict:
     frozen = source_check.frozen_input(settled, packet["source"], candidates=to_link,
                                        relation_views=_relation_views(packet['catalog'], domains),
                                        existing=lambda cid: cardfmt.view(snapshot.cards[cid], 'full'))
+    if _frozen(packet, 'context_note') != 'off' and len(packet['chunks']) > 1:  # one copy of the source's outline
+        frozen['source']['outline'] = chunking.outline_text(packet['source']['text'], None,
+                                                            _frozen(packet, 'context_note_chars'))
     return {**frozen, 'placement': packet['placement']} if packet.get('placement') else frozen
 
 
@@ -2895,10 +2968,10 @@ def _packet_for(root: Path, job_id: str, *, role: str, chunk: str | None, execut
         state = jobs.load(root, job_id)
         packet = jobs.read_input(root, job_id)
         for c in effective_chunks(packet, state):
-            if chunk and _base(chunk) != c['chunk_id']:
-                continue
             out = chunk_outcome(root, state, packet, c['chunk_id'])
             if out['settled'] or out['next'] is None:
+                continue
+            if chunk and _base(chunk) != c['chunk_id'] and out['next'][1] != chunk:
                 continue
             wants = 'reviewer' if out['next'][0] == 'review' else 'producer'
             if wants != role:

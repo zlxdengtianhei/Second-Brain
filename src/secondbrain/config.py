@@ -95,6 +95,10 @@ class EndpointConfig:
         raise ValueError('Endpoint has neither api_key_env nor api_key_cmd')
 
 
+#: The arms of the context note (see secondbrain.pipelines.notes).
+CONTEXT_NOTE_MODES = ('off', 'program', 'summary', 'concepts')
+
+
 @dataclass(frozen=True)
 class IngestConfig:
     chunk_chars: int = 12000
@@ -119,6 +123,10 @@ class IngestConfig:
     #: or is rewritten as a narrower card when that card would grow too long. Off: it is written next to the
     #: existing card, needs-review, as before.
     merge_into_existing: bool = True
+    #: The note on where each chunk sits in its source (secondbrain.pipelines.notes): off, program (the
+    #: program's, from the source's structure), summary or concepts (plus a cheap model call); its length.
+    context_note: str = 'program'
+    context_note_chars: int = 2000
 
     def __post_init__(self):
         if self.after_ingest not in {'move', 'keep'}:
@@ -139,6 +147,10 @@ class IngestConfig:
             raise ValueError('ingest.merge_into_existing must be true or false')
         if self.review_words_view not in {'full', 'brief'}:
             raise ValueError('ingest.review_words_view must be "full" or "brief"')
+        if self.context_note not in CONTEXT_NOTE_MODES:
+            raise ValueError(f'ingest.context_note must be one of {", ".join(CONTEXT_NOTE_MODES)}')
+        if not (isinstance(self.context_note_chars, int) and 200 <= self.context_note_chars <= 20000):
+            raise ValueError('ingest.context_note_chars must be a whole number from 200 to 20000')
 
 
 @dataclass(frozen=True)
@@ -434,6 +446,8 @@ candidates_shelf = false     # the reviewer also sees the titles of every card i
 review_named = true          # the reviewer sees, whole, every existing card the producer named
 review_words_view = "full"   # full | brief: how the reviewer sees the cards the search found
 merge_into_existing = true   # a card that only adds to an existing card goes into it (false: written next to it)
+context_note = "program"     # off | program | summary | concepts: the note on where a chunk sits in its source
+context_note_chars = 2000    # the note's length
 
 [cards]
 # language = "en"            # en | zh (card headings; text of maps, HOME and review pages).

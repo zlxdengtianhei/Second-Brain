@@ -21,6 +21,7 @@ import os
 import re
 import uuid
 from base64 import b64decode, b64encode
+from dataclasses import fields
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -152,9 +153,7 @@ def frozen_settings(root: Path, packet: dict):
     frozen = (packet or {}).get('settings') if isinstance(packet, dict) else None
     if not isinstance(frozen, dict) or not isinstance(frozen.get('review'), dict):
         return None
-    ingest = {k: frozen[k] for k in ('chunk_chars', 'new_topics_per_source', 'id_prefix', 'after_ingest',
-                                     'candidates_k', 'candidates_chars', 'candidates_hop', 'candidates_shelf',
-                                     'review_named', 'review_words_view', 'merge_into_existing') if k in frozen}
+    ingest = {f.name: frozen[f.name] for f in fields(config.IngestConfig) if f.name in frozen}
     return config.Settings(
         vault=Path(root).absolute(),
         layout=layouts.VaultLayout.from_mapping(frozen['layout']) if 'layout' in frozen else layouts.of(root),

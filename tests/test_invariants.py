@@ -33,7 +33,8 @@ PACKAGE = Path(secondbrain.__file__).parent
 
 # --- one scale: the prompts list exactly overlap.LEVELS ----------------------------------------------------------
 INGEST_PROMPTS = ['produce_cards.md', 'review_cards.md', 'repair_cards.md', 'retry_cards.md', 'retry_review_cards.md',
-                  'source_check.md', 'review_dispute.md', 'split_card.md', 'review_split.md']
+                  'source_check.md', 'review_dispute.md', 'split_card.md', 'review_split.md', 'context_summary.md',
+                  'context_concepts.md']
 
 
 def retired_levels(text: str) -> list[str]:

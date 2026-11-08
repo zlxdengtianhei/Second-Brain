@@ -13,6 +13,8 @@ For each card in `candidate.cards` decide `accept` or `revise`:
 - `revise`: anything else. Give a concrete, checkable reason (what is wrong, where), not general advice.
   When the card fits another domain better, put that domain's slug in `suggested_domain`, also when it is not among `taxonomies`: `domains` lists every domain with its question. Choose by what the knowledge is used as: a card about a general tool or library belongs where that tool's other cards are, even when the source used it to build something else. The producer then gets that domain's taxonomy in the repair round.
 
+`context_note`, when present, is the program's note on where this chunk sits in the source: the headings it is under, the end of the chunk before, the source's outline (in some runs a short summary of what came before, or the source's concepts by chunk). Use it only to understand the chunk, for instance what "the three kinds above" are: it is not part of the chunk, so do not quote it, do not write cards from it, and it covers no passage.
+
 `other_chunks_cards` lists the cards proposed for the other chunks of this source. Do not revise a card only because one of them makes the same point: once every chunk is reviewed, a check of the whole source decides which of such cards are written. A relation to one of them must still make sense.
 
 `overlap` and `with`, on every accepted card: how much it repeats the existing cards, with `with` naming the existing cards (ids from `candidate_cards`) it is compared with. You decide this for the card against the vault; the program then acts on it:
