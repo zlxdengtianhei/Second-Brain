@@ -133,3 +133,41 @@ EXPORT_SMOOTH = {'type': 'object', 'required': ['intro', 'transitions', 'drop'],
                                     'type': 'object', 'required': ['section', 'text'],
                                     'properties': {'section': _STR, 'text': _STR}}},
                                 'drop': {'type': 'array', 'items': _STR}}}
+
+
+_TYPES = {'string': (str,), 'array': (list,), 'object': (dict,), 'boolean': (bool,), 'null': (type(None),),
+          'integer': (int,), 'number': (int, float)}
+_SAID = {'string': 'a string', 'array': 'a list', 'object': 'an object', 'boolean': 'true or false',
+         'integer': 'an integer', 'number': 'a number'}
+
+
+def _has_type(value, kind: str) -> bool:
+    if isinstance(value, bool) and kind in {'integer', 'number'}:
+        return False
+    return isinstance(value, _TYPES.get(kind, (object,)))
+
+
+def type_problems(value, schema: dict, where: str = '') -> list[str]:
+    """Where ``value`` has another JSON type than ``schema`` gives that place, e.g. ``cards[0].topic must be a
+    string, not dict``.
+
+    Only types: a missing value or a null is left to the pipeline's validator, and so are enums and required
+    keys. A validator runs this first, before anything puts an answer's value in a set or sorts it, so an
+    object where a name belongs is refused and asked again rather than stopping the run.
+    """
+    if value is None:
+        return []
+    kinds = schema.get('type')
+    kinds = [kinds] if isinstance(kinds, str) else list(kinds or [])
+    if kinds and not any(_has_type(value, k) for k in kinds):
+        wanted = ' or '.join(_SAID[k] for k in kinds if k in _SAID)
+        return [f'{where or "the answer"} must be {wanted}, not {type(value).__name__}']
+    out = []
+    if isinstance(value, dict):
+        for key, sub in (schema.get('properties') or {}).items():
+            if key in value:
+                out += type_problems(value[key], sub, f'{where}.{key}' if where else key)
+    elif isinstance(value, list) and isinstance(schema.get('items'), dict):
+        for i, item in enumerate(value):
+            out += type_problems(item, schema['items'], f'{where}[{i}]')
+    return out

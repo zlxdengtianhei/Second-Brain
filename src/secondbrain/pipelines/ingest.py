@@ -1390,47 +1390,19 @@ def _made_amends(root: Path, packet: dict, state: dict, chunk: str, candidate: d
     return {**review, 'cards': out}
 
 
-def _name_problems(payload, *, reviewer: bool) -> list[str]:
-    """Where a chunk answer gives something other than a string for a name the program keys on (slugs, titles,
-    places, relation targets, coverage cards and ``with``); the full checks run after this one."""
-    if not isinstance(payload, dict):
-        return ['the answer must be a JSON object']
-    out = []
-
-    def strings(where, row, keys):
-        for key in keys:
-            value = row.get(key)
-            if value is not None and not isinstance(value, str):
-                out.append(f'{where}.{key} must be a string, not {type(value).__name__}')
-
-    def string_list(where, row, key):
-        value = row.get(key)
-        if value is not None and (not isinstance(value, list) or any(not isinstance(x, str) for x in value)):
-            out.append(f'{where}.{key} must be a list of strings')
-
-    def rows(key):
-        value = payload.get(key)
-        if value is not None and not isinstance(value, list):
-            out.append(f'{key} must be a list')
-            return []
-        bad = [i for i, row in enumerate(value or []) if not isinstance(row, dict)]
-        out.extend(f'{key}[{i}] must be an object' for i in bad)
-        return [(i, row) for i, row in enumerate(value or []) if isinstance(row, dict)]
-    for i, card in rows('cards'):
-        where = f'cards[{i}]'
-        strings(where, card, ('slug', 'decision', 'overlap') if reviewer else ('slug', 'title', 'domain', 'pillar', 'topic'))
-        string_list(where, card, 'with')
-        for j, rel in enumerate(card.get('relations') or [] if isinstance(card.get('relations'), list) else []):
-            if isinstance(rel, dict):
-                strings(f'{where}.relations[{j}]', rel, ('type', 'target'))
-    for i, topic in rows('new_topics'):
-        strings(f'new_topics[{i}]', topic, ('domain', 'pillar', 'name'))
-    if not reviewer:
-        for i, row in rows('coverage'):
-            strings(f'coverage[{i}]', row, ('source_quote', 'disposition'))
-            string_list(f'coverage[{i}]', row, 'cards')
-            string_list(f'coverage[{i}]', row, 'with')
-    return out
+def _answer_schema(chunk: str, role: str) -> dict:
+    """The output schema the slot ``chunk`` asked ``role`` for."""
+    if card_diagrams.is_slot(chunk):
+        return card_diagrams.answer_schema()
+    if source_check.is_slot(chunk):
+        return source_check.SCHEMA
+    if _is_rejudge(chunk):
+        return REJUDGE_SCHEMA
+    if notes.is_slot(chunk):
+        return notes.CONCEPTS_SCHEMA if chunk == notes.CONCEPTS_SLOT else notes.SUMMARY_SCHEMA
+    if split.is_slot(_base(chunk)):
+        return split.REVIEW_SCHEMA if role == 'reviewer' else split.CARD_SCHEMA
+    return schemas.REVIEW_CARDS if role == 'reviewer' else schemas.CARDS
 
 
 def validate_submission(packet: dict, payload: dict, *, role: str, candidate=None,
@@ -1438,6 +1410,10 @@ def validate_submission(packet: dict, payload: dict, *, role: str, candidate=Non
     """jobs.submit hook: S4 for producers, shape checks for reviewers."""
     if chunk is None:
         raise IngestError('ingest runs are always bound to a chunk slot')
+    wrong = schemas.type_problems(payload, _answer_schema(chunk, role))
+    if wrong:  # before anything puts a value in a set or sorts it: a model may send an object for a name
+        raise IngestError(('Review' if role == 'reviewer' else 'Candidate') + ' rejected by validation:\n- '
+                          + '\n- '.join(wrong))
     if card_diagrams.is_slot(chunk):
         return card_diagrams.validate_answer(payload)
     if source_check.is_slot(chunk):
@@ -1445,10 +1421,6 @@ def validate_submission(packet: dict, payload: dict, *, role: str, candidate=Non
             packet['catalog'], kind, domain, target))
     if _is_rejudge(chunk):
         return _validate_rejudge(candidate, payload, _vault_ids_titles(root)[0])
-    names = _name_problems(payload, reviewer=role == 'reviewer') if not split.is_slot(_base(chunk)) else []
-    if names:  # before anything puts a name in a set or sorts names: a model may send an object for one
-        raise IngestError(('Review' if role == 'reviewer' else 'Candidate') + ' rejected by validation:\n- '
-                          + '\n- '.join(names))
     if notes.is_slot(chunk):
         if chunk == notes.CONCEPTS_SLOT:
             return notes.validate_concepts(payload, [c['chunk_id'] for c in effective_chunks(packet, state)])
