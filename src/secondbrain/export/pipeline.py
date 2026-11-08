@@ -8,9 +8,13 @@ are checked by the program, a reviewer from another run (another model family
 in API mode) judges each paragraph against the cards it cites, and a unit with
 a ``revise`` or a program finding goes back to the writer while the review
 policy's repair rounds last. A unit still failing after that is kept and
-reported (``escalated``), never silently dropped. Then one smoothing call
+written with a marker line before each paragraph the review or the program
+did not pass (``escalated``; the paragraphs are on the owner's list, `sb status
+--owner-items`), never silently dropped or passed. Then one smoothing call
 writes the introduction and the transitions and picks duplicate paragraphs to
-drop; the program re-checks the whole article and writes it out.
+drop; the same reviewer judges the introduction and the transitions, which go
+back to the smoothing step under the same rules; the program re-checks the
+whole article and writes it out.
 
 ``sequential`` mode writes unit after unit, each seeing the previous unit's
 last paragraph; ``parallel`` mode writes every unit at once. Host executors
@@ -138,11 +142,18 @@ def _validate_write(unit: dict, payload: dict) -> dict:
     return {'parts': clean}
 
 
-def _validate_review(candidate: dict, payload: dict) -> dict:
+def smooth_paragraphs(candidate: dict) -> list[tuple[str, str]]:
+    """``(id, text)`` of what the smoothing step wrote: ``intro/<n>`` paragraphs, then ``transition/<section>``."""
+    intro = [p.strip() for p in str(candidate.get('intro') or '').split('\n\n') if p.strip()]
+    return ([(f'intro/{i}', p) for i, p in enumerate(intro, 1)]
+            + [(f"transition/{t['section']}", t['text']) for t in candidate.get('transitions') or []])
+
+
+def _validate_review(candidate: dict, payload: dict, want: list[str] | None = None) -> dict:
     items = payload.get('items')
     if not isinstance(items, list):
         raise ValueError('the review needs an "items" list')
-    want = [pid for pid, _, _ in paragraphs(candidate)]
+    want = [pid for pid, _, _ in paragraphs(candidate)] if want is None else want
     got = [x.get('id') if isinstance(x, dict) else None for x in items]
     if sorted(got, key=str) != sorted(want):
         missing = sorted(set(want) - set(got))
@@ -175,8 +186,8 @@ def _validate_smooth(packet: dict, payload: dict, allowed_drops: set) -> dict:
 
 def validate_submission(packet, payload, *, role, candidate, root, chunk, state):
     if chunk == SMOOTH:
-        if role != 'producer':
-            raise ValueError('the smoothing step has no review')
+        if role != 'producer':  # the same reviewer judges the introduction and the transitions
+            return _validate_review(candidate, payload, [i for i, _ in smooth_paragraphs(candidate)])
         allowed = {d[k] for d in (state.get('smooth_duplicates') or []) for k in ('a', 'b')}
         return _validate_smooth(packet, payload, allowed)
     unit = _unit(packet, chunk)
@@ -266,20 +277,8 @@ def _plan(root, job_id, state, packet, errors_for, feedback) -> list[tuple]:
         review = jobs.require_independent_review(root, state, uid)
         revise = [x for x in review['items'] if x['decision'] == 'revise']
         found = unit_findings(packet, unit, candidate, errors_for([t for _, _, t in paragraphs(candidate)]))
-        review_sha = slot['review']['sha256']
-        if slot.get('repair_for') != review_sha:
-            rounds = int(slot.get('round', 0))
-            history = list(slot.get('history') or []) + [{'round': rounds, 'revise': len(revise),
-                                                           'paragraphs': len(review['items']),
-                                                           'findings': len(found)}]
-            if not revise and not found:
-                _set_chunk(root, job_id, uid, status='accepted', history=history, unresolved=None)
-                continue
-            if rounds >= config.review_policy().max_repair_rounds:
-                _set_chunk(root, job_id, uid, status='escalated', history=history,
-                           unresolved={'review': revise, 'program': found})
-                continue
-            _set_chunk(root, job_id, uid, round=rounds + 1, history=history, repair_for=review_sha)
+        if _settled(root, job_id, uid, slot, review, revise, found):
+            continue
         pending.append(uid)
         text = (head + prompt('export_write.md') + '\n' + prompt('export_repair.md') + '\n```json\n'
                 + json.dumps({'review_findings': revise, 'program_findings': found}, ensure_ascii=False)
@@ -290,10 +289,57 @@ def _plan(root, job_id, state, packet, errors_for, feedback) -> list[tuple]:
     if steps or pending:
         return steps
     smooth = chunks.get(SMOOTH) or {}
+    if smooth.get('status') in DONE:
+        return steps
     if not smooth.get('candidate'):
         steps.append(('produce', SMOOTH, note(SMOOTH, 'produce', head + prompt('export_smooth.md')),
                       _smooth_packet(root, job_id, state, packet), schemas.EXPORT_SMOOTH, 'producer'))
+        return steps
+    candidate = jobs.artifact(root, state, 'candidate', SMOOTH)
+    if not smooth.get('review'):
+        steps.append(('review', SMOOTH, note(SMOOTH, 'review', head + prompt('export_smooth_review.md')),
+                      smooth_review_packet(root, job_id, state, packet, candidate), schemas.REVIEW_BY_ID,
+                      'reviewer'))
+        return steps
+    review = jobs.require_independent_review(root, state, SMOOTH)
+    revise = [x for x in review['items'] if x['decision'] == 'revise']
+    if _settled(root, job_id, SMOOTH, smooth, review, revise, []):
+        return steps
+    text = (head + prompt('export_smooth.md') + '\n' + prompt('export_smooth_repair.md') + '\n```json\n'
+            + json.dumps({'review_findings': revise}, ensure_ascii=False) + '\n```\n')
+    steps.append(('repair', SMOOTH, note(SMOOTH, 'repair', text),
+                  dict(_smooth_packet(root, job_id, state, packet), previous_candidate=candidate),
+                  schemas.EXPORT_SMOOTH, 'producer'))
     return steps
+
+
+def _settled(root, job_id, chunk, slot, review, revise, found) -> bool:
+    """Settle ``chunk`` after its review, as ingest does: True when it is done (``accepted``, or ``escalated``
+    when the repair rounds ran out: kept, marked and listed for the owner); False when it goes back for a repair
+    round. Recorded against the review's bytes, so planning again before the repair is submitted asks the same."""
+    review_sha = slot['review']['sha256']
+    if slot.get('repair_for') == review_sha:
+        return False
+    rounds = int(slot.get('round', 0))
+    history = list(slot.get('history') or []) + [{'round': rounds, 'revise': len(revise),
+                                                   'paragraphs': len(review['items']), 'findings': len(found)}]
+    if not revise and not found:
+        _set_chunk(root, job_id, chunk, status='accepted', history=history, unresolved=None)
+        return True
+    if rounds >= config.review_policy().max_repair_rounds:
+        _set_chunk(root, job_id, chunk, status='escalated', history=history,
+                   unresolved={'review': revise, 'program': found})
+        return True
+    _set_chunk(root, job_id, chunk, round=rounds + 1, history=history, repair_for=review_sha)
+    return False
+
+
+def smooth_review_packet(root, job_id, state, packet, candidate) -> dict:
+    """What the reviewer sees of the smoothing step: what that step was shown, and what it wrote."""
+    shown = _smooth_packet(root, job_id, state, packet)
+    return {'article_title': shown['article_title'], 'language': shown['language'], 'narrative': shown['narrative'],
+            'sections': shown['sections'],
+            'paragraphs': [{'id': pid, 'text': text} for pid, text in smooth_paragraphs(candidate)]}
 
 
 def _final_units(root, state, packet) -> dict:
@@ -410,7 +456,7 @@ def advance(root: Path, job_id: str, *, producer, reviewer, checker=None, worker
         result = {'job_id': job_id, 'status': 'complete', 'report': report}
         if out_dir is not None:
             result['files'] = write_files(article, report, Path(out_dir), html=html)
-        jobs._internal_update(root, job_id, status='complete', report=report)
+        jobs._internal_update(root, job_id, status='complete', report=report, files=result.get('files'))
         return result
 
 
@@ -440,6 +486,38 @@ def _runs_summary(root, job_id) -> dict:
             'models': {k: sorted(map(str, v)) for k, v in models.items()}, 'seconds_first_to_last_run': span}
 
 
+#: The longest reason a marker line shows (the first sentence of the reviewer's reason, or the program's finding).
+FLAG_CHARS = 160
+#: Ends of a sentence besides a full stop followed by a space: the CJK full stop, exclamation and question marks.
+SENTENCE_ENDS = ''.join(map(chr, (0x3002, 0xFF01, 0xFF1F))) + '!?'
+
+
+def _one_sentence(text) -> str:
+    text = ' '.join(str(text or '').split())
+    for i, ch in enumerate(text):
+        if ch in SENTENCE_ENDS or (ch == '.' and (i + 1 == len(text) or text[i + 1] == ' ')):
+            text = text[:i + 1]
+            break
+    return text if len(text) <= FLAG_CHARS else text[:FLAG_CHARS - 1] + '…'
+
+
+def _flags(state) -> dict:
+    """``{paragraph id: reason}`` of the paragraphs an escalated unit or smoothing step still had a ``revise`` or
+    a program finding for (ids ``u01/p1.2``, ``intro/1``, ``transition/<section>``)."""
+    out = {}
+    for chunk, slot in (state.get('chunks') or {}).items():
+        if slot.get('status') != 'escalated':
+            continue
+        unresolved = slot.get('unresolved') or {}
+        prefix = '' if chunk == SMOOTH else f'{chunk}/'
+        for item in unresolved.get('review') or []:
+            out.setdefault(prefix + item['id'], _one_sentence(item.get('reason')))
+        for finding in unresolved.get('program') or []:
+            if finding.get('paragraph'):
+                out.setdefault(prefix + finding['paragraph'], _one_sentence(f"{finding['code']}: {finding['detail']}"))
+    return out
+
+
 def assemble(root, state, packet, errors_for, checker) -> tuple[dict, dict]:
     """The article as blocks, after the smoothing answer; and the program-check report."""
     units = _final_units(root, state, packet)
@@ -455,6 +533,7 @@ def assemble(root, state, packet, errors_for, checker) -> tuple[dict, dict]:
         else:
             refused.append(gid)
     transitions = {t['section']: t['text'] for t in smooth.get('transitions') or []}
+    flags = _flags(state)
     sections, rows = [], []
     for section in packet['sections']:
         blocks = []
@@ -467,14 +546,16 @@ def assemble(root, state, packet, errors_for, checker) -> tuple[dict, dict]:
                 for n, text in enumerate(part['paragraphs'], 1):
                     gid = f"{uid}/{part['part']}.{n}"
                     if gid not in dropped:
-                        blocks.append({'id': gid, 'text': text})
+                        blocks.append({'id': gid, 'text': text, **({'flag': flags[gid]} if gid in flags else {})})
                         rows.append((gid, text, True))
         trans = transitions.get(section['pillar'])
         if trans:
             rows.append((f"transition/{section['pillar']}", trans, False))
-        sections.append({'pillar': section['pillar'], 'transition': trans, 'blocks': blocks})
-    intro = [p.strip() for p in smooth['intro'].split('\n\n') if p.strip()]
-    rows += [(f'intro/{i}', p, False) for i, p in enumerate(intro, 1)]
+        sections.append({'pillar': section['pillar'], 'transition': trans,
+                         'transition_flag': flags.get(f"transition/{section['pillar']}"), 'blocks': blocks})
+    intro_rows = [(pid, text) for pid, text in smooth_paragraphs(smooth) if pid.startswith('intro/')]
+    intro = [text for _, text in intro_rows]
+    rows += [(pid, text, False) for pid, text in intro_rows]
 
     errors = errors_for([t for _, t, _ in rows])
     findings, cited = [], set()
@@ -526,9 +607,15 @@ def assemble(root, state, packet, errors_for, checker) -> tuple[dict, dict]:
                             'unresolved': (chunks.get(u['id']) or {}).get('unresolved')}
                   for u in packet['units']},
         'escalated_units': sorted(u['id'] for u in packet['units']
-                                  if (chunks.get(u['id']) or {}).get('status') == 'escalated'),
+                                  if (chunks.get(u['id']) or {}).get('status') == 'escalated')
+        + ([SMOOTH] if (chunks.get(SMOOTH) or {}).get('status') == 'escalated' else []),
+        'flagged': [{'paragraph': gid, 'reason': reason} for gid, reason in flags.items()
+                    if gid not in dropped],
         'smooth': {'duplicates_found': len(state.get('smooth_duplicates') or []), 'dropped': dropped,
-                   'drop_refused': refused, 'transitions': len(transitions)},
+                   'drop_refused': refused, 'transitions': len(transitions),
+                   'status': (chunks.get(SMOOTH) or {}).get('status'),
+                   'repair_rounds': int((chunks.get(SMOOTH) or {}).get('round', 0)),
+                   'unresolved': (chunks.get(SMOOTH) or {}).get('unresolved')},
         'runs': _runs_summary(root, state['job_id']),
         'checker': getattr(checker, 'name', None),
     }
@@ -537,10 +624,11 @@ def assemble(root, state, packet, errors_for, checker) -> tuple[dict, dict]:
             'writer': ', '.join(models.get('producer', [])) or None,
             'reviewer': ', '.join(models.get('reviewer', [])) or None,
             'mode': packet['mode'], 'cards': len(packet['cards']), 'unused_cards': len(unused),
-            'escalated_units': len(report['escalated_units']), 'job': state['job_id'],
+            'escalated_units': len(report['escalated_units']), 'flagged_paragraphs': len(report['flagged']),
+            'job': state['job_id'],
             'source': 'sb export (generated view; rebuild instead of editing)'}
     article = {'title': packet['moc'], 'language': packet['language'], 'meta': meta, 'intro': intro,
-               'sections': sections, 'unused': unused}
+               'intro_flags': [flags.get(pid) for pid, _ in intro_rows], 'sections': sections, 'unused': unused}
     return article, report
 
 

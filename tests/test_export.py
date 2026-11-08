@@ -241,7 +241,13 @@ def test_parallel_export_end_to_end_writes_markdown_and_html(vault_root, tmp_pat
     assert report["formula_parse_rate"] == 1.0 and report["unknown_links"] == 0
     assert set(u["status"] for u in report["units"].values()) == {"accepted"}
     units = len(jobs.read_input(vault_root, job_id)["units"])
-    assert report["runs"]["calls"] == {"producer:produce:submitted": units + 1, "reviewer:review:submitted": units}
+    # every unit is reviewed, and so are the introduction and the transitions the smoothing step wrote
+    assert report["runs"]["calls"] == {"producer:produce:submitted": units + 1,
+                                       "reviewer:review:submitted": units + 1}
+    last = review.calls[-1]
+    assert last.chunk == pipeline.SMOOTH and [p["id"] for p in last.packet["paragraphs"]] == ["intro/1",
+                                                                                              "transition/用法"]
+    assert last.packet["narrative"] == "合成叙事。" and report["smooth"]["status"] == "accepted"
     md = Path(result["files"]["markdown"]).read_text(encoding="utf-8")
     front, rest = md.split("---\n", 2)[1:]
     meta = yaml.safe_load(front)
@@ -308,13 +314,74 @@ def test_review_revise_and_missing_card_go_back_once_then_pass(vault_root):
     assert all("previous_candidate" in t.packet for t in repairs)
 
 
-def test_unit_still_failing_after_the_rounds_is_kept_and_reported(vault_root, tmp_path):
-    _, result, _, _ = run(vault_root, revise_first={"u01"}, rounds=0, out=tmp_path / "o")
+def test_a_paragraph_still_failing_after_the_rounds_is_marked_in_the_article_and_listed_for_the_owner(
+        vault_root, tmp_path):
+    from secondbrain.service import Service
+    job_id, result, _, _ = run(vault_root, revise_first={"u01"}, rounds=0, out=tmp_path / "o")
     report = result["report"]
     assert report["escalated_units"] == ["u01"]
-    assert report["units"]["u01"]["unresolved"]["review"]
+    failing = [x["id"] for x in report["units"]["u01"]["unresolved"]["review"]]
+    assert failing and [f["paragraph"] for f in report["flagged"]] == [f"u01/{pid}" for pid in failing]
     assert report["coverage"] == 1.0                              # the unit's text is still in the article
-    assert yaml.safe_load(Path(result["files"]["markdown"]).read_text().split("---\n")[1])["escalated_units"] == 1
+    md = Path(result["files"]["markdown"]).read_text(encoding="utf-8")
+    meta = yaml.safe_load(md.split("---\n")[1])
+    assert meta["escalated_units"] == 1 and meta["flagged_paragraphs"] == len(failing)
+    mark = labels.export("zh")["flag"].format(reason="“取 X” 不在卡里")
+    assert md.count(mark) == len(failing)
+    first = md.split(mark + "\n\n", 1)[1].split("\n", 1)[0]    # the line under the first mark: a u01 paragraph
+    assert first.startswith("合成卡 ") and first.endswith("]]")
+    unflagged = md.split("## 用法", 1)[1]
+    assert mark not in unflagged                                  # accepted paragraphs carry no mark
+    items = [i for i in Service(vault_root).owner_items() if i.get("kind") == "export_paragraph"]
+    assert [(i["owner_reason"], i["paragraph"]) for i in items] == [("pending", f"u01/{pid}") for pid in failing]
+    assert items[0]["article"] == MOC and items[0]["job_id"] == job_id and items[0]["reason"] == "“取 X” 不在卡里"
+    assert items[0]["file"] == result["files"]["markdown"]
+    assert Service(vault_root).status()["owner_items"]["pending"] == len(failing)
+
+
+def smooth_reviewer(revise: set, times: int):
+    """The unit reviewer; on the smoothing step it sends back the paragraphs in ``revise`` ``times`` times."""
+    base, asked = reviewer(), []
+
+    def respond(task):
+        if task.chunk != pipeline.SMOOTH:
+            return base(task)
+        asked.append(task)
+        bad = len(asked) <= times
+        return {"items": [{"id": p["id"], "decision": "revise" if bad and p["id"] in revise else "accept",
+                           "reason": "“十个例子” 不在给出的段落里" if bad and p["id"] in revise else "与叙事一致"}
+                          for p in task.packet["paragraphs"]]}
+    return respond, asked
+
+
+def test_the_introduction_and_transitions_go_back_to_the_smoothing_step_when_the_reviewer_asks(vault_root):
+    config.set_review_policy(ReviewPolicy(max_repair_rounds=1))
+    job = pipeline.prepare(vault_root, domain=DOMAIN, mode="parallel")
+    respond, asked = smooth_reviewer({"intro/1"}, times=1)
+    producer = FakeExecutor("gpt-writer", responder=writer())
+    result = pipeline.advance(vault_root, job["job_id"], producer=producer,
+                              reviewer=FakeExecutor("claude-reviewer", responder=respond), checker=FakeMathJax())
+    repairs = [t for t in producer.calls if t.chunk == pipeline.SMOOTH and t.step == "repair"]
+    assert len(asked) == 2 and len(repairs) == 1
+    assert "十个例子" in repairs[0].prompt and repairs[0].packet["previous_candidate"]["intro"]
+    assert result["report"]["smooth"]["status"] == "accepted" and result["report"]["flagged"] == []
+
+
+def test_an_introduction_still_failing_after_the_rounds_is_marked_and_listed(vault_root, tmp_path):
+    from secondbrain.service import Service
+    config.set_review_policy(ReviewPolicy(max_repair_rounds=0))
+    job = pipeline.prepare(vault_root, domain=DOMAIN, mode="parallel")
+    respond, _ = smooth_reviewer({"intro/1"}, times=1)
+    result = pipeline.advance(vault_root, job["job_id"], producer=FakeExecutor("gpt-writer", responder=writer()),
+                              reviewer=FakeExecutor("claude-reviewer", responder=respond), checker=FakeMathJax(),
+                              out_dir=tmp_path / "o")
+    report = result["report"]
+    assert report["escalated_units"] == [pipeline.SMOOTH] and report["flagged"][0]["paragraph"] == "intro/1"
+    md = Path(result["files"]["markdown"]).read_text(encoding="utf-8")
+    mark = labels.export("zh")["flag"].format(reason="“十个例子” 不在给出的段落里")
+    assert f"# 合成图谱\n\n{mark}\n\n本文按支柱顺序讲合成图谱。" in md
+    assert [i["paragraph"] for i in Service(vault_root).owner_items() if i.get("kind") == "export_paragraph"] == [
+        "intro/1"]
 
 
 def test_parse_errors_are_findings(vault_root):

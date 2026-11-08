@@ -47,17 +47,21 @@ def to_markdown(article: dict) -> str:
     front = yaml.safe_dump(article['meta'], allow_unicode=True, sort_keys=False, width=1000).strip()
     text = labels.export(lang)
     lines = ['---', front, '---', text['hint'], '', f"# {article['title']}", '']
-    for para in article.get('intro') or []:
-        lines += [_blocks(para), '']
+
+    def paragraph(body, flag):  # a paragraph the review or the program did not pass says so, on the line before
+        return ([text['flag'].format(reason=flag), ''] if flag else []) + [_blocks(body), '']
+    flags = article.get('intro_flags') or []
+    for i, para in enumerate(article.get('intro') or []):
+        lines += paragraph(para, flags[i] if i < len(flags) else None)
     for section in article['sections']:
         lines += [f"## {section['pillar']}", '']
         if section.get('transition'):
-            lines += [_blocks(section['transition']), '']
+            lines += paragraph(section['transition'], section.get('transition_flag'))
         for block in section['blocks']:
             if 'heading' in block:
                 lines += [f"### {block['heading']}", '']
             else:
-                lines += [_blocks(block['text']), '']
+                lines += paragraph(block['text'], block.get('flag'))
     if article.get('unused'):
         lines += [f"## {text['unused']}", '']
         lines += [f'- [[{name}]]' for name in article['unused']] + ['']

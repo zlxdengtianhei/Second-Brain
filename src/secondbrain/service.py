@@ -85,7 +85,9 @@ class Service:
         Derived, not stored: needs-review cards by the reasons on them (``source_unclear``, ``possible_repeat``;
         a card marked before reasons were recorded counts as ``source_unclear``), open conflicts (``conflict``),
         and from the latest job of each partly written source its pending items (``pending``) and its passages
-        and refused new topics that need a place in the taxonomy (``needs_taxonomy``).
+        and refused new topics that need a place in the taxonomy (``needs_taxonomy``); and the paragraphs of the
+        latest export of each article that its review or its program check still did not pass when the repair
+        rounds ran out (``pending``, ``kind: export_paragraph``; the article marks them too).
         """
         from . import inbox
         from .pipelines.ingest import open_conflicts
@@ -117,6 +119,25 @@ class Service:
                       for row in job.get('needs_taxonomy') or []]
             items += [{'owner_reason': 'needs_taxonomy', 'kind': 'refused_topic', **where, **row}
                       for row in job.get('refused_topics') or []]
+        return items + self._export_items()
+
+    def _export_items(self) -> list[dict]:
+        """The flagged paragraphs of the latest finished export of each article (and tag)."""
+        latest: dict = {}
+        for entry in jobs.list_jobs(self.root):
+            if entry.get('kind') != 'export' or entry.get('status') != 'complete':
+                continue
+            state = jobs.load(self.root, entry['job_id'])
+            report = state.get('report') or {}
+            key = (str(report.get('moc')), str(report.get('tag') or ''))
+            if key not in latest or (state.get('updated_at') or '') > (latest[key].get('updated_at') or ''):
+                latest[key] = state
+        items = []
+        for key in sorted(latest):
+            state = latest[key]
+            for row in (state.get('report') or {}).get('flagged') or []:
+                items.append({'owner_reason': 'pending', 'kind': 'export_paragraph', 'article': key[0],
+                              'job_id': state['job_id'], 'file': (state.get('files') or {}).get('markdown'), **row})
         return items
 
     def needs_review(self) -> list[dict]:
