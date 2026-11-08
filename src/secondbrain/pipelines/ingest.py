@@ -2320,13 +2320,26 @@ def _source_check_input(root: Path, packet: dict, settled: list[dict]) -> dict:
     found = {slug: retrieval.candidates(root, snapshot, retrieval.card_query(card), k=k)
              for o in settled for slug, card in o['accepted'].items()}
     # only to add links: the brief view says what each card is; one table within the packets' budget
-    table, _ = retrieval.fit(snapshot, retrieval.merge(found.values()), _frozen(packet, 'candidates_chars'),
-                             MERGE_CHECK_LEVELS)
-    rows = {slug: [{**e, 'domain': snapshot.cards[e['id']].domain} for e in retrieval.keep(entries, table)]
-            for slug, entries in found.items()}
+    table, packing = retrieval.fit(snapshot, retrieval.merge(found.values()), _frozen(packet, 'candidates_chars'),
+                                   MERGE_CHECK_LEVELS)
+    # each card's candidates by id only, closest first; the table shows each once, with its domain (the
+    # cross-domain relation rule needs it even for a card shown by title only)
+    table = {cid: {**view, 'domain': snapshot.cards[cid].domain} for cid, view in table.items()}
+    budget, chars = _frozen(packet, 'candidates_chars'), sum(cardfmt.view_chars(v) for v in table.values())
+    for e in reversed(retrieval.merge(found.values())):  # the domains added to title-only views stay in the budget
+        if chars <= budget:
+            break
+        if e['id'] in table and set(table[e['id']]) == {'id', 'title', 'domain'} and 'named' not in e['via']:
+            chars -= cardfmt.view_chars(table.pop(e['id']))
+            packing['left_out'] = list(packing['left_out']) + [e['id']]
+    packing['chars'] = chars
+    rows = {slug: [e['id'] for e in retrieval.keep(entries, table)] for slug, entries in found.items()}
     frozen = source_check.frozen_input(settled, packet["source"], candidates=rows, candidate_cards=table,
                                        relation_views=_relation_views(packet['catalog'], domains),
                                        existing=lambda cid: cardfmt.view(snapshot.cards[cid], 'full'))
+    frozen['packing'] = {'view_chars': packing['chars'], 'budget': packing['budget'], 'lowered': packing['lowered'],
+                         'left_out': len(packing['left_out']),
+                         'row_chars': len(json.dumps([c['candidates'] for c in frozen['cards']]))}
     if _frozen(packet, 'context_note') != 'off' and len(packet['chunks']) > 1:  # one copy of the source's outline
         frozen['source']['outline'] = chunking.outline_text(packet['source']['text'], None,
                                                             _frozen(packet, 'context_note_chars'))

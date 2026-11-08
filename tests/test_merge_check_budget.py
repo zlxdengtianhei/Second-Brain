@@ -1,6 +1,8 @@
 """The merge check's link candidates are packed like every other packet: within `candidates_chars`, each card once."""
 from __future__ import annotations
 
+import json
+
 from secondbrain import cards as cardfmt
 from secondbrain.pipelines import ingest
 from secondbrain.vault import read_snapshot
@@ -34,7 +36,7 @@ def packet_for(root, budget):
 
 def view_chars(frozen) -> int:
     """Characters of the existing cards' views in a merge check packet: the table, and views carried in rows."""
-    rows = [{k: v for k, v in e.items() if k not in {'rank', 'via', 'domain'}}
+    rows = [{k: v for k, v in e.items() if k not in {'rank', 'via', 'domain'}} if isinstance(e, dict) else {'id': e}
             for c in frozen['cards'] for e in c['candidates']]
     inline = sum(cardfmt.view_chars(r) for r in rows if set(r) != {'id'})
     return inline + sum(cardfmt.view_chars(v) for v in (frozen.get('candidate_cards') or {}).values())
@@ -48,8 +50,13 @@ def test_twenty_cards_of_link_candidates_fit_the_budget_and_each_existing_card_i
     shown = frozen['candidate_cards']
     rows = [e for c in frozen['cards'] for e in c['candidates']]
     assert len(rows) > len(shown)  # many cards share candidates; the table shows each once
-    assert all(e['id'] in shown and set(e) == {'id', 'rank', 'via', 'domain'} for e in rows)
-    assert any(set(v) == {'id', 'title'} for v in shown.values())  # the less close ones went down to the title
+    assert all(isinstance(e, str) and e in shown for e in rows)  # rows name ids only (second verdict, not blocking 1)
+    assert all(v['domain'] for v in shown.values())
+    assert any(set(v) == {'id', 'title', 'domain'} for v in shown.values())  # less close ones: the title only
+    packing = frozen['packing']
+    assert packing['view_chars'] <= budget and packing['row_chars'] == len(json.dumps([c['candidates']
+                                                                                      for c in frozen['cards']]))
+    assert packing['row_chars'] < 20 * 15 * 30  # about one id per candidate, not a row of four fields
     # each card still has its 15 closest while the budget allows it
     roomy = ingest._source_check_input(root, packet_for(root, 10 ** 7), decision_set(20))
     assert all(len(c['candidates']) == 15 for c in roomy['cards'])
@@ -61,7 +68,7 @@ def test_the_merge_check_still_accepts_a_link_to_a_candidate_shown_by_title_only
     root = vault(tmp_path)
     frozen = ingest._source_check_input(root, packet_for(root, 3000), decision_set(5))
     card = frozen['cards'][0]
-    target = next(e['id'] for e in card['candidates'] if set(frozen['candidate_cards'][e['id']]) == {'id', 'title'})
+    target = next(e for e in card['candidates'] if set(frozen['candidate_cards'][e]) == {'id', 'title', 'domain'})
     answer = {'cards': [{'slug': c['slug'], 'overlap': 'distinct', 'with': [], 'reason': 'own point',
                          **({'links': [{'target': target, 'type': 'similar_to', 'note': 'n'}]} if c is card
                             else {'alone': 'a test card'})}

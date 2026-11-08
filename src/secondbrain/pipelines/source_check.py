@@ -133,8 +133,8 @@ def frozen_input(settled: list[dict], source: dict, *, relation_views: dict,
                  existing: Callable[[str], dict] | None = None) -> dict:
     """What the reviewer judges: every card of the decision set and every new topic, sorted by where they are filed.
 
-    ``candidates`` gives, by slug, the existing cards a card may link (``{id, rank, via, domain}``), and
-    ``candidate_cards`` shows each of them once (``{id: view}``, packed within the budget by
+    ``candidates`` gives, by slug, the ids of the existing cards a card may link, closest first, and
+    ``candidate_cards`` shows each of them once (``{id: view}`` with its domain, packed within the budget by
     :func:`secondbrain.retrieval.fit`); ``relation_views`` the relation types and their meanings.
     """
     candidates = candidates or {}
@@ -451,7 +451,8 @@ def link_candidates(card: dict, frozen: dict | None = None) -> list:
     """The existing cards a card of the frozen input may link, each with its view from ``candidate_cards``
     (inputs frozen before it carry the view in the row; before ``candidates``, the rows are ``near_existing``)."""
     table = (frozen or {}).get('candidate_cards') or {}
-    return [{**table.get(e.get('id'), {}), **e} for e in card.get('candidates', card.get('near_existing')) or []]
+    rows = [{'id': e} if isinstance(e, str) else e for e in card.get('candidates', card.get('near_existing')) or []]
+    return [{**table.get(e.get('id'), {}), **e} for e in rows if isinstance(e, dict)]
 
 
 def _final_domains(frozen: dict, topics: dict) -> dict:
