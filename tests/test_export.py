@@ -600,3 +600,17 @@ def test_a_card_no_paragraph_cites_is_listed_at_the_end_of_the_article(vault_roo
     assert result["report"]["unused"] == ["合成卡 003"]
     md = Path(result["files"]["markdown"]).read_text(encoding="utf-8")
     assert md.endswith(f"## {labels.export('zh')['unused']}\n\n- [[合成卡 003]]\n")
+
+
+def test_a_literal_backslash_n_outside_formulas_is_a_finding(vault_root):
+    """Second verdict, not blocking 7: export reads TeX backslashes leniently (D-13), so a line-break escape before a
+    letter in an answer comes in as a backslash and an n; the program check sends such a paragraph back."""
+    from secondbrain.executors.api import parse_json_text
+    index = checks.CardIndex.from_input(jobs.read_input(vault_root, pipeline.prepare(vault_root, domain=DOMAIN)["job_id"]))
+    # strict JSON fails on the raw \mid, so the answer is read again with TeX backslashes doubled (D-13)
+    text = parse_json_text('{"p": "第一行\\nline two，记作 $a\\mid b$。[[合成卡 001]]"}', tex_backslashes=True)["p"]
+    assert "\\nline" in text
+    assert [f["code"] for f in checks.check_paragraph("p1.1", text, index)
+            if f["code"] == "literal_newline"] == ["literal_newline"]
+    clean = "合成卡 1 的量取 101，记作 $a_{1}$ 与 $\\nabla f$。[[合成卡 001]]"
+    assert not [f for f in checks.check_paragraph("p1.1", clean, index) if f["code"] == "literal_newline"]

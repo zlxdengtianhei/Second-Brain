@@ -272,6 +272,14 @@ def check_paragraph(pid: str, text: str, index: CardIndex, parse_errors: dict | 
             add('formula_parse_error', f'{m.tex[:80]}: {error}')
     for pos in stray:
         add('stray_dollar', text[max(0, pos - 20):pos + 20])
+    prose, last = [], 0  # outside formulas: a backslash and an n is a line break read wrongly (export reads TeX
+    for m in maths:      # backslashes leniently, decision D-13), never text a card has
+        prose.append(text[last:m.start])
+        last = m.end
+    prose.append(text[last:])
+    for found in re.finditer(r'\\n', ''.join(prose)):
+        whole = ''.join(prose)
+        add('literal_newline', whole[max(0, found.start() - 20):found.end() + 20])
     return findings
 
 
