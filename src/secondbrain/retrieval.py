@@ -188,9 +188,9 @@ def keep(entries: list[dict], table: dict) -> list[dict]:
     return [{'id': e['id'], 'rank': e['rank'], 'via': list(e['via'])} for e in entries if e['id'] in table]
 
 
-#: First-route cards per query with ``candidates_k = "auto"``: each role's count before the setting existed
-#: (the producer's is in :func:`secondbrain.pipelines.routing.route`). In drill 2, 10 of 16 old cards a judge
-#: said should have been linked were in a reviewer's top 5; the merge check links, it does not judge repeats.
+#: First-route cards per query with ``candidates_k = "auto"``: each role's count before the default became 15
+#: (the producer's is in :func:`secondbrain.pipelines.routing.route`); jobs frozen before the setting existed
+#: read it this way.
 AUTO_K = {'reviewer': 5, 'merge_check': 3, 'written': 5}
 #: In a retry, written cards shown per card with ``"auto"``: the closest, then the ones it links, this many in all.
 AUTO_WRITTEN_MAX = 8

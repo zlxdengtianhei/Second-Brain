@@ -30,10 +30,20 @@ SIZE_EXPONENT = 0.5
 SIZE_FLOOR = 0.01
 #: Passages with fewer query tokens than this vote with a proportionally smaller weight.
 FULL_WEIGHT_TOKENS = 40
+#: A passage longer than this, of at least LINE_SPLIT_LINES lines, is a list with no blank line between its
+#: items (a summary chapter, a table) and is searched line by line: one query holding seven or more items
+#: finds the cards of only some of them. In the plugin's sources no prose paragraph was longer than 350
+#: characters; the summary chapter's item blocks were 294-722 characters of 5-12 lines, and searched as
+#: blocks found 52% of the cards the producer named for them in the first 5 (90% in the first 15), line by
+#: line all of them. The four blocks of 7 lines or more hold 39 of its 50 such items; 5 or 6 items fit in
+#: the first 15 of one query. On the plugin's ten sources the queries go from 222 to 490.
+LINE_SPLIT_CHARS = 400
+LINE_SPLIT_LINES = 7
 
 
 def passages(text: str) -> list[str]:
-    """Paragraph-sized query texts; a heading line is joined to the paragraph after it."""
+    """Paragraph-sized query texts; a heading line is joined to the paragraph after it, and a long block of
+    lines without a blank line between them (:data:`LINE_SPLIT_CHARS`) gives one query per line."""
     out, heading = [], ''
     for start, end, is_heading in _blocks(text):
         part = text[start:end].strip()
@@ -45,7 +55,11 @@ def passages(text: str) -> list[str]:
         if is_heading:
             first, _, rest = part.partition('\n')
             heading, part = (heading + ' ' + first.lstrip('#').strip()).strip(), rest.strip()
-        out.append((heading + '\n' + part).strip() if heading else part)
+        lines = [line.strip() for line in part.split('\n') if line.strip()]
+        if len(part) > LINE_SPLIT_CHARS and len(lines) >= LINE_SPLIT_LINES and not part.startswith(('```', '~~~')):
+            out += [(heading + '\n' + lines[0]).strip() if heading else lines[0], *lines[1:]]
+        else:
+            out.append((heading + '\n' + part).strip() if heading else part)
         heading = ''
     if heading:
         out.append(heading)

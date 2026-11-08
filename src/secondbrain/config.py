@@ -125,9 +125,11 @@ class IngestConfig:
     id_prefix: str = 'kc_'
     max_source_bytes: int = 8 * 1024 * 1024
     candidate_domains: int = 3
-    #: Candidate cards (secondbrain.retrieval): first-route cards per query ("auto": the built-in count of each
-    #: role), the characters of retrieved card views a packet may hold, and the second route's start points.
-    candidates_k: object = 'auto'
+    #: Candidate cards (secondbrain.retrieval): first-route cards per query, the same for every role (15: on
+    #: vaults of 197 to 8,738 cards no role found more with more; "auto": each role's count before 2026-11),
+    #: the characters of retrieved card views a packet may hold, and the second route's start points (off:
+    #: linked cards found no more repeats).
+    candidates_k: object = 15
     candidates_chars: int = 40000
     candidates_hop: int = 0
     #: The shelf (every card of a topic, by title) of each proposed card's topic in the reviewer packet.
@@ -459,7 +461,7 @@ after_ingest = "move"        # move | keep
 new_topics_per_source = 2
 converter = "none"           # none | markitdown
 id_prefix = "kc_"
-candidates_k = "auto"        # existing cards per query, or "auto" (each role's built-in count)
+candidates_k = 15            # existing cards per query, every role (or "auto": each role's count before 15)
 candidates_chars = 40000     # characters of retrieved card views per packet (named cards do not count)
 candidates_hop = 0           # second route: the cards the first N hits link (0: off)
 candidates_shelf = false     # the reviewer also sees the titles of every card in each card's topic
