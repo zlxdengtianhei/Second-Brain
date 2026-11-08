@@ -6,6 +6,7 @@ Answer `{"decision": "accept" | "revise", "restates": true | false, "reason": ".
 - `accept` when the card is faithful to the chunk (its source quotes, every proposition, every question and answer), readable without the source, one recallable unit, and does not restate the propositions of `existing_card`.
 - `restates`: true when one of its propositions says what a proposition of `existing_card` says, in any words. A card that restates is revised, never accepted. Do not judge it otherwise against `existing_card`: being narrower than that card is what it is meant to be.
 - `revise` with a concrete, checkable reason otherwise.
+- `matches`: for each proposition of `card` (`P1` is the first), the proposition of `existing_card` that says the same thing in any words, or `null` when none does: `[{"proposition": "P1", "existing": "P9"}, {"proposition": "P2", "existing": null}]`. A card with a proposition that matches is sent back to be written again without it.
 
 <!-- notes.definition -->
 

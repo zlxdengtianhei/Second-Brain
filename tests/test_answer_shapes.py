@@ -114,7 +114,9 @@ def merge_and_split_roles(tmp_path):
                                                   'carry': {'propositions': list(ARRIVAL['propositions'])}}})
     card = {'card': {**SPLIT_CARD, 'slug': 'lantern-skip-ahead-b', 'title': 'Skipping ahead, once more'}}
     verdict = {'decision': 'accept', 'restates': False, 'reason': 'faithful',
-               'notes': [{'category': 'minor', 'text': 'the title could be shorter'}]}
+               'notes': [{'category': 'minor', 'text': 'the title could be shorter'}],
+               'matches': [{'proposition': f'P{i}', 'existing': None}
+                           for i in range(1, len(card['card']['propositions']) + 1)]}
 
     def gate(role, chunk, candidate=None):
         return lambda payload: ingest.validate_submission(packet, payload, role=role, candidate=candidate, root=root,

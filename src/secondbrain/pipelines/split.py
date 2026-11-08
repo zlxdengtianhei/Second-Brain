@@ -50,7 +50,11 @@ CARD_SCHEMA = {
 REVIEW_SCHEMA = {
     'type': 'object', 'required': ['decision', 'restates', 'reason'],
     'properties': {'decision': {'type': 'string', 'enum': ['accept', 'revise']},
-                   'restates': {'type': 'boolean'}, 'reason': _STR, 'notes': review_notes.NOTES}}
+                   'restates': {'type': 'boolean'}, 'reason': _STR, 'notes': review_notes.NOTES,
+                   # each proposition of the card, and the proposition of the existing card that says it (D-22)
+                   'matches': {'type': 'array', 'items': {
+                       'type': 'object', 'required': ['proposition', 'existing'],
+                       'properties': {'proposition': _STR, 'existing': {'type': ['string', 'null']}}}}}}
 
 
 def is_slot(name: str | None) -> bool:
@@ -62,7 +66,7 @@ def slot_name(n: int) -> str:
 
 
 @shape_checked(CARD_SCHEMA, what='split card')
-def validate_card(item: dict, payload, *, text: str, taken: set, catalog_types) -> dict:
+def validate_card(item: dict, payload, *, text: str, taken: set, catalog_types, siblings=()) -> dict:
     """Raise ``ValueError`` listing every problem; return the payload.
 
     ``item`` is the split plan's entry (the card, its existing card's
@@ -94,6 +98,11 @@ def validate_card(item: dict, payload, *, text: str, taken: set, catalog_types) 
         errors.append('card.source_quotes must list verbatim passages of the chunk')
     else:
         errors += [f'card.source_quotes: {problem}' for problem in (check_verbatim(text, q) for q in quotes) if problem]
+    for p in props:  # D-22: the narrower cards of one card hold different points (asked again, never cut)
+        hit = next(((slug_, q) for slug_, qs in siblings for q in qs if same_text(p, q)), None)
+        if hit:
+            errors.append(f'card.propositions: {p!r} says what the narrower card {hit[0]} of {item["with"]} says '
+                          f'({hit[1]!r}); each narrower card holds its own points: leave it to that card')
     restated = [p for p in props if any(same_text(p, old) for old in item['existing_propositions'])]
     if restated:
         errors.append(f'card.propositions restate the propositions of {item["with"]} ({restated[0]!r}); keep only what '
@@ -111,7 +120,11 @@ def validate_card(item: dict, payload, *, text: str, taken: set, catalog_types) 
 
 
 @shape_checked(REVIEW_SCHEMA, payload=0, what='split review')
-def validate_review(payload) -> dict:
+def validate_review(payload, *, card: dict | None = None, existing: int | None = None) -> dict:
+    """The split review, checked; an accept goes back when it notes a blocking problem (D-18 3) or when ``matches``
+    pairs a proposition of ``card`` with one of the ``existing`` propositions of the card it narrows (D-22: the
+    program sends it back to be written again without it, never leaves it out). With ``card`` given, ``matches``
+    must name each of its propositions once."""
     if not isinstance(payload, dict) or payload.get('decision') not in ('accept', 'revise') or \
             not isinstance(payload.get('restates'), bool) or not isinstance(payload.get('reason'), str) or \
             not payload['reason'].strip():
@@ -119,8 +132,32 @@ def validate_review(payload) -> dict:
     if payload['decision'] == 'accept' and payload['restates']:
         raise ValueError('a card that restates the propositions of the card it narrows is not accepted; revise it')
     wrong = review_notes.problems(payload.get('notes'), 'review')
+    matched = []
+    if card is not None:
+        want = [f'P{i}' for i in range(1, len(card.get('propositions') or []) + 1)]
+        rows = payload.get('matches')
+        named = [r.get('proposition') for r in rows or [] if isinstance(r, dict)]
+        if rows is None or sorted(named) != sorted(want):
+            wrong.append(f'matches must name each proposition of the card once ({", ".join(want)}), each with the '
+                         'proposition of existing_card that says it in any words, or null')
+        for r in rows or []:
+            ref = r.get('existing') if isinstance(r, dict) else None
+            if ref is None:
+                continue
+            number = int(ref[1:]) if isinstance(ref, str) and re.fullmatch(r'P[1-9]\d*', ref) else 0
+            if not 1 <= number <= (existing or 0):
+                wrong.append(f'matches: {ref!r} for {r.get("proposition")} must be a proposition of existing_card '
+                             f'(P1–P{existing or 0}) or null')
+            else:
+                matched.append((r.get('proposition'), ref))
     if wrong:
         raise ValueError('the review was rejected by validation:\n- ' + '\n- '.join(wrong))
+    if matched and payload['decision'] == 'accept':  # D-22: a proposition the existing card says goes back
+        said = '; '.join(f'{p} says what the existing card {e} says' for p, e in matched)
+        payload = {**payload, 'decision': 'revise', 'restates': True,
+                   'reason': f'{said}: write the card again without it, keeping only what the existing card does '
+                             'not say',
+                   'turned': {'from': 'accept', 'reason': payload.get('reason'), 'matches': matched}}
     return review_notes.turned(payload)  # an accept with a blocking note goes back (D-18 3)
 
 

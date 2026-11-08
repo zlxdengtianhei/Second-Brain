@@ -4,7 +4,7 @@
 
 Write one card, in `card`:
 - It answers one question that is narrower than the question of `existing_card`: how that thing behaves in one case, one complete example of it, the answer to one of its sub-questions. Its title names that narrower question.
-- It holds only what `existing_card` does not say (`carry` lists what the patch would have added), plus the least it needs to be read on its own. Do not restate a proposition of `existing_card`, not even in other words; the program refuses a proposition that has the same words as one of them.
+- It holds only what `existing_card` does not say (`carry` lists what `card` would have added to it; other narrower cards of `existing_card` take what the other cards add), plus the least it needs to be read on its own. Do not restate a proposition of `existing_card`, not even in other words; the program refuses a proposition that has the same words as one of them.
 - `relations`: link `existing_card` (by its id) with `part_of` or `example_of`, whichever is true read as `A type B` with A this card; add other relations only when `card` had them.
 - `source_quotes`: passages copied character for character from `chunk.text`; the first one locates the card in the source.
 - `propositions`: 1–12; `flashcards`: 2–4 `{q, a}` pairs without `::`; `slug`: a new slug for this source; `kind`, `essence` and, when the chunk supports them, `intuition` and `confusions` as for any card. Refer to other cards only by `[[Title]]`.

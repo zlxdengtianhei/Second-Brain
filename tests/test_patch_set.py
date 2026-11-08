@@ -49,8 +49,11 @@ def reviewer(checks=None, *, check=None, rejudge=None, split_review=None, levels
             return (rejudge or (lambda p: {'slug': card['slug'], 'overlap': 'distinct', 'with': [],
                                            'reason': 'it answers its own question'}))(task.packet)
         if split.is_slot(task.chunk.split('.')[0]):
-            return (split_review or (lambda p: {'decision': 'accept', 'restates': False, 'reason': 'faithful'}))(
+            answer = (split_review or (lambda p: {'decision': 'accept', 'restates': False, 'reason': 'faithful'}))(
                 task.packet)
+            props = task.packet['card'].get('propositions') or []
+            return {'matches': [{'proposition': f'P{i}', 'existing': None} for i in range(1, len(props) + 1)],
+                    **answer}
         cand = task.packet['candidate']
         return {'cards': [{'slug': c['slug'], 'decision': 'accept', 'reason': 'ok',
                            **levels.get(c['slug'], {'overlap': 'distinct'})} for c in cand['cards']],
