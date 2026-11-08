@@ -151,6 +151,11 @@ class Service:
         if kind == 'ingest':
             from .pipelines.ingest import advance
             return advance(self.root, job_id, producer=producer, reviewer=reviewer, apply=apply)
+        if kind == 'export':
+            from .export.pipeline import advance as advance_export
+            from .export.checks import NodeMathJax
+            return advance_export(self.root, job_id, producer=producer, reviewer=reviewer,
+                                  checker=NodeMathJax.from_env())
         if kind == 'classification-batch':
             from .backlog import run as run_batch
             return run_batch(self.root, job_id, producer=producer, reviewer=reviewer, apply=apply)

@@ -16,7 +16,9 @@ api = ["httpx>=0.27,<1"]
 mcp = ["mcp==2.2.0"]
 review = ["fsrs==6.3.2"]
 curate = ["networkx>=3.7,<4"]
-test = ["pytest>=8", "httpx>=0.27,<1", "fsrs==6.3.2", "mcp==2.2.0", "networkx>=3.7,<4"]
+export = ["markdown>=3.5,<4", "pymdown-extensions>=10,<13"]
+test = ["pytest>=8", "httpx>=0.27,<1", "fsrs==6.3.2", "mcp==2.2.0", "networkx>=3.7,<4", "markdown>=3.5,<4",
+        "pymdown-extensions>=10,<13"]
 
 [project.scripts]
 sb = "secondbrain.cli:main"

@@ -133,6 +133,21 @@ def parser():
     diagrams = sub.add_parser('diagrams', help='Diagram batch tools (python -m secondbrain.diagrams)',
                               add_help=False)
     diagrams.add_argument('args', nargs=argparse.REMAINDER)
+    export = sub.add_parser('export', help="Write one map's cards up as an article (Markdown, optional HTML)")
+    scope = export.add_mutually_exclusive_group()
+    scope.add_argument('--domain', help='The map (MOC) of this domain')
+    scope.add_argument('--moc', help='The map with this title')
+    export.add_argument('--ids', nargs='+', help='Only these cards of the map')
+    export.add_argument('--mode', choices=['sequential', 'parallel'], default='sequential',
+                        help='Write unit after unit (each sees the previous one) or all units at once')
+    export.add_argument('--tag', default='', help='Free text kept in the job input; a new tag starts a new job')
+    export.add_argument('--job', help='Continue this export job (after host sub-agents submitted)')
+    export.add_argument('--out', type=Path, help='Folder for the article (default: [layout] articles in the vault)')
+    export.add_argument('--html', action='store_true', help='Also write an HTML page with typeset formulas')
+    export.add_argument('--executor', choices=['api', 'host'], help='Override [executor].default')
+    export.add_argument('--parallel', type=int, default=4, help='Concurrent model calls in API mode (1-8)')
+    export.add_argument('--max-rounds', type=int, help='Override [review] max_repair_rounds for this run')
+    export.add_argument('--prepare-only', action='store_true', help='Freeze the skeleton; no model call')
     job = sub.add_parser('job', help='Jobs, runs and host-mode hand-off')
     job_sub = job.add_subparsers(dest='job_command', required=True)
     job_sub.add_parser('list')
@@ -241,6 +256,33 @@ def _job(args, root: Path):
         return service.job_packet(args.id, args.role, args.chunk)
     producer, reviewer = make_executors(args, root)
     return service.job_advance(args.id, producer=producer, reviewer=reviewer, apply=not args.proposal_only)
+
+
+def _export(args, root: Path) -> dict:
+    from .export import pipeline
+    from .export.checks import NodeMathJax
+    from . import layout as layouts
+    if not 1 <= args.parallel <= 8:
+        raise ValueError('--parallel must be 1-8')
+    if args.max_rounds is not None:
+        if args.max_rounds < 0:
+            raise ValueError('--max-rounds must be 0 or more')
+        config.set_review_policy(replace(config.review_policy(), max_repair_rounds=args.max_rounds))
+    if args.job:
+        if args.domain or args.moc or args.ids:
+            raise ValueError('--job continues a frozen export; drop --domain/--moc/--ids')
+        job_id = args.job
+    else:
+        if not (args.domain or args.moc):
+            raise ValueError('Give --domain or --moc (or --job to continue)')
+        job_id = pipeline.prepare(root, domain=args.domain, moc=args.moc, ids=args.ids,
+                                  mode=args.mode, tag=args.tag)['job_id']
+    if args.prepare_only:
+        return jobs.load(root, job_id)
+    producer, reviewer = make_executors(args, root)
+    out = args.out if args.out is not None else root / layouts.of(root).articles
+    return pipeline.advance(root, job_id, producer=producer, reviewer=reviewer,
+                            checker=NodeMathJax.from_env(), workers=args.parallel, out_dir=out, html=args.html)
 
 
 def _review(args, root: Path):
@@ -473,6 +515,8 @@ def main(argv=None):
             result = _ingest(args, root)
         elif cmd == 'doctor':
             result = _doctor(args, root)
+        elif cmd == 'export':
+            result = _export(args, root)
         print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
         return 0
     except ExecutorFailure as exc:

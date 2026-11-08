@@ -44,6 +44,7 @@ PROJECTION_KIND = "projection"
 SUBMISSION_VALIDATORS = {
     'classification': 'secondbrain.classification:validate_submission',
     'ingest': 'secondbrain.pipelines.ingest:validate_submission',
+    'export': 'secondbrain.export.pipeline:validate_submission',
 }
 
 TERMINAL_STATUSES = {'applying', 'applied', 'partial', 'published', 'rolled_back', 'superseded'}

@@ -121,3 +121,15 @@ REVIEW_CARDS = {
                      'properties': {'decision': _DECISION, 'reason': _STR,
                                     'missing': {'type': 'array', 'items': _STR}}},
     }}
+
+#: `sb export`: one writing unit (paragraphs per part), and the smoothing step.
+EXPORT_WRITE = {'type': 'object', 'required': ['parts'],
+                'properties': {'parts': {'type': 'array', 'items': {
+                    'type': 'object', 'required': ['part', 'paragraphs'],
+                    'properties': {'part': _STR, 'paragraphs': {'type': 'array', 'items': _STR}}}}}}
+EXPORT_SMOOTH = {'type': 'object', 'required': ['intro', 'transitions', 'drop'],
+                 'properties': {'intro': _STR,
+                                'transitions': {'type': 'array', 'items': {
+                                    'type': 'object', 'required': ['section', 'text'],
+                                    'properties': {'section': _STR, 'text': _STR}}},
+                                'drop': {'type': 'array', 'items': _STR}}}

@@ -241,6 +241,17 @@ PAGES = {
 }
 
 
+#: `sb export` article text by language: the Typora hint under the front matter,
+#: the closing list of unused cards, and the section for cards without a valid place.
+EXPORT = {
+    'zh': {'hint': '> Typora：偏好设置 → Markdown → 勾选“内联公式”（Inline Math），然后重开 Typora；本文的行内公式写作 `$…$`。',
+           'unused': '未写进正文的卡', 'residual': '未归类的卡'},
+    'en': {'hint': '> Typora: Preferences → Markdown → tick "Inline Math", then reopen Typora; inline formulas here '
+                   'are written `$…$`.',
+           'unused': 'Cards not used in the text', 'residual': 'Unclassified cards'},
+}
+
+
 def language() -> str:
     """The active language: ``[cards] language``, or the vault's when the config file does not set it.
 
@@ -352,6 +363,11 @@ def install_hint(extra: str, lang: str | None = 'en') -> str:
 def moc(lang: str | None = None) -> dict:
     """Map page text for ``lang`` (default: the configured language)."""
     return MOC[lang or language()]
+
+
+def export(lang: str | None = None) -> dict:
+    """`sb export` article text for ``lang`` (default: the configured language)."""
+    return EXPORT[lang or language()]
 
 
 def pages(lang: str | None = None) -> dict:

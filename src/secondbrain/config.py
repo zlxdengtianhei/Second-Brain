@@ -424,6 +424,7 @@ sources = "40_Sources"
 inbox = "00_Inbox"
 reviews = "50_Reviews"
 data = "_data"
+articles = "60_Articles"  # where `sb export` writes articles
 entry_docs = []     # top-level notes whose generated blocks `sb docs` refreshes, e.g. ["Guide.md"]
 
 [executor]
