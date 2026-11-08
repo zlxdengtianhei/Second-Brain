@@ -414,7 +414,8 @@ def _said_twice(at: str, target: str, old: dict, added: list, replace: list, fla
     source) the same words are not sent back: the program leaves them out when it merges.
     """
     props = [str(p) for p in old.get('propositions') or []]
-    questions = [str(f.get('q')) for f in old.get('flashcards') or [] if isinstance(f, dict)]
+    old_flashcards = [f for f in old.get('flashcards') or [] if isinstance(f, dict)]
+    questions = [str(f.get('q')) for f in old_flashcards]
     errors, allowed = [], set()
     bys = [r.get('by') for r in replace if isinstance(r, dict) and isinstance(r.get('by'), str)]
     asked = [f.get('q') for f in flashcards if isinstance(f, dict) and isinstance(f.get('q'), str)]
@@ -465,11 +466,19 @@ def _said_twice(at: str, target: str, old: dict, added: list, replace: list, fla
             errors.append(f'{at}.replace[{k}].by {"says" if how == "exact" else "may say"} again what {target} P{n} '
                           f'says ({props[n - 1]!r}): replace P{n} instead, or leave that part out'
                           + ('' if how == 'exact' else ', or list it in differs with "from": "P' + str(n) + '"'))
-    for question in asked:
-        n, how = against(question, questions)
-        if how == 'exact' and exact_ok:
+    for carried_card in flashcards:
+        if not isinstance(carried_card, dict) or not isinstance(carried_card.get('q'), str):
             continue
-        if how == 'exact':
+        question, answer = carried_card['q'], carried_card.get('a')
+        n, how = against(question, questions)
+        if how == 'exact' and exact_ok and exact(answer, old_flashcards[n - 1].get('a')):
+            continue  # only the same question and answer, spaces put right, are left out by the program
+        if how == 'exact' and exact_ok:
+            if (question, f'Q{n}') not in allowed:
+                errors.append(f'{at}.flashcards: {question!r} asks what {target} Q{n} asks, but their answers differ '
+                              f'({old_flashcards[n - 1].get("a")!r} and {answer!r}): carry one complete pair, or '
+                              f'list it in differs with "from": "Q{n}" and why both answers are needed')
+        elif how == 'exact':
             errors.append(f'{at}.flashcards: {question!r} asks what {target} Q{n} asks ({questions[n - 1]!r}): '
                           'leave it out')
         elif how and (question, f'Q{n}') not in allowed:
@@ -720,7 +729,8 @@ def apply(settled: list[dict], frozen: dict, entries: list) -> tuple[list[dict],
             new_p.append(number)
         # only the same words once spaces are put right are left out here; anything the comparison only finds the
         # same went back to the merge check at validation (decision D-21)
-        have_p, have_q = {_spaced(x) for x in props}, {_spaced(f.get('q')) for f in flashcards}
+        have_p = {_spaced(x) for x in props}
+        have_flashcards = {(_spaced(f.get('q')), _spaced(f.get('a'))) for f in flashcards}
         for text in carry.get('propositions') or []:
             if _spaced(text) in have_p:  # the kept card says it already, word for word
                 skipped += 1
@@ -731,10 +741,11 @@ def apply(settled: list[dict], frozen: dict, entries: list) -> tuple[list[dict],
         for f in original[slug].get('flashcards') or []:
             if {'q': f.get('q'), 'a': f.get('a')} not in (carry.get('flashcards') or []):
                 continue
-            if _spaced(f.get('q')) in have_q:
+            pair = (_spaced(f.get('q')), _spaced(f.get('a')))
+            if pair in have_flashcards:
                 skipped += 1
                 continue
-            have_q.add(_spaced(f.get('q')))
+            have_flashcards.add(pair)
             flashcards.append(f)
             new_f.append(len(flashcards))
         keep['propositions'], keep['flashcards'] = props, flashcards

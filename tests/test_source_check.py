@@ -627,7 +627,7 @@ def test_a_carried_question_the_kept_card_already_asks_word_for_word_is_skipped(
                 'propositions': [f'{slug} one'], 'flashcards': flashcards, 'source_quotes': [f'{slug} quote'],
                 'relations': []}
     asked = [{'q': 'What does x hold?', 'a': 'one'}]
-    again = [{'q': 'What  does x hold?', 'a': 'the number one'}, {'q': 'Why is y kept?', 'a': 'y'}]  # spaces apart
+    again = [{'q': 'What  does x hold?', 'a': 'one'}, {'q': 'Why is y kept?', 'a': 'y'}]  # spaces apart
     settled = [{'chunk': 'c01', 'accepted': {'a': card('a', asked)}, 'topics': {}},
                {'chunk': 'c02', 'accepted': {'b': card('b', again)}, 'topics': {}}]
     frozen = source_check.frozen_input(settled, {'filename': 'f'}, relation_views={})
@@ -642,6 +642,31 @@ def test_a_carried_question_the_kept_card_already_asks_word_for_word_is_skipped(
     assert report['merged'][0]['carried'] == {'propositions': 0, 'flashcards': 1}
     assert report['merged'][0]['repeats_skipped'] == 1
     assert kept['_carried'] == [{'locator': 'b quote', 'propositions': [], 'flashcards': [2]}]
+
+
+def test_a_carried_question_with_a_different_answer_goes_back_and_is_not_dropped():
+    def card(slug, answer):
+        return {'slug': slug, 'title': slug, 'domain': 'd', 'pillar': 'p', 'topic': 't', 'essence': 'e',
+                'propositions': [f'{slug} one'], 'flashcards': [{'q': 'What does x hold?', 'a': answer}],
+                'source_quotes': [f'{slug} quote'], 'relations': []}
+    settled = [{'chunk': 'c01', 'accepted': {'a': card('a', 'one')}, 'topics': {}},
+               {'chunk': 'c02', 'accepted': {'b': card('b', 'one, with the units and an example')}, 'topics': {}}]
+    frozen = source_check.frozen_input(settled, {'filename': 'f'}, relation_views={})
+    carried = settled[1]['accepted']['b']['flashcards']
+    reply = {'cards': [{'slug': 'a', 'overlap': 'distinct', 'alone': 'a fact of its own'},
+                       {'slug': 'b', 'overlap': 'extends', 'with': ['a'], 'reason': 'r',
+                        'carry': {'flashcards': carried, 'already': [{'text': 'b one', 'as': 'P1'}]}}],
+             'new_topics': []}
+    with pytest.raises(ValueError, match='answers differ') as refused:
+        source_check.validate_answer(frozen, reply)
+    assert 'What does x hold?' in str(refused.value) and 'one, with the units and an example' in str(refused.value)
+    reply['cards'][1]['carry']['differs'] = [
+        {'text': 'What does x hold?', 'from': 'Q1', 'reason': 'the fuller answer retains separate units and an example'}]
+    assert source_check.validate_answer(frozen, reply) is reply
+    kept, report, _ = applied(settled, frozen, reply)
+    assert kept['a']['flashcards'] == [settled[0]['accepted']['a']['flashcards'][0], carried[0]]
+    assert report['merged'][0]['carried'] == {'propositions': 0, 'flashcards': 1}
+    assert 'repeats_skipped' not in report['merged'][0]
 
 
 def test_an_extends_card_accounts_for_every_proposition_and_a_card_too_large_to_merge_is_kept_apart():
