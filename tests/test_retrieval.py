@@ -10,6 +10,7 @@ import pytest
 
 from secondbrain import cards as cardfmt
 from secondbrain import config, jobs, retrieval, search
+from secondbrain.export import skeleton
 from secondbrain.pipelines import ingest, source_check
 from secondbrain.service import Service
 from secondbrain.vault import Card, Snapshot, read_snapshot
@@ -113,7 +114,8 @@ def test_past_the_budget_titles_go_last_and_the_report_says_so():
 # --- every packet takes existing cards through cards.view -------------------------------------------------------
 PACKET_BUILDERS = [ingest.producer_packet, ingest.review_packet, ingest._review_candidates,
                    ingest._producer_candidates, ingest._source_check_input, ingest.retry,
-                   source_check.frozen_input, retrieval.candidates, retrieval.fit]
+                   source_check.frozen_input, retrieval.candidates, retrieval.fit,
+                   skeleton.build, skeleton._card_entry]
 
 
 def body_reads(source: str) -> list[int]:

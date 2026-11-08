@@ -172,6 +172,24 @@ class IngestConfig:
             raise ValueError('ingest.context_note_chars must be a whole number from 200 to 20000')
 
 
+#: How `sb export` writes: unit after unit, each writer seeing the end of the unit before (the default; in the
+#: export experiment no worse than writing all at once and the safer default), or every unit at once.
+EXPORT_MODES = ('sequential', 'parallel')
+
+
+@dataclass(frozen=True)
+class ExportConfig:
+    mode: str = 'sequential'
+    #: The models that write and review articles; unset, `sb export` uses [executor.producer] and
+    #: [executor.reviewer]. The owner picks them ([export.writer], [export.reviewer]).
+    writer: 'EndpointConfig | None' = None
+    reviewer: 'EndpointConfig | None' = None
+
+    def __post_init__(self):
+        if self.mode not in EXPORT_MODES:
+            raise ValueError(f'export.mode must be one of {", ".join(EXPORT_MODES)}')
+
+
 @dataclass(frozen=True)
 class Settings:
     vault: Path | None = None
@@ -181,6 +199,7 @@ class Settings:
     reviewer: EndpointConfig | None = None
     review: ReviewPolicy = field(default_factory=ReviewPolicy)
     ingest: IngestConfig = field(default_factory=IngestConfig)
+    export: ExportConfig = field(default_factory=ExportConfig)
     card_language: str = 'en'         # en | zh (card headings and the text of generated pages)
     card_language_set: bool = False   # the config file sets [cards] language (else the vault's is used)
     card_diagrams: bool = True        # run the diagram step after review (secondbrain.diagrams)
@@ -209,7 +228,7 @@ def _dataclass(cls, values: dict, name: str):
 
 def parse(data: dict, *, source: Path | None = None) -> Settings:
     top = {'vault', 'layout', 'executor', 'review', 'model_families', 'ingest', 'cards',
-           'taxonomy', 'git', 'state_dir'}
+           'taxonomy', 'git', 'state_dir', 'export'}
     unknown = sorted(set(data) - top)
     if unknown:
         raise ValueError(f'Unknown config sections or keys: {unknown}')
@@ -234,6 +253,10 @@ def parse(data: dict, *, source: Path | None = None) -> Settings:
         raise ValueError('[cards] diagrams must be true or false')
     taxonomy = _section(data, 'taxonomy')
     git = _section(data, 'git')
+    export = dict(_section(data, 'export'))
+    models = {role: export.pop(role, None) for role in ('writer', 'reviewer')}
+    export = _dataclass(ExportConfig, {**export, **{role: _dataclass(EndpointConfig, value, f'export.{role}')
+                                                    for role, value in models.items() if value}}, 'export')
     vault = data.get('vault')
     state = data.get('state_dir')
     return Settings(
@@ -244,6 +267,7 @@ def parse(data: dict, *, source: Path | None = None) -> Settings:
         reviewer=_dataclass(EndpointConfig, endpoints['reviewer'], 'executor.reviewer') if endpoints['reviewer'] else None,
         review=review,
         ingest=_dataclass(IngestConfig, _ingest_keys(_section(data, 'ingest')), 'ingest'),
+        export=export,
         card_language=language,
         card_language_set='language' in cards,
         card_diagrams=diagrams,
@@ -482,4 +506,18 @@ extra_reviewers = 0
 
 [git]
 commit = false
+
+[export]
+mode = "sequential"          # sequential | parallel: write unit after unit, or every unit at once
+# The models that write and review articles; unset, [executor.producer] and [executor.reviewer] are used.
+# [export.writer]
+# kind = "openai"
+# base_url = "https://api.example.com/v1"
+# model = "writer-model"
+# api_key_env = "SB_WRITER_API_KEY"
+# [export.reviewer]           # a model of a different family than the writer
+# kind = "anthropic"
+# base_url = "https://api.anthropic.com"
+# model = "reviewer-model"
+# api_key_env = "SB_REVIEWER_API_KEY"
 '''

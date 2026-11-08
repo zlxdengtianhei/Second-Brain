@@ -346,3 +346,65 @@ def test_cli_prepare_only(vault_root, tmp_path, capsys):
     state = json.loads(capsys.readouterr().out)
     assert state["kind"] == "export" and state["status"] == "prepared"
     assert re.fullmatch(r"export-[0-9a-f]{16}", state["job_id"])
+
+
+# --------------------------------------------------------------------------
+# Defaults (decision D-11): sequential writing; the writer and its reviewer are the owner's choice
+# --------------------------------------------------------------------------
+WRITER = ('[export.writer]\nkind = "openai"\nbase_url = "https://api.example.com/v1"\nmodel = "glm-writer"\n'
+          'api_key_env = "SB_TEST_WRITER"\n')
+ENDPOINTS = ('[executor.producer]\nkind = "openai"\nbase_url = "https://api.example.com/v1"\nmodel = "gpt-a"\n'
+             'api_key_env = "SB_TEST_P"\n[executor.reviewer]\nkind = "anthropic"\n'
+             'base_url = "https://api.example.com"\nmodel = "claude-b"\napi_key_env = "SB_TEST_R"\n')
+
+
+def _prepared_mode(vault_root, tmp_path, capsys, toml, *extra):
+    from secondbrain.cli import main
+    cfg = tmp_path / "mode.toml"
+    cfg.write_text('[cards]\nlanguage = "zh"\n' + toml, encoding="utf-8")
+    assert main(["--vault", str(vault_root), "--config", str(cfg), "export", "--domain", DOMAIN,
+                 "--prepare-only", *extra]) == 0
+    state = json.loads(capsys.readouterr().out)
+    return jobs.read_input(vault_root, state["job_id"])["mode"]
+
+
+def test_an_export_is_written_unit_after_unit_unless_the_config_or_the_command_says_otherwise(vault_root, tmp_path,
+                                                                                              capsys):
+    assert config.ExportConfig().mode == "sequential"
+    assert _prepared_mode(vault_root, tmp_path, capsys, "") == "sequential"
+    assert _prepared_mode(vault_root, tmp_path, capsys, '[export]\nmode = "parallel"\n') == "parallel"
+    assert _prepared_mode(vault_root, tmp_path, capsys, '[export]\nmode = "parallel"\n',
+                          "--mode", "sequential") == "sequential"
+
+
+def test_the_export_writer_and_reviewer_come_from_export_else_from_the_executor(tmp_path):
+    from types import SimpleNamespace
+    from secondbrain.cli import export_executors
+    cfg = tmp_path / "w.toml"
+    cfg.write_text(ENDPOINTS + WRITER, encoding="utf-8")
+    config.activate(config.load(cfg))
+    writer, reviewer = export_executors(SimpleNamespace(executor="api"), tmp_path)
+    assert writer.endpoint.model == "glm-writer" and reviewer.endpoint.model == "claude-b"
+    cfg.write_text(ENDPOINTS, encoding="utf-8")
+    config.activate(config.load(cfg))
+    writer, reviewer = export_executors(SimpleNamespace(executor="api"), tmp_path)
+    assert writer.endpoint.model == "gpt-a"
+
+
+@pytest.mark.parametrize("toml, problem", [
+    ('[export]\nmode = "both"\n', "export.mode must be one of sequential, parallel"),
+    ('[export]\nwriter_model = "x"\n', "Unknown \\[export\\] keys"),
+    ('[export.writer]\nkind = "openai"\nmodel = "m"\napi_key = "secret"\n', "must not contain api_key"),
+])
+def test_the_export_section_is_checked(tmp_path, toml, problem):
+    cfg = tmp_path / "bad.toml"
+    cfg.write_text(toml, encoding="utf-8")
+    with pytest.raises(ValueError, match=problem):
+        config.load(cfg)
+
+
+def test_the_writer_reads_cards_through_their_view(vault_root):
+    card = next(iter(_snapshot(vault_root).cards.values()))
+    entry = skeleton._card_entry(card)
+    from secondbrain.cards import view
+    assert entry["body"] == skeleton.body_view(view(card, "body")["body"]) and "复习卡" not in entry["body"]

@@ -138,8 +138,9 @@ def parser():
     scope.add_argument('--domain', help='The map (MOC) of this domain')
     scope.add_argument('--moc', help='The map with this title')
     export.add_argument('--ids', nargs='+', help='Only these cards of the map')
-    export.add_argument('--mode', choices=['sequential', 'parallel'], default='sequential',
-                        help='Write unit after unit (each sees the previous one) or all units at once')
+    export.add_argument('--mode', choices=['sequential', 'parallel'],
+                        help='Write unit after unit (each sees the previous one) or all units at once '
+                             '(default: [export] mode, sequential)')
     export.add_argument('--tag', default='', help='Free text kept in the job input; a new tag starts a new job')
     export.add_argument('--job', help='Continue this export job (after host sub-agents submitted)')
     export.add_argument('--out', type=Path, help='Folder for the article (default: [layout] articles in the vault)')
@@ -186,6 +187,18 @@ def make_executors(args, root: Path):
     """Return ``(producer, reviewer)`` executors for this invocation."""
     from .executors.factory import build
     return build(config.current(), getattr(args, 'executor', None), vault=str(root))
+
+
+def export_executors(args, root: Path):
+    """``(writer, reviewer)`` for `sb export`: [export.writer] and [export.reviewer] when set, each falling back to
+    the [executor] producer and reviewer."""
+    from .executors.factory import build
+    settings = config.current()
+    chosen = settings.export
+    if chosen.writer or chosen.reviewer:
+        settings = replace(settings, producer=chosen.writer or settings.producer,
+                           reviewer=chosen.reviewer or settings.reviewer)
+    return build(settings, getattr(args, 'executor', None), vault=str(root))
 
 
 def _ingest(args, root: Path) -> list:
@@ -276,10 +289,10 @@ def _export(args, root: Path) -> dict:
         if not (args.domain or args.moc):
             raise ValueError('Give --domain or --moc (or --job to continue)')
         job_id = pipeline.prepare(root, domain=args.domain, moc=args.moc, ids=args.ids,
-                                  mode=args.mode, tag=args.tag)['job_id']
+                                  mode=args.mode or config.current().export.mode, tag=args.tag)['job_id']
     if args.prepare_only:
         return jobs.load(root, job_id)
-    producer, reviewer = make_executors(args, root)
+    producer, reviewer = export_executors(args, root)
     out = args.out if args.out is not None else root / layouts.of(root).articles
     return pipeline.advance(root, job_id, producer=producer, reviewer=reviewer,
                             checker=NodeMathJax.from_env(), workers=args.parallel, out_dir=out, html=args.html)

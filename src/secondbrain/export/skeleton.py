@@ -55,6 +55,14 @@ def body_view(body: str) -> str:
     return '\n'.join(out).strip() + '\n'
 
 
+def _card_entry(card) -> dict:
+    """What the writer gets of a card: its whole-body view (:func:`secondbrain.cards.view`, the one way packets
+    read cards) without links, review cards and diagram, and how to cite it."""
+    shown = card_text.view(card, 'body')
+    return {'id': shown['id'], 'title': shown['title'], 'cite': link_name(card), 'kind': card.fm.get('kind'),
+            'sha256': card.sha256, 'body': body_view(shown['body'])}
+
+
 def link_name(card) -> str:
     """What goes inside ``[[...]]`` for this card (the file name, as Obsidian resolves it)."""
     return PurePosixPath(card.path).stem
@@ -200,8 +208,7 @@ def build(snapshot, *, domain: str | None = None, moc: str | None = None, ids: l
         out_sections.append({'pillar': section['pillar'], 'order': section['order'], 'why': section['why'],
                              'units': section_units, 'residual': bool(section.get('residual'))})
 
-    cards = {c.id: {'id': c.id, 'title': c.title, 'cite': link_name(c), 'kind': c.fm.get('kind'),
-                    'sha256': c.sha256, 'body': body_view(c.body)} for c in chosen}
+    cards = {c.id: _card_entry(c) for c in chosen}
     links = sorted({link_name(c) for c in snapshot.cards.values()} | {c.title for c in snapshot.cards.values()})
     return {'schema': SCHEMA, 'moc': title, 'domains': domains, 'narrative': narrative,
             'language': language, 'mode': mode, 'tag': tag, 'length_unit': 'chars' if language == 'zh' else 'words',
