@@ -41,6 +41,7 @@ from ..locks import job_lock
 from ..store import Change, Conflict, digest, read_bytes
 from ..vault import Card, append_list_items, parse_note, read_snapshot
 from .. import retrieval
+from . import amend as amends
 from . import card_diagrams, chunking, notes, source_check, split
 from .chunking import chunk_text
 from .routing import route
@@ -759,7 +760,7 @@ def _note_step(root: Path, job_id: str, state: dict, packet: dict, slot: str, pr
             raise
         failed = int(info.get('invalid_outputs', 0)) + 1
         fields = {'invalid_outputs': failed, 'last_validation_error': failure.error.get('message', '')[:4000]}
-        if failed > jobs.policy_of(packet).max_repair_rounds:
+        if failed > jobs.policy_of(packet).max_invalid_retries:
             fields['skipped'] = f'the note failed validation {failed} times; the chunk has the program\'s note alone'
         _mark_slot(root, job_id, slot, **fields)
 
@@ -926,6 +927,8 @@ def review_packet(root: Path, state: dict, packet: dict, slot: str) -> dict:
         out['already_accepted_cards'] = [withhold_reasons(c) for s, c in kept.items()
                                          if s not in refiled and s not in held]
         out['already_settled'] = _settled_rows(root, state, base, rnd)
+        if jobs.policy_of(packet).focused_review:  # what the round before sent back, to be judged fixed or not
+            out['previous_findings'] = _findings(jobs.artifact(root, state, 'review', _slot_name(base, rnd - 1)))
     if packet.get('retry'):
         out['retry'] = _retry_view(packet, base, reviewer=True)
     return out
@@ -1311,6 +1314,8 @@ def validate_review(candidate: dict, review: dict, existing_ids: set, domains=()
                 errors.append(f'{row["slug"]}: {problem}')
             elif level == 'extends':
                 linked = {r.get('target') for r in by_slug[row['slug']].get('relations') or [] if isinstance(r, dict)}
+                linked |= {a.get('target') for a in row.get('amend') or []
+                           if isinstance(a, dict) and a.get('op') == 'add_relation'}
                 if held[0] not in linked:
                     errors.append(f'{row["slug"]}: an `extends` card links the card it extends ({held[0]}); revise '
                                   'and ask for the link')
@@ -1338,6 +1343,58 @@ def validate_review(candidate: dict, review: dict, existing_ids: set, domains=()
     return review
 
 
+def _check_focused(packet: dict, state: dict, chunk: str, review: dict) -> None:
+    """In a focused repair round (``[review] focused_review``) a card is revised only for an earlier finding that
+    is not fixed or for a blocking problem (:data:`secondbrain.schemas.BLOCKING`); anything else goes to ``notes``."""
+    if not jobs.policy_of(packet).focused_review or not _round(chunk):
+        return
+    errors = []
+    for row in review.get('cards') or []:
+        if row.get('decision') != 'revise':
+            continue
+        unfixed = any(isinstance(f, dict) and f.get('fixed') is False for f in row.get('fixed') or [])
+        if not unfixed and row.get('blocking') not in schemas.BLOCKING:
+            errors.append(f'{row["slug"]}: in a repair round a card is revised only for an earlier finding that is '
+                          f'not fixed (fixed: [{{"finding": ..., "fixed": false}}]) or a blocking problem (blocking: '
+                          f'{", ".join(schemas.BLOCKING)}); put other problems in notes')
+    if errors:
+        raise IngestError('Review rejected by validation:\n- ' + '\n- '.join(errors))
+
+
+def _made_amends(root: Path, packet: dict, state: dict, chunk: str, candidate: dict, review: dict,
+                 existing_domains: dict) -> dict:
+    """The review with each accepted card's mechanical fixes checked (:mod:`amend`); a card whose fixes are not legal
+    is revised instead. A malformed ``amend``, one on a revised card, or any when the job takes none, is refused."""
+    rows = review.get('cards') or []
+    given = [r for r in rows if r.get('amend')]
+    if not given:
+        return review
+    errors = [p for r in given for p in amends.shape_problems(r['slug'], r['amend'])]
+    if not jobs.policy_of(packet).amend:
+        errors.append('this job takes no mechanical fixes ([review] amend is off): revise the card instead')
+    errors += [f'{r["slug"]}: a mechanical fix comes only with accept' for r in given if r.get('decision') != 'accept']
+    if errors:
+        raise IngestError('Review rejected by validation:\n- ' + '\n- '.join(errors))
+    cards = {c['slug']: c for c in candidate.get('cards') or []}
+    others = {c['slug']: c.get('domain') for c in _other_cards(root, state, packet, _base(chunk))}
+    domains = {**existing_domains, **{s: c.get('domain') for s, c in cards.items()}, **others,
+               **{s: existing_domains.get(i) for s, i in _written_slugs(packet).items()}}
+
+    def legal(domain, pillar, topic):
+        return domain in packet['catalog']['domains'] and (pillar, topic) in _legal_pairs(packet, domain)
+    out = []
+    for row in rows:
+        if not row.get('amend'):
+            out.append(row)
+            continue
+        card = cards[row['slug']]
+        why = amends.problems(card, row['amend'], closed=lambda kind, domain, target: _closed_relation(
+            packet['catalog'], kind, domain, target), legal=legal, domain_of=domains.get,
+            keep_link=(row.get('with') or [None])[0] if row.get('overlap') == 'extends' else None)
+        out.append(amends.refused(row, why) if why else row)
+    return {**review, 'cards': out}
+
+
 def validate_submission(packet: dict, payload: dict, *, role: str, candidate=None,
                         root=None, chunk=None, state=None) -> dict:
     """jobs.submit hook: S4 for producers, shape checks for reviewers."""
@@ -1363,7 +1420,9 @@ def validate_submission(packet: dict, payload: dict, *, role: str, candidate=Non
                                    catalog_types=set(_relation_types(packet['catalog'])))
     existing_ids, existing_titles, existing_domains = _vault_ids_titles(root)
     if role == 'reviewer':
-        return validate_review(candidate, payload, existing_ids, packet['catalog']['domains'])
+        review = validate_review(candidate, payload, existing_ids, packet['catalog']['domains'])
+        _check_focused(packet, state, chunk, review)
+        return _made_amends(root, packet, state, chunk, candidate, review, existing_domains)
     base, rnd = _base(chunk), _round(chunk)
     kept = _accepted_so_far(root, state, base, rnd) if rnd else {}
     others = _other_cards(root, state, packet, base)
@@ -1481,7 +1540,8 @@ def record_decisions(packet: dict, payload: dict, *, role: str, candidate, root,
     rows = {r['slug']: r for r in payload.get('cards') or []}
     for card in candidate.get('cards') or []:
         slug, row = card['slug'], rows[card['slug']]
-        decisions.record(entries, 'verdict', slug, {'decision': row['decision'], 'chunk': base, 'reason': row['reason']},
+        decisions.record(entries, 'verdict', slug, {'decision': row['decision'], 'chunk': base, 'reason': row['reason'],
+                                                    **({'amend': row['amend']} if row.get('amend') else {})},
                          role='reviewer', slot=chunk, run=run['run_id'],
                          reason=_again(entries, 'verdict', slug, chunk, facts), facts=facts)
         if row['decision'] != 'accept':
@@ -1495,6 +1555,15 @@ def record_decisions(packet: dict, payload: dict, *, role: str, candidate, root,
         decisions.step(entries, 'relations', slug, 'create', role='producer', slot=chunk, run=producer_run,
                        data={'relations': relations}, facts=facts,
                        reason=_again(entries, 'relations', slug, chunk, facts, chain=True))
+        fixes = row.get('amend') or []
+        for item in fixes:  # the reviewer's mechanical fixes, after the producer's relations
+            if item['op'] == 'add_relation':
+                decisions.step(entries, 'relations', slug, 'add_relation', role='reviewer', slot=chunk,
+                               run=run['run_id'], data={'relation': {k: item[k] for k in ('type', 'target', 'note',
+                                                                                          'tier') if item.get(k)}})
+            elif item['op'] in amends.RELATION_OPS:
+                decisions.step(entries, 'relations', slug, item['op'], role='reviewer', slot=chunk, run=run['run_id'],
+                               data={k: item[k] for k in ('type', 'target', 'note') if item.get(k)})
         place = {k: card.get(k) for k in ('domain', 'pillar', 'topic')}
         again = _again(entries, 'classification', slug, chunk, facts, chain=True)
         if packet.get('placement') and again is None:
@@ -1502,8 +1571,13 @@ def record_decisions(packet: dict, payload: dict, *, role: str, candidate, root,
                            data=dict(packet['placement']))
         decisions.step(entries, 'classification', slug, 'propose', role='producer', slot=chunk, run=producer_run,
                        data=place, reason=again, facts=facts)
-        decisions.step(entries, 'classification', slug, 'accept', role='reviewer', slot=chunk, run=run['run_id'],
-                       data=place)
+        if any(i['op'] == 'refile' for i in fixes):  # where a card is filed is the reviewer's decision
+            fixed = amends.apply(card, fixes)
+            decisions.step(entries, 'classification', slug, 'refile', role='reviewer', slot=chunk, run=run['run_id'],
+                           data={k: fixed[k] for k in ('domain', 'pillar', 'topic')})
+        else:
+            decisions.step(entries, 'classification', slug, 'accept', role='reviewer', slot=chunk, run=run['run_id'],
+                           data=place)
     coverage = payload.get('coverage') or {}
     decisions.record(entries, 'coverage', base, {'decision': coverage.get('decision'), 'reason': coverage.get('reason')},
                      role='reviewer', slot=chunk, run=run['run_id'],
@@ -1592,24 +1666,35 @@ def _accepted_so_far(root, state, base: str, upto_round: int) -> dict:
         decisions = {r['slug']: r for r in review.get('cards', [])}
         for c in cand.get('cards', []):
             if decisions.get(c['slug'], {}).get('decision') == 'accept':
-                accepted[c['slug']] = c
+                accepted[c['slug']] = amends.apply(c, decisions[c['slug']].get('amend'))
             else:
                 accepted.pop(c['slug'], None)
     return accepted
+
+
+def _failed(info: dict) -> int:
+    """How many answers for one slot failed the program's checks."""
+    return int(info.get('invalid_outputs', 0))
+
+
+def _retries_left(info: dict, rules) -> bool:
+    """Whether a slot whose answers failed the program's checks may be asked again (``max_invalid_retries``)."""
+    return _failed(info) <= rules.max_invalid_retries
 
 
 def chunk_outcome(root: Path, state: dict, packet: dict, base: str) -> dict:
     """Merge rounds of one chunk; ``next`` names the step still needed, if any."""
     slots = _slots(state, base)
     info0 = (state.get('chunks') or {}).get(base) or {}
-    max_rounds = jobs.policy_of(packet).max_repair_rounds
-    used = int(info0.get('invalid_outputs', 0)) + sum(1 for _, i in slots[1:] if i.get('candidate'))
-    out = {'chunk': base, 'settled': False, 'next': None, 'accepted': {}, 'pending': [],
+    rules = jobs.policy_of(packet)
+    max_rounds = rules.max_repair_rounds
+    used = len(slots) - 1  # content repair rounds begun; format retries are counted per slot (_retries_left)
+    out = {'chunk': base, 'settled': False, 'next': None, 'accepted': {}, 'pending': [], 'amended': [], 'notes': [],
            'duplicates': [], 'topics': {}, 'needs_taxonomy': [], 'skipped': [], 'conflicts': []}
     if not slots or not slots[0][1].get('candidate'):
-        if used > max_rounds:
+        if not _retries_left(info0, rules):
             out.update(settled=True, pending=[{'scope': 'chunk', 'chunk': base, 'reason':
-                       'the producer output failed validation in every allowed round: '
+                       f'the producer output failed validation {_failed(info0)} times: '
                        + str(info0.get('last_validation_error') or '')[:2000]}])
             return out
         note = _note_due(state, packet, base)
@@ -1623,17 +1708,22 @@ def chunk_outcome(root: Path, state: dict, packet: dict, base: str) -> dict:
     dups: dict = {}
     needs_tax, skipped = [], []
     conflicts: dict = {}
+    notes: list = []
+    unreviewed = None
     merged_rounds = 0
     for slot, info in slots:
         if not info.get('candidate'):
-            # a repair round whose output failed validation: retry while budget lasts
-            if used < max_rounds:
+            # a repair round whose output failed validation: ask again while its retries last
+            if _retries_left(info, rules):
                 out['next'] = ('repair', slot)
                 return out
             break
         if not info.get('review'):
-            out['next'] = ('review', slot)
-            return out
+            if int(info.get('invalid_reviews', 0)) <= rules.max_invalid_retries:
+                out['next'] = ('review', slot)
+                return out
+            unreviewed = (slot, info)  # its review kept failing the checks: its cards stay pending
+            break
         merged_rounds += 1
         review = jobs.require_independent_review(root, state, slot)
         cand = jobs.artifact(root, state, 'candidate', slot)
@@ -1651,8 +1741,11 @@ def chunk_outcome(root: Path, state: dict, packet: dict, base: str) -> dict:
                     conflicts[(c['slug'], row['with'])] = {'slug': c['slug'], 'title': c.get('title'),
                                                           'with': row['with'], 'detail': row['detail'],
                                                           'by': by, 'chunk': base}
+            notes += [{'chunk': base, 'slot': slot, 'slug': c['slug'], 'note': n} for n in d.get('notes') or []]
             if d['decision'] == 'accept':  # whether it is written is the outcome of its level (secondbrain.overlap)
-                accepted[c['slug']] = {**c, '_slot': slot}
+                accepted[c['slug']] = {**amends.apply(c, d.get('amend')), '_slot': slot,
+                                       **({'_amend': d['amend'], '_amended': amends.changes(c, d['amend'])}
+                                          if d.get('amend') else {})}
                 held.discard(c['slug'])
                 if _held_by(d) is not None:  # not written: its taxonomy place does not matter
                     held.add(c['slug'])
@@ -1688,6 +1781,13 @@ def chunk_outcome(root: Path, state: dict, packet: dict, base: str) -> dict:
     pending = list(open_cards.values())
     if open_coverage:
         pending.append(open_coverage)
+    if unreviewed:
+        slot, info = unreviewed
+        why = (f'the review of {slot} failed validation {info.get("invalid_reviews")} times: '
+               + str(info.get('last_review_error') or '')[:500])
+        for c in jobs.artifact(root, state, 'candidate', slot).get('cards', []):
+            if c['slug'] not in open_cards and c['slug'] not in accepted:
+                pending.append({'slug': c['slug'], 'title': c.get('title'), 'reason': why, 'chunk': base})
     for slug, card in list(accepted.items()):
         key = (card['domain'], card['pillar'], card['topic'])
         if key in topic_state and topic_state[key]['decision'] != 'accept' and slug not in held:
@@ -1695,6 +1795,9 @@ def chunk_outcome(root: Path, state: dict, packet: dict, base: str) -> dict:
             pending.append({'slug': slug, 'title': card['title'], 'chunk': base,
                             'reason': f'its new topic {key[2]!r} was not accepted: '
                                       f'{topic_state[key]["review_reason"]}'})
+    out['amended'] = [{'slug': s, 'chunk': base, 'slot': c['_slot'], **row} for s, c in accepted.items()
+                      for row in c.get('_amended') or []]
+    out['notes'] = notes
     out.update(settled=True, accepted=accepted, pending=pending, duplicates=list(dups.values()),
                topics={k: v for k, v in topic_state.items() if v['decision'] == 'accept'},
                needs_taxonomy=needs_tax, skipped=skipped, conflicts=list(conflicts.values()))
@@ -1718,9 +1821,17 @@ def _step(root: Path, job_id: str, action: tuple, producer, reviewer) -> None:
         _note_step(root, job_id, state, packet, slot, producer)
         return
     if kind == 'review':
+        rules = jobs.policy_of(packet)
         text = _prompt('review_cards.md', state)
+        if rules.amend:
+            text += '\n' + _prompt_only('review_amend.md')
+        if rules.focused_review and _round(slot):
+            text += '\n' + _prompt_only('review_focused.md')
         if packet.get('retry'):
             text += '\n' + _prompt_only('retry_review_cards.md')
+        feedback = ((state.get('chunks') or {}).get(slot) or {}).get('last_review_error')
+        if feedback:
+            text += '\n## Your previous answer was rejected by the validator\n\n' + feedback + '\n'
         try:
             shown = review_packet(root, state, packet, slot)
         except retrieval.TooLarge as exc:
@@ -1729,8 +1840,15 @@ def _step(root: Path, job_id: str, action: tuple, producer, reviewer) -> None:
                 _record_split(root, job_id, slot, str(exc))
                 return
             raise
-        call_executor(root, job_id, reviewer, role='reviewer', step='review', prompt_text=text,
-                      packet=shown, output_schema=schemas.REVIEW_CARDS, chunk=slot)
+        try:
+            call_executor(root, job_id, reviewer, role='reviewer', step='review', prompt_text=text,
+                          packet=shown, output_schema=schemas.REVIEW_CARDS, chunk=slot)
+        except ExecutorFailure as failure:
+            if failure.code != INVALID_OUTPUT:
+                raise
+            info = (state.get('chunks') or {}).get(slot) or {}
+            _mark_slot(root, job_id, slot, invalid_reviews=int(info.get('invalid_reviews', 0)) + 1,
+                       last_review_error=failure.error.get('message', '')[:8000])
         return
     text = _prompt('produce_cards.md', state)
     if packet.get('retry'):
@@ -1777,11 +1895,12 @@ def _record_invalid(root: Path, job_id: str, base: str, slot: str, message: str)
     with vault_lock(root):
         state = jobs.load(root, job_id)
         chunks = state.setdefault('chunks', {})
-        info = chunks.setdefault(base, {'candidate': None, 'review': None, 'status': 'prepared', 'round': 0})
+        info = chunks.setdefault(slot, {'candidate': None, 'review': None, 'status': 'prepared', 'round': 0})
         info['invalid_outputs'] = int(info.get('invalid_outputs', 0)) + 1
         info['last_validation_error'] = message[:8000]
-        chunks.setdefault(slot, {'candidate': None, 'review': None, 'status': 'prepared', 'round': 0})
-        chunks[slot]['last_validation_error'] = message[:8000]
+        if slot != base:  # the chunk shows its latest error too
+            chunks.setdefault(base, {'candidate': None, 'review': None, 'status': 'prepared', 'round': 0})
+            chunks[base]['last_validation_error'] = message[:8000]
         state['updated_at'] = jobs.now()
         write_json(root, jobs.location(job_id), state)
 
@@ -1970,7 +2089,7 @@ def _source_check_stage(root: Path, job_id: str, packet: dict, settled: list[dic
                 raise
             failed = int(info.get('invalid_outputs', 0)) + 1
             fields = {'invalid_outputs': failed, 'last_validation_error': failure.error.get('message', '')[:8000]}
-            if failed > rules.max_repair_rounds:
+            if failed > rules.max_invalid_retries:
                 fields['skipped'] = (f'the answer failed validation {failed} times; the cards were written as '
                                      'the chunk reviews left them')
             _mark_slot(root, job_id, slot, **fields)
@@ -2065,18 +2184,19 @@ def split_outcome(root: Path, state: dict, packet: dict, item: dict) -> dict:
     base = item['slot']
     slots = _slots(state, base)
     info0 = (state.get('chunks') or {}).get(base) or {}
-    max_rounds = jobs.policy_of(packet).max_repair_rounds
-    used = int(info0.get('invalid_outputs', 0)) + sum(1 for _, i in slots[1:] if i.get('candidate'))
+    rules = jobs.policy_of(packet)
+    max_rounds = rules.max_repair_rounds
+    used = len(slots) - 1
     if not slots or not slots[0][1].get('candidate'):
-        if used > max_rounds:
+        if not _retries_left(info0, rules):
             return {'settled': True, 'next': None, 'card': None,
-                    'pending': f'the split card failed validation in every allowed round: '
+                    'pending': f'the split card failed validation {_failed(info0)} times: '
                                f'{str(info0.get("last_validation_error") or "")[:500]}'}
         return {'settled': False, 'next': ('produce', base), 'card': None, 'pending': None}
     last = None
     for slot, info in slots:
         if not info.get('candidate'):
-            if used < max_rounds:
+            if _retries_left(info, rules):
                 return {'settled': False, 'next': ('repair', slot), 'card': None, 'pending': None}
             break
         if not info.get('review'):
@@ -2170,7 +2290,7 @@ def skip_source_check(root: Path, job_id: str, *, reason: str) -> dict:
 def _skip_source_check(root: Path, job_id: str, *, reason: str) -> dict:
     """Give up the source check of ``job_id`` after it kept failing; the cards are written as the chunk reviews left them.
 
-    In API mode an answer that fails validation more than ``max_repair_rounds``
+    In API mode an answer that fails validation more than ``max_invalid_retries``
     times is skipped by itself. In host mode the answer is refused at `sb job
     submit` and the run stays open, so the coordinator ends it here, once as many
     answers were rejected or runs abandoned. Its open run is abandoned and the
@@ -2194,7 +2314,7 @@ def _skip_source_check(root: Path, job_id: str, *, reason: str) -> dict:
         runs = [r for r in runs if r.get('chunk') == source_check.SLOT]
         failed = int(info.get('invalid_outputs', 0)) + sum(int(r.get('rejected_submits', 0)) for r in runs) + \
             sum(1 for r in runs if r['status'] in {'abandoned', 'failed'})
-        needed = jobs.policy_of(packet).max_repair_rounds + 1
+        needed = jobs.policy_of(packet).max_invalid_retries + 1
         if failed < needed:
             raise IngestError(f'The source check can be skipped after {needed} rejected answers or given-up runs; '
                               f'{job_id} has {failed}. Hand the check to a new sub-agent first')
@@ -2825,6 +2945,8 @@ def _apply_job(root: Path, job_id: str, settled: list[dict] | None = None) -> di
               'diagrams': [row for row in drawn['report'] if row['ref'] in {p['slug'] for p in produced}],
               'same_family': bool(state.get('same_family')),
               'outcomes': outcomes, 'decision_record': entries,
+              'amended': [r for o in settled for r in o.get('amended') or []],
+              'review_notes': [n for o in settled for n in o.get('notes') or []],
               'merged_into_existing': merged_into_existing,
               'split': [{'slug': f['card']['slug'], 'id': ids.get(f['card']['slug']), 'from': s, 'of': f['target'],
                          'slot': f['slot']} for s, f in fates.items() if f['how'] == 'split'],

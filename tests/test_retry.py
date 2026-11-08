@@ -16,6 +16,9 @@ from tests.ingest_helpers import (ALL_REASONS, CARDS, DIMMING_IR, FIXED_DIMMING,
                                   build_ingest_vault, coverage, first_candidate, first_review, repair_candidate,
                                   repair_review, scripted, tree)
 
+#: Written for one repair round with a full review in it (tests/conftest.py).
+pytestmark = pytest.mark.usefixtures('old_review_rules')
+
 
 def partial_job(root):
     produce, review, _ = scripted([first_candidate(), repair_candidate()], [first_review(), repair_review('revise')])

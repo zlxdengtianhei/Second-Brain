@@ -58,8 +58,25 @@ class ReviewPolicy:
     require_different_family: bool = True
     allow_same_family_in_host_mode: bool = True
     withhold_producer_reasons: bool = True
-    max_repair_rounds: int = 1
+    #: Content repair rounds per chunk (and per split card), and format retries per slot: an answer that failed
+    #: the program's checks asked for again. The two are counted apart.
+    max_repair_rounds: int = 2
+    max_invalid_retries: int = 2
+    #: A repair round's reviewer judges whether each earlier finding is fixed, and sends a card back otherwise only
+    #: for a blocking problem; other problems go to ``notes``.
+    focused_review: bool = True
+    #: The reviewer may give mechanical fixes with an accept (``amend``: relations, refiling under an existing
+    #: topic, dropping a review card), applied by the program without a repair round.
+    amend: bool = True
     model_families: dict = field(default_factory=lambda: dict(DEFAULT_MODEL_FAMILIES))
+
+    def __post_init__(self):
+        for name in ('max_repair_rounds', 'max_invalid_retries'):
+            value = getattr(self, name)
+            if not isinstance(value, int) or isinstance(value, bool) or not 0 <= value <= 10:
+                raise ValueError(f'review.{name} must be a whole number from 0 to 10')
+        if not isinstance(self.focused_review, bool) or not isinstance(self.amend, bool):
+            raise ValueError('review.focused_review and review.amend must be true or false')
 
 
 @dataclass(frozen=True)
@@ -428,7 +445,10 @@ api_key_env = "SB_REVIEWER_API_KEY"
 require_different_family = true
 allow_same_family_in_host_mode = true
 withhold_producer_reasons = true
-max_repair_rounds = 1
+max_repair_rounds = 2              # content repair rounds per chunk
+max_invalid_retries = 2            # an answer that failed the program's checks, asked for again (per slot)
+focused_review = true              # a repair round's reviewer checks the earlier findings; other problems block only if serious
+amend = true                       # the reviewer may fix relations, the topic or a review card itself
 
 [model_families]    # substring -> family, merged over the built-in table
 # my-local-model = "local"

@@ -16,6 +16,9 @@ from tests.ingest_helpers import (CARDS, SOURCE_NAME, TOPIC_PROPOSAL, build_inge
                                   is_source_check_task, keep_all, packet_in, with_diagrams)
 from tests.test_ingest import settings
 
+#: Written for one repair round with a full review in it (tests/conftest.py).
+pytestmark = pytest.mark.usefixtures('old_review_rules')
+
 ORDER_QUOTE = 'a lantern queue keeps every item in arrival order'
 FILLER = ' '.join(f'Filler sentence {i} says nothing about queues.' for i in range(14))
 SOURCE = ('# Lantern queues\n\n' + CARDS['lantern-queue']['source_quotes'][0] + '\n\n## Notes\n\n' + FILLER + '\n\n'
@@ -180,7 +183,7 @@ def test_an_answer_that_keeps_failing_validation_skips_the_check(tmp_path):
     root, job_id, result, seen = run(tmp_path, bad)
     assert result['status'] == 'applied' and len(result['produced']) == 4
     assert result['source_check']['status'] == 'skipped' and 'failed validation' in result['source_check']['reason']
-    assert len(seen) == 2  # max_repair_rounds = 1: the first answer and one more
+    assert len(seen) == 3  # max_invalid_retries = 2: the first answer and two more
     assert 'missing' in jobs.load(root, job_id)['chunks'][source_check.SLOT]['last_validation_error']
 
 
@@ -247,7 +250,7 @@ def test_host_mode_hands_the_check_to_a_reviewer(tmp_path):
     assert [m['slug'] for m in done['source_check']['merged']] == ['arrival-order']
 
 
-def test_host_mode_gives_up_a_check_that_keeps_failing_only_after_two_failures(tmp_path, capsys):
+def test_host_mode_gives_up_a_check_that_keeps_failing_only_after_its_retries(tmp_path, capsys):
     # V1 C6: a refused answer never reached the failure count, so only `sb job reset` (all chunk runs lost) was left
     root, job_id, check, submit, advance = host_until_check(tmp_path)
 
@@ -255,9 +258,10 @@ def test_host_mode_gives_up_a_check_that_keeps_failing_only_after_two_failures(t
         return cli.main(['--vault', str(root), 'job', 'skip-source-check', job_id, '--reason', 'answers refused'])
     assert submit(check, {'cards': [], 'new_topics': []}) != 0
     capsys.readouterr()
-    assert skip() != 0 and 'after 2 rejected answers or given-up runs' in capsys.readouterr().err
+    assert skip() != 0 and 'after 3 rejected answers or given-up runs' in capsys.readouterr().err
     assert submit(check, {'cards': [{'slug': 'nope', 'overlap': 'distinct'}], 'new_topics': []}) != 0
-    assert jobs.load_run(root, job_id, check['run_id'])['rejected_submits'] == 2
+    assert submit(check, {'cards': [], 'new_topics': []}) != 0
+    assert jobs.load_run(root, job_id, check['run_id'])['rejected_submits'] == 3
     assert skip() == 0
     assert jobs.load_run(root, job_id, check['run_id'])['status'] == 'abandoned'
     [diagram] = advance()['handoffs']  # the check is not handed out again

@@ -133,6 +133,10 @@ def frozen_input(settled: list[dict], source: dict, *, relation_views: dict,
         for r in card.get('relations') or []:
             if isinstance(r, dict) and r.get('target') in slugs:
                 linked_from.setdefault(r['target'], []).append(slug)
+    notes_of: dict = {}
+    for o in settled:  # what the chunk reviewers noted without sending a card back, for this check to read
+        for n in o.get('notes') or []:
+            notes_of.setdefault(n['slug'], []).append(n['note'])
     cards, counts = [], {}
     for chunk, slug, c in accepted:
         key = (c['domain'], c['pillar'], c['topic'])
@@ -146,7 +150,9 @@ def frozen_input(settled: list[dict], source: dict, *, relation_views: dict,
                                      if isinstance(f, dict)],
                       'relations': relations, 'linked_from': sorted(linked_from.get(slug, [])),
                       'isolated': not relations and not linked_from.get(slug),
-                      'candidates': candidates(c)})
+                      'candidates': candidates(c),
+                      **({'amended': c['_amended']} if c.get('_amended') else {}),
+                      **({'review_notes': notes_of[slug]} if notes_of.get(slug) else {})})
     cards.sort(key=lambda c: (c['domain'], c['pillar'], c['topic'], c['chunk'], c['slug']))
     topics = []
     for o in settled:

@@ -19,7 +19,8 @@ def test_missing_file_gives_defaults(tmp_path):
     assert settings.vault is None and settings.layout == layout.DEFAULT
     assert settings.review.require_different_family is True
     assert settings.review.allow_same_family_in_host_mode is True
-    assert settings.review.max_repair_rounds == 1
+    assert settings.review.max_repair_rounds == 2 and settings.review.max_invalid_retries == 2
+    assert settings.review.focused_review is True and settings.review.amend is True
     assert settings.ingest.after_ingest == 'move' and settings.ingest.chunk_chars == 12000
     assert settings.taxonomy_extra_reviewers == 0 and settings.git_commit is False
 

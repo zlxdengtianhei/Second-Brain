@@ -255,13 +255,13 @@ def test_an_existing_card_that_would_grow_past_twelve_propositions_is_left_and_a
     assert decisions.current(record, 'split.verdict', 'lantern-queue')['role'] == 'split_reviewer'
 
 
-def test_a_split_card_the_reviewer_rejects_is_rewritten_then_stays_pending(tmp_path):
+def test_a_split_card_the_reviewer_rejects_is_rewritten_in_each_round_then_stays_pending(tmp_path):
     root, job_id, before = job(tmp_path, n_props=11)
     seen = []
     done = run(root, job_id, reviewer(split_review=lambda p: {'decision': 'revise', 'restates': True,
                                                               'reason': 'it says what P2 says'}),
                producer(seen=seen))
-    assert [t.chunk for t in seen] == ['sp01', 'sp01.r1']
+    assert [t.chunk for t in seen] == ['sp01', 'sp01.r1', 'sp01.r2']  # max_repair_rounds = 2
     assert seen[1].packet['review_findings']['reason'] == 'it says what P2 says'
     assert done['status'] == 'partial' and [p['slug'] for p in done['pending']] == ['lantern-queue']
     assert unchanged(root, before)

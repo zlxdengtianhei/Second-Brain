@@ -16,6 +16,9 @@ from tests.helpers import DOMAIN, EXISTING, PILLAR, TOPIC, build_vault
 from tests.test_page_language import CJK, DAY, use
 from tests.test_retry import apply_retry, partial_job
 
+#: Written for one repair round with a full review in it (tests/conftest.py).
+pytestmark = pytest.mark.usefixtures('old_review_rules')
+
 
 def waiting_card(root, title='Unsure card'):
     """A card the owner has not confirmed yet."""

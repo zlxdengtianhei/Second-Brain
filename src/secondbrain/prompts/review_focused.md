@@ -1,0 +1,3 @@
+## This is a repair round: judge the fixes
+
+`previous_findings` lists what the review of the round before sent back. For each card it names, say in `fixed` whether each finding is fixed: `[{"finding": "<the finding, short>", "fixed": true | false}]`. Send a card back (`revise`) only when a finding is not fixed, or for a blocking problem, named in `blocking`: `fact` (a statement the chunk contradicts), `unreadable` (it cannot be read without the source), `quote` (a source quote that is not in the chunk), `not_a_unit` (it is not one recallable unit). Write any other problem you see in `notes`, as short sentences: they are recorded for the owner and do not send the card back.

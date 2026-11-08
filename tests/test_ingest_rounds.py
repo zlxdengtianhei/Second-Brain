@@ -1,6 +1,8 @@
 """Repair rounds and review packets: split cards, replaced new topics, near-duplicate digests, status counts."""
 from __future__ import annotations
 
+import pytest
+
 import json
 from dataclasses import replace
 
@@ -15,6 +17,9 @@ from secondbrain.vault import read_snapshot
 from tests.helpers import DOMAIN, EXISTING, MOC, PILLAR, TOPIC
 from tests.ingest_helpers import (CARDS, FIXED_DIMMING, NEW_TOPIC, SOURCE_NAME, TOPIC_PROPOSAL, build_ingest_vault,
                                   first_candidate, first_review, scripted)
+
+#: Written for one repair round with a full review in it (tests/conftest.py).
+pytestmark = pytest.mark.usefixtures('old_review_rules')
 
 DIM_BEFORE_CUT = {**FIXED_DIMMING, 'slug': 'dimming-before-cut', 'title': 'Markers before a compaction cut',
                   'propositions': ['Markers before the cut are dimmed, not deleted.'],

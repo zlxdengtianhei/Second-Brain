@@ -28,6 +28,9 @@ from tests.ingest_helpers import (ALL_REASONS, CARDS, DIMMING_IR, FIXED_DIMMING,
                                   first_review, packet_in, repair_candidate, repair_review, scripted, tree,
                                   with_diagrams, with_source_check)
 
+#: Written for one repair round with a full review in it (tests/conftest.py).
+pytestmark = pytest.mark.usefixtures('old_review_rules')
+
 HEADINGS = {'en': ['## Essence', '## Propositions', '## Intuition and contrasts', '## Related', '## Review cards'],
             'zh': ['## 本质', '## 命题', '## 直觉与易混对比', '## 相关', '## 复习卡']}
 
@@ -300,7 +303,7 @@ def test_relation_to_a_pending_card_is_not_written(tmp_path):
     assert dimming.fm['relations'] == [] and 'depends_on::' not in dimming.body
 
 
-def test_invalid_output_is_returned_with_errors_and_spends_a_round(tmp_path):
+def test_invalid_output_is_returned_with_errors_and_does_not_spend_a_repair_round(tmp_path):
     root = build_ingest_vault(tmp_path / 'vault')
     bad = first_candidate()
     bad['cards'][0] = {**bad['cards'][0], 'source_quotes': ['this sentence is not in the source'],
@@ -309,15 +312,25 @@ def test_invalid_output_is_returned_with_errors_and_spends_a_round(tmp_path):
                                          [first_review(), repair_review()])
     prepared = ingest.prepare(root, root / '00_Inbox' / SOURCE_NAME)
     result = ingest.advance(root, prepared['job_id'], producer=producer, reviewer=reviewer)
-    # the invalid answer used the only repair round, so the revised card stays pending
-    assert result['status'] == 'partial'
-    assert [p['slug'] for p in result['pending']] == ['marker-dimming']
+    # the invalid answer was asked for again (max_invalid_retries); the one repair round still fixed the card
+    assert result['status'] == 'applied' and result['pending'] == []
+    assert len(seen['producer']) == 3
     retry_prompt = seen['producer'][1].prompt
     assert 'rejected by the validator' in retry_prompt
     for needle in ('not a verbatim slice', 'not allowed in file names', 'flashcards must hold 2-4'):
         assert needle in retry_prompt
     runs = jobs.list_runs(root, prepared['job_id'])
     assert [r['status'] for r in runs if r['role'] == 'producer'].count('failed') == 1
+
+
+def test_an_answer_that_keeps_failing_validation_leaves_the_chunk_pending_after_its_retries(tmp_path):
+    root = build_ingest_vault(tmp_path / 'vault')
+    bad = {**first_candidate(), 'cards': [{**first_candidate()['cards'][0], 'title': 'Bad/Title'}]}
+    producer, reviewer, seen = executors([bad] * 5, [])
+    prepared = ingest.prepare(root, root / '00_Inbox' / SOURCE_NAME)
+    result = ingest.advance(root, prepared['job_id'], producer=producer, reviewer=reviewer)
+    assert result['status'] == 'failed' and len(seen['producer']) == 3  # the answer and max_invalid_retries more
+    assert 'failed validation 3 times' in result['error']['pending'][0]['reason']
 
 
 def test_validation_rejects_bad_candidates(tmp_path):

@@ -92,6 +92,15 @@ CARDS = {
                            'with': {'type': 'array', 'items': _STR},
                            'suggested_pillar': _NSTR, 'reason': _STR}}},
     }}
+def _amend_schema() -> dict:
+    from .pipelines.amend import SCHEMA
+    return SCHEMA
+
+
+#: The problems a focused repair-round review sends a card back for, beyond an earlier finding not fixed.
+BLOCKING = ('fact', 'unreadable', 'quote', 'not_a_unit')
+AMEND = _amend_schema()
+
 REVIEW_CARDS = {
     'type': 'object', 'required': ['cards', 'coverage'],
     'properties': {
@@ -99,7 +108,12 @@ REVIEW_CARDS = {
             'type': 'object', 'required': ['slug', 'decision', 'reason'],
             'properties': {'slug': _STR, 'decision': _DECISION, 'suggested_domain': _NSTR, 'reason': _STR,
                            'overlap': {'type': ['string', 'null'], 'enum': [*_LEVELS, None]},
-                           'with': {'type': ['array', 'null'], 'items': _STR}, 'conflicts': _CONFLICTS}}},
+                           'with': {'type': ['array', 'null'], 'items': _STR}, 'conflicts': _CONFLICTS,
+                           'amend': AMEND, 'notes': {'type': ['array', 'null'], 'items': _STR},
+                           'fixed': {'type': ['array', 'null'], 'items': {
+                               'type': 'object', 'required': ['finding', 'fixed'],
+                               'properties': {'finding': _STR, 'fixed': {'type': 'boolean'}}}},
+                           'blocking': {'type': ['string', 'null'], 'enum': [*BLOCKING, None]}}}},
         'new_topics': {'type': 'array', 'items': {
             'type': 'object', 'required': ['domain', 'pillar', 'name', 'decision', 'reason'],
             'properties': {'domain': _STR, 'pillar': _STR, 'name': _STR, 'decision': _DECISION, 'reason': _STR}}},

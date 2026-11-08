@@ -1,12 +1,15 @@
 """`sb inbox`, `sb ingest`, `sb job packet|submit|advance` and `sb doctor` from the command line."""
 from __future__ import annotations
 
+import pytest
+
 import json
 from pathlib import Path
 
 from secondbrain import cli, jobs
 from tests.ingest_helpers import (ALL_REASONS, DIMMING_IR, SOURCE_NAME, build_ingest_vault, diagram_answer,
                                   first_candidate, first_review, packet_in, repair_candidate, repair_review)
+
 
 
 def run(capsys, root, *argv):
@@ -176,6 +179,7 @@ def test_job_reset_refuses_written_jobs_and_frees_unwritten_ones(tmp_path, capsy
     assert code == 3 and 'roll it back first' in err
 
 
+@pytest.mark.usefixtures('old_review_rules')  # written for one repair round with a full review
 def test_rerunning_a_partial_source_reports_unchanged_without_an_executor(tmp_path, capsys):
     from secondbrain.executors import FakeExecutor
     from secondbrain.pipelines import ingest

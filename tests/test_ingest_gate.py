@@ -17,6 +17,9 @@ from tests.ingest_helpers import (CARDS, FIXED_DIMMING, OTHER_CARD, OTHER_DOMAIN
                                   SOURCE_NAME, build_ingest_vault, first_candidate, first_review, repair_candidate,
                                   repair_review, scripted)
 
+#: Written for one repair round with a full review in it (tests/conftest.py).
+pytestmark = pytest.mark.usefixtures('old_review_rules')
+
 def with_domain_words(root):
     """tool_for / used_by open only to the pebbles domain, as `domain_relations` opens words to one domain."""
     path = root / layouts.DEFAULT.catalog

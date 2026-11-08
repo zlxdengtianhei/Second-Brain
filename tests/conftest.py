@@ -23,6 +23,18 @@ def secondbrain_state_tmp(monkeypatch, tmp_path):
     layout.unregister_all()
 
 
+@pytest.fixture
+def old_review_rules(monkeypatch, tmp_path):
+    """A config file with the review rules the scripted flows of these tests were written for: one repair round
+    and a full review in it (``max_repair_rounds = 1``, ``focused_review = false``; the defaults are now 2 rounds
+    and a focused review, tested in test_review_rules.py)."""
+    path = tmp_path.parent / f"{tmp_path.name}-old-rules.toml"
+    path.write_text('[review]\nmax_repair_rounds = 1\nfocused_review = false\n', encoding='utf-8')
+    monkeypatch.setenv("SECONDBRAIN_CONFIG", str(path))
+    config.activate(None)
+    return path
+
+
 #: Seconds a single test may run (SECONDBRAIN_TEST_TIMEOUT overrides; 0 turns it off). A loop that should stop
 #: after a bounded number of rounds once ran for 19 minutes under a mutant instead of failing (V1).
 TEST_TIMEOUT = int(os.environ.get('SECONDBRAIN_TEST_TIMEOUT', '300'))

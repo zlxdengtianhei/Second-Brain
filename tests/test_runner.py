@@ -7,6 +7,9 @@ from secondbrain.executors import ExecutorFailure, FakeExecutor, Result
 from tests.helpers import DOMAIN, EXISTING, PILLAR, TOPIC, submit_reviewed
 from tests.test_classification import ready
 
+#: Written for one repair round with a full review in it (tests/conftest.py).
+pytestmark = pytest.mark.usefixtures('old_review_rules')
+
 
 def pair(root, row, *, reject_reviews=1):
     """Producer echoes the row; the reviewer rejects the first N reviews."""
