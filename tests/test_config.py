@@ -23,12 +23,14 @@ def test_missing_file_gives_defaults(tmp_path):
     assert settings.review.focused_review is True and settings.review.amend is True
     assert settings.ingest.after_ingest == 'move' and settings.ingest.chunk_chars == 12000
     assert settings.taxonomy_extra_reviewers == 0 and settings.git_commit is False
+    assert config.EndpointConfig().max_retries == 2
 
 
 def test_example_config_parses(tmp_path):
     settings = config.load(write(tmp_path, config.EXAMPLE))
     assert settings.producer.kind == 'openai' and settings.reviewer.kind == 'anthropic'
     assert settings.producer.api_key_env == 'SB_PRODUCER_API_KEY'
+    assert settings.producer.max_retries == 2
     assert settings.layout == layout.DEFAULT
     assert settings.card_language == 'en' and not settings.card_language_set  # follows the vault
 

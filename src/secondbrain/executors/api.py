@@ -5,10 +5,11 @@ the requested model; the model the provider reports in its response is
 stored as ``model_reported`` (``attestation = provider_response``). Keys are
 resolved per request from the environment or a command and never stored.
 
-Failure semantics: 429/5xx and network errors retry with exponential backoff
-(``max_retries``), a context-length error is ``CHUNK_TOO_LARGE``, an
-unparseable or truncated answer is ``INVALID_OUTPUT``, an auth error is
-``CONFIG_ERROR``.
+Failure semantics: 429/5xx, auth and network errors, timeouts and empty
+response bodies retry with exponential backoff (``max_retries``) inside the
+executor. A context-length error is ``CHUNK_TOO_LARGE``; a nonempty
+unparseable or truncated model answer is ``INVALID_OUTPUT``. Exhausted auth
+errors are ``CONFIG_ERROR``; empty bodies remain transport ``HTTP_ERROR``s.
 """
 from __future__ import annotations
 
@@ -152,25 +153,32 @@ class ApiExecutor:
                 else:
                     status = response.status_code
                     detail = response.text[:2000]
-                    if status == 200:
+                    if status == 200 and detail.strip():
                         return self._parse(response, task)
-                    if self._adapter.unsupported_format(status, detail) and self._mode != 'plain':
-                        self._mode = 'json_object' if self._mode == 'json_schema' else 'plain'
-                        continue
-                    if status in (401, 403):
-                        return Result(status='failed', attestation='provider_response',
-                                      error=_error(CONFIG_ERROR, f'authentication failed ({status})', False, status))
-                    if status in (400, 413, 422) and _CONTEXT.search(detail):
-                        return Result(status='failed', attestation='provider_response',
-                                      error=_error(CHUNK_TOO_LARGE, detail, False, status))
-                    retryable = status == 429 or status >= 500
-                    error = _error(HTTP_ERROR, f'HTTP {status}: {detail}', retryable, status)
-                    if not retryable:
-                        return Result(status='failed', attestation='provider_response', error=error)
-                    retry_after = response.headers.get('retry-after')
-                    if retry_after and retry_after.isdigit():
-                        error['retry_after'] = int(retry_after)
+                    if status == 200 or (status == 204 and not detail.strip()):
+                        # No model answer arrived: retry here, never spend the controller's invalid-answer budget.
+                        error = _error(HTTP_ERROR, f'empty response body (HTTP {status})', True, status)
+                    else:
+                        if self._adapter.unsupported_format(status, detail) and self._mode != 'plain':
+                            self._mode = 'json_object' if self._mode == 'json_schema' else 'plain'
+                            continue
+                        if status in (400, 413, 422) and _CONTEXT.search(detail):
+                            return Result(status='failed', attestation='provider_response',
+                                          error=_error(CHUNK_TOO_LARGE, detail, False, status))
+                        if status in (401, 403):
+                            # A gateway can deny a request transiently; only the last denial is a config failure.
+                            error = _error(CONFIG_ERROR, f'authentication failed ({status})', True, status)
+                        else:
+                            retryable = status == 429 or status >= 500
+                            error = _error(HTTP_ERROR, f'HTTP {status}: {detail}', retryable, status)
+                            if not retryable:
+                                return Result(status='failed', attestation='provider_response', error=error)
+                        retry_after = response.headers.get('retry-after')
+                        if retry_after and retry_after.isdigit():
+                            error['retry_after'] = int(retry_after)
                 if attempt >= self.endpoint.max_retries:
+                    if error['code'] == CONFIG_ERROR:
+                        error['retryable'] = False
                     return Result(status='failed', attestation='provider_response', error=error)
                 self._sleep(min(60, error.get('retry_after') or 2 ** attempt))
                 attempt += 1

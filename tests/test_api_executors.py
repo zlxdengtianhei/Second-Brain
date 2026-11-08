@@ -62,7 +62,12 @@ class Recorder:
 
     def __call__(self, request):
         self.requests.append(request)
-        status, body, headers = self.responses.pop(0)
+        response = self.responses.pop(0)
+        if isinstance(response, Exception):
+            raise response
+        status, body, headers = response
+        if isinstance(body, bytes):
+            return httpx.Response(status, content=body, headers=headers or {})
         return httpx.Response(status, json=body, headers=headers or {})
 
     def body(self, i=0):
@@ -146,15 +151,52 @@ def test_truncated_or_non_json_answers_are_invalid_output():
     assert result.error['code'] == 'INVALID_OUTPUT'
 
 
-def test_auth_errors_and_missing_keys_are_config_errors(monkeypatch):
-    rec = Recorder((401, {'error': {'message': 'bad key'}}, None))
-    result = executor(openai_endpoint(), rec).run(task())
-    assert result.error['code'] == 'CONFIG_ERROR' and len(rec.requests) == 1
+def test_auth_errors_retry_then_are_config_errors_and_missing_keys_do_not_retry(monkeypatch):
+    for status in (401, 403):
+        sleeps = []
+        rec = Recorder(*[(status, {'error': {'message': 'bad key'}}, None)] * 3)
+        result = executor(openai_endpoint(), rec, sleeps).run(task())
+        assert result.error['code'] == 'CONFIG_ERROR' and result.error['retryable'] is False
+        assert len(rec.requests) == 3 and sleeps == [1, 2]
+        rec = Recorder((status, {'error': {'message': 'temporary gateway denial'}}, None),
+                       (200, fixture('openai_chat_completion.json'), None))
+        assert executor(openai_endpoint(), rec).run(task()).status == 'completed'
+        assert len(rec.requests) == 2
     monkeypatch.delenv('SB_TEST_PRODUCER_KEY')
     rec = Recorder()
     result = executor(openai_endpoint(), rec).run(task())
     assert result.error['code'] == 'CONFIG_ERROR' and rec.requests == []
     assert KEY not in json.dumps(result.error)
+
+
+def test_timeouts_retry_inside_the_executor_and_keep_their_error_type():
+    sleeps = []
+    rec = Recorder(httpx.ConnectTimeout('slow'), (200, fixture('openai_chat_completion.json'), None))
+    result = executor(openai_endpoint(), rec, sleeps).run(task())
+    assert result.status == 'completed' and len(rec.requests) == 2 and sleeps == [1]
+    sleeps = []
+    rec = Recorder(*[httpx.ConnectTimeout('slow')] * 3)
+    result = executor(openai_endpoint(), rec, sleeps).run(task())
+    assert result.error['code'] == 'TIMEOUT' and len(rec.requests) == 3 and sleeps == [1, 2]
+
+
+@pytest.mark.parametrize('status', [200, 204])
+def test_empty_response_bodies_retry_as_transport_failures(status):
+    sleeps = []
+    rec = Recorder((status, b'', None), (200, fixture('openai_chat_completion.json'), None))
+    result = executor(openai_endpoint(), rec, sleeps).run(task())
+    assert result.status == 'completed' and len(rec.requests) == 2 and sleeps == [1]
+    sleeps = []
+    rec = Recorder(*[(status, b' \n', None)] * 3)
+    result = executor(openai_endpoint(), rec, sleeps).run(task())
+    assert result.error['code'] == 'HTTP_ERROR' and 'empty response body' in result.error['message']
+    assert len(rec.requests) == 3 and sleeps == [1, 2]
+
+
+def test_a_nonempty_broken_json_body_is_still_an_invalid_model_answer():
+    rec = Recorder((200, b'{not json', None))
+    result = executor(openai_endpoint(), rec).run(task())
+    assert result.error['code'] == 'INVALID_OUTPUT' and len(rec.requests) == 1
 
 
 def test_anthropic_request_and_response_contract():

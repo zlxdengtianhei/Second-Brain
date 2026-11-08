@@ -88,7 +88,7 @@ class EndpointConfig:
     api_key_cmd: str | None = None
     max_output_tokens: int = 32000
     timeout_s: float = 600
-    max_retries: int = 3
+    max_retries: int = 2
     structured_output: str = 'auto'   # auto | json_schema | json_object
 
     def __post_init__(self):
@@ -464,6 +464,7 @@ model = "producer-model-name"
 api_key_env = "SB_PRODUCER_API_KEY"
 max_output_tokens = 32000
 timeout_s = 600
+max_retries = 2               # transport retries inside the executor; these do not use max_invalid_retries
 
 [executor.reviewer]  # use a model of a different family than the producer
 kind = "anthropic"

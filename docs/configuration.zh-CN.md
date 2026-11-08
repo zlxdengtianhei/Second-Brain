@@ -43,6 +43,7 @@ model = "producer-model-name"
 api_key_env = "SB_PRODUCER_API_KEY"
 max_output_tokens = 32000
 timeout_s = 600
+max_retries = 2
 
 [executor.reviewer]  # 用与生产者不同模型家族的模型
 kind = "anthropic"
@@ -132,7 +133,7 @@ mode = "sequential"          # sequential | parallel
 | `api_key_cmd` | 无 | 输出 key 的命令（按 shell 命令的规则拆分，但不经过 shell 运行；超时 30 秒）。 |
 | `max_output_tokens` | 32000 | 每次调用的输出上限。 |
 | `timeout_s` | 600 | 每次调用的超时。 |
-| `max_retries` | 3 | 遇到限流和服务器错误时的重试次数（带退避，遵守 `retry-after`）。 |
+| `max_retries` | 2 | 限流、服务器错误、401/403、超时和空响应体在执行器内重试的次数（带退避，遵守 `retry-after`）；不占用 `max_invalid_retries`。 |
 | `structured_output` | `auto` | `auto` 先试 JSON Schema 输出，再试 JSON 模式，最后用纯文本；也可以强制用 `json_schema` 或 `json_object`。 |
 
 写进文件的 key（`api_key = ...`）会被拒绝。key 在每次请求时读取，从不写进日志，也从不保存。

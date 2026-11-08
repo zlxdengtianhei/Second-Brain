@@ -43,6 +43,7 @@ model = "producer-model-name"
 api_key_env = "SB_PRODUCER_API_KEY"
 max_output_tokens = 32000
 timeout_s = 600
+max_retries = 2
 
 [executor.reviewer]  # use a model of a different family than the producer
 kind = "anthropic"
@@ -132,7 +133,7 @@ Folder names are relative to the vault. Folders must not overlap.
 | `api_key_cmd` | none | Command that prints the key (split like a shell command, not run through a shell, 30 s timeout). |
 | `max_output_tokens` | 32000 | Output limit per call. |
 | `timeout_s` | 600 | Timeout per call. |
-| `max_retries` | 3 | Retries on rate limits and server errors (with back-off, honouring `retry-after`). |
+| `max_retries` | 2 | Transport retries inside the executor for rate limits, server errors, 401/403, timeouts and empty response bodies (with back-off, honouring `retry-after`); these do not consume `max_invalid_retries`. |
 | `structured_output` | `auto` | `auto` tries JSON Schema output, then JSON mode, then plain text; or force `json_schema` or `json_object`. |
 
 A key written into the file (`api_key = ...`) is refused. Keys are read per request and never logged or stored.
