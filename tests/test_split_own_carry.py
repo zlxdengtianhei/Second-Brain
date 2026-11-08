@@ -14,6 +14,7 @@ import copy
 
 from secondbrain import jobs
 from secondbrain.pipelines import split
+from secondbrain.textnorm import near_same, same_text
 from secondbrain.vault import read_snapshot
 from tests.helpers import EXISTING
 from tests.ingest_helpers import CARDS, keep_all, with_diagrams
@@ -97,6 +98,27 @@ def test_two_narrower_cards_of_one_card_that_say_the_same_point_are_asked_again(
     assert f"{SPLIT_CARD['propositions'][0]!r} says what the narrower card {SPLIT_CARD['slug']} of {EXISTING}" in error
     made = next(c for c in read_snapshot(root).cards.values() if c.title == LIT_SPLIT['title'])
     assert SPLIT_CARD['propositions'][0] not in made.body                    # written once, by sp01's card
+
+
+def test_two_narrower_cards_with_near_matching_propositions_are_asked_again(tmp_path):
+    root, job_id, before = job(tmp_path, n_props=11)
+    first = '自由泳脸在水里时要一直慢慢呼气／转头出水换气时只用吸气'
+    second = '自由泳换气时，脸在水里要一直慢慢呼气／转头露出水面时只用吸气'
+    assert not same_text(first, second) and near_same(first, second)
+
+    def answers(task, seen):
+        if task.packet['card']['slug'] == 'lantern-queue':
+            return {'card': {**SPLIT_CARD, 'propositions': [first]}}
+        if len(seen) == 2:
+            return {'card': {**LIT_SPLIT, 'propositions': [second]}}
+        return {'card': LIT_SPLIT}
+
+    produce, seen = producing(answers)
+    done = run(root, job_id, reviewer(levels=LEVELS3, check=check), produce)
+    assert done['status'] == 'applied', done.get('pending')
+    assert [t.chunk for t in seen] == ['sp01', 'sp02', 'sp02']  # an invalid answer is retried in the same slot
+    error = jobs.load(root, job_id)['chunks']['sp02']['last_validation_error']
+    assert first in error and second in error and SPLIT_CARD['slug'] in error
 
 
 def test_a_split_card_whose_proposition_the_existing_card_says_goes_back_to_be_rewritten(tmp_path):

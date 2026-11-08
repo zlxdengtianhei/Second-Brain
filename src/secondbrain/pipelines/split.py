@@ -22,7 +22,7 @@ from .. import decisions, review_notes
 from ..cards import KINDS
 from ..evidence import check_verbatim
 from ..schemas import shape_checked
-from ..textnorm import same_text
+from ..textnorm import near_same, same_text
 
 PREFIX = 'sp'
 ROLE = 'split_reviewer'
@@ -99,10 +99,12 @@ def validate_card(item: dict, payload, *, text: str, taken: set, catalog_types, 
     else:
         errors += [f'card.source_quotes: {problem}' for problem in (check_verbatim(text, q) for q in quotes) if problem]
     for p in props:  # D-22: the narrower cards of one card hold different points (asked again, never cut)
-        hit = next(((slug_, q) for slug_, qs in siblings for q in qs if same_text(p, q)), None)
+        hit = next(((slug_, q, same_text(p, q)) for slug_, qs in siblings for q in qs
+                    if same_text(p, q) or near_same(p, q)), None)
         if hit:
-            errors.append(f'card.propositions: {p!r} says what the narrower card {hit[0]} of {item["with"]} says '
-                          f'({hit[1]!r}); each narrower card holds its own points: leave it to that card')
+            errors.append(f'card.propositions: {p!r} {"says" if hit[2] else "may say"} what the narrower card '
+                          f'{hit[0]} of {item["with"]} says ({hit[1]!r}); each narrower card holds its own points: '
+                          'leave it to that card')
     restated = [p for p in props if any(same_text(p, old) for old in item['existing_propositions'])]
     if restated:
         errors.append(f'card.propositions restate the propositions of {item["with"]} ({restated[0]!r}); keep only what '
