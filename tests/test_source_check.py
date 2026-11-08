@@ -356,7 +356,7 @@ def test_a_carried_link_to_a_card_the_retry_merges_goes_to_the_card_it_repeats(t
 # --- a retry's cards against the cards its source wrote (the real-vault ingest: a retry wrote, as confirmed, a card
 # whose points three cards of the parent already held). The chunk reviewer, the final judge of a card against the
 # vault's cards, sees the written cards (via: written) and judges them on the same scale; the merge check does not.
-def retry_reviewed(tmp_path, level=None, by_slug=False):
+def retry_reviewed(tmp_path, level=None, by_slug=False, check=None):
     """The parent with arrival-order pending, then its retry; the chunk reviewer gives ``level(packet, ids)``."""
     root, job_id, parent, whole = partial_parent(tmp_path, {'arrival-order'})
     ids = {p['slug']: p['id'] for p in parent['produced']}
@@ -377,7 +377,7 @@ def retry_reviewed(tmp_path, level=None, by_slug=False):
     def child_reviewer(task):
         if is_source_check_task(task):
             checks.append(task)
-            return keep_all(task.packet)
+            return (check or keep_all)(task.packet)
         reviews.append(task)
         out = review(task)
         for row in out['cards']:
@@ -419,7 +419,13 @@ def test_a_retry_card_the_same_as_a_written_card_is_not_written_and_links_to_it_
 def test_a_retry_card_that_extends_a_written_card_goes_into_it_through_the_merge_checks_patch(tmp_path):
     def extends_order(packet, ids):
         return {'overlap': 'extends', 'with': [ids['lantern-queue']], 'reason': 'adds that the order holds'}
-    root, ids, done, _, checks = retry_reviewed(tmp_path, extends_order)
+
+    def replace_first(packet):  # it says P1 of the written card again, more fully: a replacement, not a new line
+        [group] = packet['patch_set']
+        by, *rest = group['from'][0]['propositions']
+        return {**keep_all(packet), 'patches': [{'target': group['target'], 'propositions': rest,
+                                                 'replace': [{'proposition': 'P1', 'by': by}]}]}
+    root, ids, done, _, checks = retry_reviewed(tmp_path, extends_order, check=replace_first)
     [check] = checks
     assert check.packet['cards'] == []  # nothing in the decision set: the card is not judged there again
     [group] = check.packet['patch_set']
@@ -429,8 +435,8 @@ def test_a_retry_card_that_extends_a_written_card_goes_into_it_through_the_merge
     lantern = read_snapshot(root).cards[ids['lantern-queue']]
     old = group['card']['propositions']
     props = cardfmt.propositions_of(lantern.body)
-    assert props[:len(old)] == old  # old propositions keep their words and numbers
-    assert set(group['from'][0]['propositions']) <= set(props)
+    assert props[1:len(old)] == old[1:] and props[0] == group['from'][0]['propositions'][0] != old[0]
+    assert set(group['from'][0]['propositions']) <= set(props) and len(props) == len(old) + 1  # P1 said once
     assert len(lantern.fm['sources']) == 2 and done['merged_into_existing'][0]['id'] == ids['lantern-queue']
 
 

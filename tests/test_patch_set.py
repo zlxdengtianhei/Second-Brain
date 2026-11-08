@@ -137,10 +137,19 @@ def test_a_proposition_the_existing_card_has_is_not_added_twice(tmp_path):
     path = next((root / '10_Knowledge').rglob(f'{EXISTING}.md'))
     path.write_bytes(path.read_bytes().replace(b'- P2. Old proposition 2 about routing readers.',
                                                b'- P2. Items stay in arrival order.'))
-    done = run(root, job_id, reviewer())
+    checks = []
+
+    def check(packet):  # first everything (P2 again, word for word: sent back), then P2 named in already
+        if len(checks) == 1:
+            return keep_all(packet)
+        return keep_all(packet, _patches={EXISTING: {'propositions': [LANTERN['propositions'][1]],
+                                                     'flashcards': LANTERN['flashcards'],
+                                                     'already': [{'text': LANTERN['propositions'][0], 'as': 'P2'}]}})
+    done = run(root, job_id, reviewer(checks, check=check))
     props = cardfmt.propositions_of(card_of(root, EXISTING).body)
     assert props.count('Items stay in arrival order.') == 1 and props[-1] == LANTERN['propositions'][1]
     assert done['merged_into_existing'][0]['propositions'] == ['P3']
+    assert "says what card_exist P2 says word for word" in done['source_check_refusals'][0]['message']
 
 
 def test_the_merge_check_must_give_each_existing_card_one_patch_from_the_cards_that_extend_it(tmp_path):

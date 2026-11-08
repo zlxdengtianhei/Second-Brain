@@ -44,7 +44,7 @@ from typing import Any, Callable
 
 from .. import decisions
 from ..overlap import LEVELS, TOPIC_LEVELS, with_problem
-from ..textnorm import plain
+from ..textnorm import near_same, plain, same_text
 
 SLOT = 'xc01'
 STEP = 'source_check'
@@ -64,6 +64,10 @@ _FLASHCARD = {'type': 'object', 'required': ['q', 'a'], 'properties': {'q': _STR
 #: with the proposition of the target that already says it (``{"text": <word for word>, "as": "P3"}``).
 _ALREADY = {'type': 'array', 'items': {'type': 'object', 'required': ['text', 'as'],
                                        'properties': {'text': _STR, 'as': _STR}}}
+#: A carried proposition or question that only looks like one of the existing card's (``P3``, ``Q2``), and why
+#: it is another point (the program sends close wordings back otherwise; the same words always).
+_DIFFERS = {'type': 'array', 'items': {'type': 'object', 'required': ['text', 'from', 'reason'],
+                                       'properties': {'text': _STR, 'from': _STR, 'reason': _STR}}}
 
 SCHEMA = {
     'type': 'object', 'required': ['cards', 'new_topics'],
@@ -96,7 +100,7 @@ SCHEMA = {
                            'replace': {'type': 'array', 'items': {
                                'type': 'object', 'required': ['proposition', 'by'],
                                'properties': {'proposition': _STR, 'by': _STR}}},
-                           'already': _ALREADY}}},
+                           'already': _ALREADY, 'differs': _DIFFERS}}},
         'disputes': {'type': 'array', 'items': {
             'type': 'object', 'required': ['slug', 'reason'], 'properties': {'slug': _STR, 'reason': _STR}}},
     }}
@@ -337,6 +341,8 @@ def _check_patches(frozen: dict, payload: dict, rows: dict, merged: dict, errors
                                                                    for p in _row_items(rows, s, 'propositions')]
         errors += _incomplete(at, list(dict.fromkeys(wanted)), added, row.get('replace') or [], row.get('already'),
                               total, target)
+        errors += _said_twice(at, target, groups[target]['card'] or {}, added, row.get('replace') or [],
+                              flashcards, row.get('differs'))
         swapped = set()
         for k, swap in enumerate(row.get('replace') or []):
             ref, by = (swap.get('proposition'), swap.get('by')) if isinstance(swap, dict) else (None, None)
@@ -377,6 +383,66 @@ def _incomplete(at: str, wanted: list, carried: list, replace: list, already, to
                       + f': carry every proposition, use it in replace, or name in already the proposition of '
                         f'{target} that says it ({{"text": ..., "as": "P<n>"}}). Never leave one out for the size of '
                         f'{target}: the program splits what does not fit')
+    return errors
+
+
+def _said_twice(at: str, target: str, old: dict, added: list, replace: list, flashcards: list, differs) -> list[str]:
+    """A patch must not make ``target`` say a point twice (H7 ④, decision D-14): each carried proposition (and
+    each replacement, against the card's other propositions) and each carried question is compared with the card.
+    The same words (:func:`same_text`) always go back; a close wording (:func:`near_same`) goes back unless
+    ``differs`` names the pair and says why it is another point. Nothing is dropped here."""
+    props = [str(p) for p in old.get('propositions') or []]
+    questions = [str(f.get('q')) for f in old.get('flashcards') or [] if isinstance(f, dict)]
+    errors, allowed = [], set()
+    carried = set(added) | {r.get('by') for r in replace if isinstance(r, dict)} | {
+        f.get('q') for f in flashcards if isinstance(f, dict)}
+    for k, row in enumerate(differs or []):
+        text, ref, why = (row.get('text'), row.get('from'), row.get('reason')) if isinstance(row, dict) else (None,) * 3
+        kind, number = (ref[0], int(ref[1:])) if isinstance(ref, str) and re.fullmatch(r'[PQ][1-9]\d*', ref) else ('', 0)
+        if text not in carried:
+            errors.append(f'{at}.differs[{k}].text must be a proposition, replacement or question of this patch, '
+                          'copied exactly')
+        elif not 1 <= number <= len(props if kind == 'P' else questions if kind == 'Q' else []):
+            errors.append(f'{at}.differs[{k}].from must name a proposition (P1–P{len(props)}) or review card '
+                          f'(Q1–Q{len(questions)}) of {target}')
+        elif not isinstance(why, str) or not why.strip():
+            errors.append(f'{at}.differs[{k}]: say why it is another point than {target} {ref}')
+        else:
+            allowed.add((text, ref))
+
+    def against(text, olds, skip=None):
+        for how, same in (('same', same_text), ('near', near_same)):
+            for n, other in enumerate(olds, 1):
+                if n != skip and same(text, other):
+                    return n, how
+        return None, None
+    for text in added:
+        n, how = against(text, props)
+        if how == 'same':
+            errors.append(f'{at}.propositions: {text!r} says what {target} P{n} says word for word ({props[n - 1]!r}): '
+                          f'name it in already as P{n}')
+        elif how == 'near' and (text, f'P{n}') not in allowed:
+            errors.append(f'{at}.propositions: {text!r} may say again what {target} P{n} says ({props[n - 1]!r}): when '
+                          f'it says more, put it in replace for P{n}; when it says the same, name it in already; when '
+                          f'it makes another point, list it in differs ({{"text": ..., "from": "P{n}", "reason": ...}})')
+    for k, swap in enumerate(replace):
+        by, ref = (swap.get('by'), swap.get('proposition')) if isinstance(swap, dict) else (None, None)
+        skip = int(ref[1:]) if isinstance(ref, str) and re.fullmatch(r'P[1-9]\d*', ref) else None
+        n, how = against(by, props, skip) if isinstance(by, str) else (None, None)
+        if how == 'same' or (how == 'near' and (by, f'P{n}') not in allowed):
+            errors.append(f'{at}.replace[{k}].by {"says" if how == "same" else "may say"} again what {target} P{n} '
+                          f'says ({props[n - 1]!r}): replace P{n} instead, or leave that part out'
+                          + ('' if how == 'same' else ', or list it in differs with "from": "P' + str(n) + '"'))
+    for f in flashcards:
+        question = f.get('q') if isinstance(f, dict) else None
+        n, how = against(question, questions) if isinstance(question, str) else (None, None)
+        if how == 'same':
+            errors.append(f'{at}.flashcards: {question!r} asks what {target} Q{n} asks ({questions[n - 1]!r}): '
+                          'leave it out')
+        elif how == 'near' and (question, f'Q{n}') not in allowed:
+            errors.append(f'{at}.flashcards: {question!r} may ask again what {target} Q{n} asks '
+                          f'({questions[n - 1]!r}): leave it out, or list it in differs with "from": "Q{n}" and why '
+                          'it asks something else')
     return errors
 
 

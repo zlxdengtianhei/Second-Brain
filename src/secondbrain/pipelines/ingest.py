@@ -2979,6 +2979,7 @@ def _apply_job(root: Path, job_id: str, settled: list[dict] | None = None) -> di
               'maintenance': maintenance,
               'needs_review': needs_review, 'conflicts': conflicts,
               **({'source_check': _check_report(check, ids)} if check else {}),
+              'source_check_refusals': _check_refusals(root, job_id),
               'source_record': {'sha256': source['sha256'], 'path': source_rel},
               'inbox_moved': move, 'projection_metrics': projection_metrics,
               'diagrams': [row for row in drawn['report'] if row['ref'] in {p['slug'] for p in produced}],
@@ -3084,6 +3085,22 @@ def _outcomes_of(entries: list, chunks: list[dict], routed: list[dict], check: d
             if found['outcome'] != went and not (isinstance(went, tuple) and found['outcome'] in went):
                 raise Conflict(f'{slug}: the decision record says {found["outcome"]}, the write would {went}')
             out[slug] = found['outcome']
+    return out
+
+
+def _check_refusals(root: Path, job_id: str) -> list[dict]:
+    """Every merge-check answer the program sent back, with its reasons (API runs that failed validation, and
+    host submissions refused), in order: ``[{slot, run_id, message}]``."""
+    out = []
+    for run in jobs.list_runs(root, job_id):
+        if run.get('role') != 'reviewer' or not source_check.is_slot(run.get('chunk')):
+            continue
+        messages = list(run.get('rejected') or [])
+        error = run.get('error') or {}
+        if run.get('status') == 'failed' and error.get('code') == INVALID_OUTPUT and \
+                str(error.get('message') or '')[:4000] not in messages:  # not JSON, or refused at submit (once)
+            messages.append(str(error.get('message') or ''))
+        out += [{'slot': run['chunk'], 'run_id': run['run_id'], 'message': m} for m in messages]
     return out
 
 

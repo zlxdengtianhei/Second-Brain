@@ -376,3 +376,16 @@ def export(lang: str | None = None) -> dict:
 def pages(lang: str | None = None) -> dict:
     """HOME, entry block and review page text for ``lang`` (default: configured)."""
     return PAGES[lang or language()]
+
+
+#: Words :func:`secondbrain.textnorm.near_same` leaves out before it compares two texts: pointers ("this"), question
+#: words ("how") and function words, so that two questions are compared on what they ask about. Longest first.
+NEAR_IGNORED = {
+    'zh': ('为什么', '这个', '那个', '这种', '那种', '这些', '那些', '什么', '怎么', '怎样', '如何', '为何', '哪些',
+           '哪个', '多少', '这', '那', '它', '其', '该', '此', '哪', '几', '吗', '呢', '吧', '是', '的', '了', '会',
+           '都', '也', '就'),
+    'en': ('a', 'an', 'the', 'this', 'that', 'these', 'those', 'it', 'its', 'they', 'them', 'their', 'is', 'are',
+           'was', 'were', 'be', 'been', 'do', 'does', 'did', 'what', 'which', 'who', 'whom', 'whose', 'how', 'why',
+           'when', 'where', 'of', 'to', 'in', 'on', 'at', 'for', 'by', 'with', 'and', 'or', 'as', 'can', 'could',
+           'should', 'would', 'will'),
+}
