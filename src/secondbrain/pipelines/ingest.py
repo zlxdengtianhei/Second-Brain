@@ -27,7 +27,8 @@ from pathlib import Path
 
 import yaml
 
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
+from typing import Callable
 
 from .. import cards as cardfmt
 from .. import config, decisions, inbox, jobs, labels, overlap, review_notes, schemas
@@ -787,11 +788,7 @@ def _note_step(root: Path, job_id: str, state: dict, packet: dict, slot: str, pr
     except ExecutorFailure as failure:
         if failure.code != INVALID_OUTPUT:
             raise
-        failed = int(info.get('invalid_outputs', 0)) + 1
-        fields = {'invalid_outputs': failed, 'last_validation_error': failure.error.get('message', '')[:4000]}
-        if failed > jobs.policy_of(packet).max_invalid_retries:
-            fields['skipped'] = f'the note failed validation {failed} times; the chunk has the program\'s note alone'
-        _mark_slot(root, job_id, slot, **fields)
+        _refused_answer(root, job_id, slot, 'producer', failure.error.get('message', ''))
 
 
 def producer_packet(root: Path, state: dict, packet: dict, slot: str) -> dict:
@@ -1422,19 +1419,106 @@ def _made_amends(root: Path, packet: dict, state: dict, chunk: str, candidate: d
     return {**review, 'cards': out}
 
 
+@dataclass(frozen=True)
+class AnswerRole:
+    """A role that asks a model for an answer in an ingest job: the slots it answers in, its answer's schema, and
+    how its answers the program refuses (``INVALID_OUTPUT``) are counted (:func:`_refused_answer`).
+
+    ``count`` and ``error`` are the slot fields of the job state that keep the count and the last refusal (a
+    producer and a reviewer may answer in the same slot). Once the count is past ``max_invalid_retries``,
+    ``used_up`` says what follows: ``pending`` (what the answer was for waits for the owner, with the reason) or
+    ``without`` (the job goes on without it; ``skip`` says how, and is recorded on the slot). ``retries`` is the
+    budget of one slot: ``max_invalid_retries``, except where the role asks again in a slot of its own.
+    """
+    name: str
+    role: str
+    owns: Callable[[str], bool]
+    schema: Callable[[str], dict]
+    count: str = 'invalid_outputs'
+    error: str = 'last_validation_error'
+    used_up: str = 'pending'
+    skip: str = ''
+    rounds: bool = False  # a slot with repair rounds (``c01.r1``): its chunk shows the latest refusal too
+    retries: Callable[[object], int] = lambda rules: rules.max_invalid_retries
+
+
+#: Every role that asks a model in an ingest job; a slot and a role name exactly one. An answer's schema is read
+#: from here (:func:`_answer_schema`), so a new kind of slot cannot be asked for without its count and budget.
+ANSWER_ROLES = (
+    AnswerRole('chunk producer', 'producer', lambda s: not _aux_slot(s), lambda s: schemas.CARDS, rounds=True),
+    AnswerRole('chunk reviewer', 'reviewer', lambda s: not _aux_slot(s), lambda s: schemas.REVIEW_CARDS,
+               count='invalid_reviews', error='last_review_error'),
+    AnswerRole('merge check', 'reviewer', lambda s: source_check.is_slot(s), lambda s: source_check.SCHEMA,
+               used_up='without', skip='the cards were written as the chunk reviews left them'),
+    AnswerRole('dispute re-judge', 'reviewer', lambda s: _is_rejudge(s), lambda s: REJUDGE_SCHEMA,
+               count='invalid_reviews', error='last_review_error'),
+    AnswerRole('split producer', 'producer', lambda s: split.is_slot(_base(s)), lambda s: split.CARD_SCHEMA,
+               rounds=True),
+    AnswerRole('split reviewer', 'reviewer', lambda s: split.is_slot(_base(s)), lambda s: split.REVIEW_SCHEMA,
+               count='invalid_reviews', error='last_review_error'),
+    AnswerRole('context note', 'producer', lambda s: notes.is_slot(s),
+               lambda s: notes.CONCEPTS_SCHEMA if s == notes.CONCEPTS_SLOT else notes.SUMMARY_SCHEMA,
+               used_up='without', skip="the chunk has the program's note alone"),
+    # a diagram answer that fails the checks is asked again once, in its rewrite slot (dg01.r1), with the errors
+    AnswerRole('diagram', 'producer', lambda s: card_diagrams.is_slot(s), lambda s: card_diagrams.answer_schema(),
+               used_up='without', skip='its cards are written without a diagram', retries=lambda rules: 0),
+)
+
+
+def answer_role(slot: str, role: str) -> AnswerRole:
+    """The role that answers as ``role`` (producer or reviewer) in ``slot``."""
+    found = [r for r in ANSWER_ROLES if r.role == role and r.owns(slot)]
+    if len(found) != 1:
+        raise IngestError(f'no {role} answers in slot {slot!r}')
+    return found[0]
+
+
+def _refusals(info: dict, spec: AnswerRole) -> int:
+    """How many answers of ``spec``'s role in one slot failed the program's checks."""
+    return int((info or {}).get(spec.count, 0))
+
+
+def _retries_left(info: dict, rules, spec: AnswerRole | None = None) -> bool:
+    """Whether a slot whose answers failed the program's checks may be asked again (``max_invalid_retries``); the
+    chunk producer's count unless ``spec`` names another role."""
+    spec = spec or ANSWER_ROLES[0]
+    return _refusals(info, spec) <= spec.retries(rules)
+
+
+def _refused_answer(root: Path, job_id: str, slot: str, role: str, message: str) -> int:
+    """The one entry for an answer of any role that failed the program's checks (``INVALID_OUTPUT``); returns the
+    count so far.
+
+    The count is kept in the job state under the slot, by role, so a job run again goes on counting from there:
+    one ``advance`` asks at most ``max_invalid_retries`` + 1 times (the role's ``retries`` + 1), and a resumed job no
+    more. Past that the slot
+    records why it was given up (``given_up``; and ``skipped`` for a role the job goes on without); what was asked
+    for then waits for the owner or is done without, as its role says (:data:`ANSWER_ROLES`).
+    """
+    from ..store import vault_lock, write_json
+    spec = answer_role(slot, role)
+    with vault_lock(root):
+        state = jobs.load(root, job_id)
+        packet = jobs.read_input(root, job_id)
+        chunks = state.setdefault('chunks', {})
+        fresh = {'candidate': None, 'review': None, 'status': 'prepared', 'round': 0}
+        info = chunks.setdefault(slot, dict(fresh))
+        info[spec.count] = failed = int(info.get(spec.count, 0)) + 1
+        info[spec.error] = message[:8000]
+        if spec.rounds and slot != _base(slot):  # the chunk shows its latest error too
+            chunks.setdefault(_base(slot), dict(fresh))[spec.error] = message[:8000]
+        if failed > spec.retries(jobs.policy_of(packet)):
+            info['given_up'] = f"the {spec.name}'s answer failed validation {failed} times: {message[:500]}"
+            if spec.used_up == 'without':
+                info['skipped'] = f"the {spec.name}'s answer failed validation {failed} times; {spec.skip}"
+        state['updated_at'] = jobs.now()
+        write_json(root, jobs.location(job_id), state)
+    return failed
+
+
 def _answer_schema(chunk: str, role: str) -> dict:
     """The output schema the slot ``chunk`` asked ``role`` for."""
-    if card_diagrams.is_slot(chunk):
-        return card_diagrams.answer_schema()
-    if source_check.is_slot(chunk):
-        return source_check.SCHEMA
-    if _is_rejudge(chunk):
-        return REJUDGE_SCHEMA
-    if notes.is_slot(chunk):
-        return notes.CONCEPTS_SCHEMA if chunk == notes.CONCEPTS_SLOT else notes.SUMMARY_SCHEMA
-    if split.is_slot(_base(chunk)):
-        return split.REVIEW_SCHEMA if role == 'reviewer' else split.CARD_SCHEMA
-    return schemas.REVIEW_CARDS if role == 'reviewer' else schemas.CARDS
+    return answer_role(chunk, role).schema(chunk)
 
 
 def validate_submission(packet: dict, payload: dict, *, role: str, candidate=None,
@@ -1673,6 +1757,10 @@ def _routed(state: dict, settled: list[dict]) -> list[dict]:
     ``distinct``: stays in ``accepted``, the merge check's decision set.
     """
     entries = state.get('decisions') or []
+    # a disputed card whose judgement again kept failing the program's checks: it waits for the owner, out of the
+    # merge check's patch set (:func:`_for_merge`), with the dispute and the last refusal
+    given_up = {name.split('-', 1)[1]: info for name, info in (state.get('chunks') or {}).items()
+                if _is_rejudge(name) and info.get('given_up') and not info.get('review')}
     out = []
     for o in settled:
         accepted, repeats, dups = {}, {}, list(o['duplicates'])
@@ -1683,6 +1771,10 @@ def _routed(state: dict, settled: list[dict]) -> list[dict]:
                              'reason': first['reason'], 'chunk': o['chunk'], 'by': 'reviewer'})
             elif first['outcome'] == 'patch':
                 repeats[slug] = {**card, '_with': first['with'][0], '_reason': first['reason']}
+                if slug in given_up:
+                    repeats[slug]['_given_up'] = (
+                        f'the merge check could not add it to {first["with"][0]}: '
+                        f'{given_up[slug].get("dispute") or "disputed"}; {given_up[slug]["given_up"]}')
             else:
                 accepted[slug] = card
         out.append({**o, 'accepted': accepted, 'repeats': repeats, 'duplicates': dups})
@@ -1703,10 +1795,10 @@ def _for_merge(root: Path, packet: dict, routed: list[dict]) -> list[dict]:
         return routed
     snapshot = read_snapshot(root)
 
-    def takes(target):
-        card = snapshot.cards.get(target)
-        return card is not None and cardfmt.patchable(card.body) is None
-    return [{**o, 'repeats': {s: c for s, c in (o.get('repeats') or {}).items() if takes(c['_with'])}} for o in routed]
+    def takes(card):
+        old = snapshot.cards.get(card['_with'])
+        return old is not None and cardfmt.patchable(old.body) is None and not card.get('_given_up')
+    return [{**o, 'repeats': {s: c for s, c in (o.get('repeats') or {}).items() if takes(c)}} for o in routed]
 
 
 def _unaccepted_topics(root, state, base: str, upto_round: int) -> dict:
@@ -1745,16 +1837,6 @@ def _accepted_so_far(root, state, base: str, upto_round: int) -> dict:
     return accepted
 
 
-def _failed(info: dict) -> int:
-    """How many answers for one slot failed the program's checks."""
-    return int(info.get('invalid_outputs', 0))
-
-
-def _retries_left(info: dict, rules) -> bool:
-    """Whether a slot whose answers failed the program's checks may be asked again (``max_invalid_retries``)."""
-    return _failed(info) <= rules.max_invalid_retries
-
-
 def chunk_outcome(root: Path, state: dict, packet: dict, base: str) -> dict:
     """Merge rounds of one chunk; ``next`` names the step still needed, if any."""
     slots = _slots(state, base)
@@ -1768,7 +1850,7 @@ def chunk_outcome(root: Path, state: dict, packet: dict, base: str) -> dict:
     if not slots or not slots[0][1].get('candidate'):
         if not _retries_left(info0, rules):
             out.update(settled=True, pending=[{'scope': 'chunk', 'chunk': base, 'reason':
-                       f'the producer output failed validation {_failed(info0)} times: '
+                       f'the producer output failed validation {_refusals(info0, ANSWER_ROLES[0])} times: '
                        + str(info0.get('last_validation_error') or '')[:2000]}])
             return out
         note = _note_due(state, packet, base)
@@ -1794,7 +1876,7 @@ def chunk_outcome(root: Path, state: dict, packet: dict, base: str) -> dict:
                 return out
             break
         if not info.get('review'):
-            if int(info.get('invalid_reviews', 0)) <= rules.max_invalid_retries:
+            if _retries_left(info, rules, answer_role(slot, 'reviewer')):
                 out['next'] = ('review', slot)
                 return out
             unreviewed = (slot, info)  # its review kept failing the checks: its cards stay pending
@@ -1930,9 +2012,7 @@ def _step(root: Path, job_id: str, action: tuple, producer, reviewer) -> None:
         except ExecutorFailure as failure:
             if failure.code != INVALID_OUTPUT:
                 raise
-            info = (state.get('chunks') or {}).get(slot) or {}
-            _mark_slot(root, job_id, slot, invalid_reviews=int(info.get('invalid_reviews', 0)) + 1,
-                       last_review_error=failure.error.get('message', '')[:8000])
+            _refused_answer(root, job_id, slot, 'reviewer', failure.error.get('message', ''))
         return
     text = _prompt('produce_cards.md', state)
     if packet.get('retry'):
@@ -1955,7 +2035,7 @@ def _step(root: Path, job_id: str, action: tuple, producer, reviewer) -> None:
             return
         if failure.code != INVALID_OUTPUT:
             raise
-        _record_invalid(root, job_id, base, slot, failure.error.get('message', ''))
+        _refused_answer(root, job_id, slot, 'producer', failure.error.get('message', ''))
 
 
 def _prompt_only(name: str) -> str:
@@ -1970,21 +2050,6 @@ def _record_split(root: Path, job_id: str, base: str, message: str) -> None:
         info = state.setdefault('chunks', {}).setdefault(
             base, {'candidate': None, 'review': None, 'status': 'prepared', 'round': 0})
         info.update(split=True, status='split', split_error=message[:2000])
-        state['updated_at'] = jobs.now()
-        write_json(root, jobs.location(job_id), state)
-
-
-def _record_invalid(root: Path, job_id: str, base: str, slot: str, message: str) -> None:
-    from ..store import vault_lock, write_json
-    with vault_lock(root):
-        state = jobs.load(root, job_id)
-        chunks = state.setdefault('chunks', {})
-        info = chunks.setdefault(slot, {'candidate': None, 'review': None, 'status': 'prepared', 'round': 0})
-        info['invalid_outputs'] = int(info.get('invalid_outputs', 0)) + 1
-        info['last_validation_error'] = message[:8000]
-        if slot != base:  # the chunk shows its latest error too
-            chunks.setdefault(base, {'candidate': None, 'review': None, 'status': 'prepared', 'round': 0})
-            chunks[base]['last_validation_error'] = message[:8000]
         state['updated_at'] = jobs.now()
         write_json(root, jobs.location(job_id), state)
 
@@ -2148,20 +2213,31 @@ def _source_check_stage(root: Path, job_id: str, packet: dict, settled: list[dic
                 return []
             for slug in sorted(disputed):
                 rj = _rejudge_slot(n + 1, slug)
-                if ((state.get('chunks') or {}).get(rj) or {}).get('review'):
-                    continue
-                if not ((state.get('chunks') or {}).get(rj) or {}).get('candidate'):
-                    jobs.put_program_candidate(root, job_id, rj, _rejudge_input(root, state, packet, routed, slug,
-                                                                                 disputed[slug]))
+                while True:  # asked again while its budget lasts; past it the card waits for the owner (_routed)
+                    rinfo = (state.get('chunks') or {}).get(rj) or {}
+                    if rinfo.get('review') or rinfo.get('given_up'):
+                        break
+                    if not rinfo.get('candidate'):
+                        jobs.put_program_candidate(root, job_id, rj, _rejudge_input(root, state, packet, routed,
+                                                                                     slug, disputed[slug]))
+                        _mark_slot(root, job_id, rj, dispute=disputed[slug])
+                        state = jobs.load(root, job_id)
+                        rinfo = state['chunks'][rj]
+                    text = _prompt('review_dispute.md', state)
+                    if rinfo.get('last_review_error'):
+                        text += ('\n## Your previous answer was rejected by the validator\n\n'
+                                 + rinfo['last_review_error'] + '\n')
+                    try:
+                        call_executor(root, job_id, executor, role='reviewer', step='review', prompt_text=text,
+                                      packet=jobs.artifact(root, state, 'candidate', rj),
+                                      output_schema=REJUDGE_SCHEMA, chunk=rj)
+                    except AwaitingSubmission as waiting:
+                        return [{**waiting.handoff, 'chunk': rj, 'step': 'dispute'}]
+                    except ExecutorFailure as failure:
+                        if failure.code != INVALID_OUTPUT:
+                            raise
+                        _refused_answer(root, job_id, rj, 'reviewer', failure.error.get('message', ''))
                     state = jobs.load(root, job_id)
-                text = _prompt('review_dispute.md', state)
-                try:
-                    call_executor(root, job_id, executor, role='reviewer', step='review', prompt_text=text,
-                                  packet=jobs.artifact(root, state, 'candidate', rj), output_schema=REJUDGE_SCHEMA,
-                                  chunk=rj)
-                except AwaitingSubmission as waiting:
-                    return [{**waiting.handoff, 'chunk': rj, 'step': 'dispute'}]
-                state = jobs.load(root, job_id)
             slot = source_check.round_slot(n + 1)
             info = {}
             routed = _for_merge(root, packet, _routed(state, settled))
@@ -2183,12 +2259,7 @@ def _source_check_stage(root: Path, job_id: str, packet: dict, settled: list[dic
         except ExecutorFailure as failure:
             if failure.code != INVALID_OUTPUT:
                 raise
-            failed = int(info.get('invalid_outputs', 0)) + 1
-            fields = {'invalid_outputs': failed, 'last_validation_error': failure.error.get('message', '')[:8000]}
-            if failed > rules.max_invalid_retries:
-                fields['skipped'] = (f'the answer failed validation {failed} times; the cards were written as '
-                                     'the chunk reviews left them')
-            _mark_slot(root, job_id, slot, **fields)
+            _refused_answer(root, job_id, slot, 'reviewer', failure.error.get('message', ''))
 
 
 def _rejudge_input(root: Path, state: dict, packet: dict, routed: list[dict], slug: str, reason: str) -> dict:
@@ -2259,7 +2330,8 @@ def _split_plan(root: Path, job_id: str, packet: dict, settled: list[dict]) -> l
         for slug, card in (o.get('repeats') or {}).items():
             target = card['_with']
             old = snapshot.cards.get(target)
-            if slug in disputed or target not in patches or old is None or not _merging(packet):
+            if slug in disputed or target not in patches or old is None or not _merging(packet) or \
+                    card.get('_given_up'):
                 continue
             problem, _, _ = _patch_fits(old, patches[target])
             if problem != 'too_large':
@@ -2307,7 +2379,7 @@ def split_outcome(root: Path, state: dict, packet: dict, item: dict) -> dict:
     if not slots or not slots[0][1].get('candidate'):
         if not _retries_left(info0, rules):
             return {'settled': True, 'next': None, 'card': None,
-                    'pending': f'the split card failed validation {_failed(info0)} times: '
+                    'pending': f'the split card failed validation {_refusals(info0, ANSWER_ROLES[0])} times: '
                                f'{str(info0.get("last_validation_error") or "")[:500]}'}
         return {'settled': False, 'next': ('produce', base), 'card': None, 'pending': None}
     last = None
@@ -2317,7 +2389,9 @@ def split_outcome(root: Path, state: dict, packet: dict, item: dict) -> dict:
                 return {'settled': False, 'next': ('repair', slot), 'card': None, 'pending': None}
             break
         if not info.get('review'):
-            return {'settled': False, 'next': ('review', slot), 'card': None, 'pending': None}
+            if _retries_left(info, rules, answer_role(slot, 'reviewer')):
+                return {'settled': False, 'next': ('review', slot), 'card': None, 'pending': None}
+            return {'settled': True, 'next': None, 'card': None, 'pending': info.get('given_up')}
         review = jobs.require_independent_review(root, state, slot)
         last = (slot, review)
         if review['decision'] == 'accept':
@@ -2399,10 +2473,18 @@ def _split_stage(root: Path, job_id: str, packet: dict, settled: list[dict], pro
             if kind == 'review':
                 from ..runner import withhold_reasons
                 cand = jobs.artifact(root, state, 'candidate', slot)
-                call_executor(root, job_id, reviewer, role='reviewer', step='review',
-                              prompt_text=_prompt('review_split.md', state),
-                              packet={**shown, 'card': withhold_reasons(cand['card'])},
-                              output_schema=split.REVIEW_SCHEMA, chunk=slot)
+                text = _prompt('review_split.md', state)
+                feedback = ((state.get('chunks') or {}).get(slot) or {}).get('last_review_error')
+                if feedback:
+                    text += '\n## Your previous answer was rejected by the validator\n\n' + feedback + '\n'
+                try:
+                    call_executor(root, job_id, reviewer, role='reviewer', step='review', prompt_text=text,
+                                  packet={**shown, 'card': withhold_reasons(cand['card'])},
+                                  output_schema=split.REVIEW_SCHEMA, chunk=slot)
+                except ExecutorFailure as failure:
+                    if failure.code != INVALID_OUTPUT:
+                        raise
+                    _refused_answer(root, job_id, slot, 'reviewer', failure.error.get('message', ''))
             else:
                 body = {**shown, 'card': item['card'], 'carry': item['carry']}
                 if kind == 'repair':
@@ -2419,7 +2501,7 @@ def _split_stage(root: Path, job_id: str, packet: dict, settled: list[dict], pro
                 except ExecutorFailure as failure:
                     if failure.code != INVALID_OUTPUT:
                         raise
-                    _record_invalid(root, job_id, item['slot'], slot, failure.error.get('message', ''))
+                    _refused_answer(root, job_id, slot, 'producer', failure.error.get('message', ''))
         except AwaitingSubmission as waiting:
             handoffs.append({**waiting.handoff, 'chunk': slot, 'step': 'split'})
             handed.add(item['slot'])
@@ -2561,7 +2643,7 @@ def _diagram_answer(root: Path, state: dict, slot: str) -> tuple[bool, object]:
     info = (state.get('chunks') or {}).get(slot) or {}
     if info.get('candidate'):
         return True, jobs.artifact(root, state, 'candidate', slot)
-    if info.get('invalid_output'):
+    if info.get('skipped') or info.get('invalid_output'):  # its budget used up (invalid_output: an older job)
         return True, None
     return False, None
 
@@ -2594,7 +2676,7 @@ def _diagram_stage(root: Path, job_id: str, packet: dict, settled: list[dict], e
         except ExecutorFailure as failure:
             if failure.code != INVALID_OUTPUT:
                 raise
-            _mark_slot(root, job_id, slot, invalid_output=failure.error.get('message', '')[:2000])
+            _refused_answer(root, job_id, slot, 'producer', failure.error.get('message', ''))
 
 
 def _mark_slot(root: Path, job_id: str, slot: str, **fields) -> None:
@@ -3196,7 +3278,9 @@ def _repeat_fates(root: Path, state: dict, packet: dict, settled: list[dict], ch
             target = card['_with']
             fate = {'target': target, 'chunk': o['chunk']}
             old = snapshot.cards.get(target)
-            if slug in disputes:
+            if card.get('_given_up'):  # its judgement again, after a dispute, kept failing the program's checks
+                fate.update(how='pending', reason=card['_given_up'])
+            elif slug in disputes:
                 fate.update(how='pending', reason=f'the merge check could not add it to {target}: {disputes[slug]}')
             elif target in held:  # D-20: written next to its card, needs-review, with what the program found
                 fate.update(how='written', held=True,

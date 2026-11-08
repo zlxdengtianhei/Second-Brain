@@ -39,7 +39,9 @@ from . import checks, render, skeleton
 KIND = 'export'
 SMOOTH = 'smooth'
 DONE = frozenset({'accepted', 'escalated'})
-#: Executor failures a step may have before the export stops (each is a new run).
+#: Executor failures other than a refused answer (transport, a crash) a step may have in one ``advance`` before the
+#: export stops (each is a new run). A refused answer (``INVALID_OUTPUT``) is counted in the job state instead, against
+#: ``max_invalid_retries`` (:func:`_refused`).
 MAX_FAILURES = 3
 
 
@@ -255,10 +257,17 @@ def _plan(root, job_id, state, packet, errors_for, feedback) -> list[tuple]:
     steps, pending = [], []
 
     def note(chunk, kind, text):
-        message = feedback.get((chunk, kind))
+        message = feedback.get((chunk, kind)) or _last_refusal(chunks.get(chunk) or {}, kind)
         if message:
             text += '\n## Your previous answer was rejected by the validator\n\n' + message + '\n'
         return text
+
+    def given_up(chunk, slot, kind, *args, **kwargs):
+        nonlocal chunks
+        if not _given_up(root, job_id, chunk, slot, kind, *args, **kwargs):
+            return False
+        chunks = jobs.load(root, job_id).get('chunks') or {}  # the next unit reads it settled
+        return True
 
     for i, unit in enumerate(packet['units']):
         uid = unit['id']
@@ -266,8 +275,11 @@ def _plan(root, job_id, state, packet, errors_for, feedback) -> list[tuple]:
         if slot.get('status') in DONE:
             continue
         if not slot.get('candidate'):
+            if given_up(uid, slot, 'produce'):
+                continue
             pending.append(uid)
-            if packet['mode'] == 'sequential' and i and not (chunks.get(packet['units'][i - 1]['id']) or {}).get('candidate'):
+            before = chunks.get(packet['units'][i - 1]['id']) or {} if i else {}
+            if packet['mode'] == 'sequential' and i and not before.get('candidate') and before.get('status') not in DONE:
                 continue
             steps.append(('produce', uid, note(uid, 'produce', head + prompt('export_write.md')),
                           write_packet(packet, unit, _previous_paragraph(root, state, packet, i)),
@@ -275,6 +287,8 @@ def _plan(root, job_id, state, packet, errors_for, feedback) -> list[tuple]:
             continue
         candidate = jobs.artifact(root, state, 'candidate', uid)
         if not slot.get('review'):
+            if given_up(uid, slot, 'review', [pid for pid, _, _ in paragraphs(candidate)]):
+                continue
             pending.append(uid)
             steps.append(('review', uid, note(uid, 'review', head + prompt('export_review.md')),
                           review_packet(packet, unit, candidate), schemas.EXPORT_REVIEW, 'reviewer'))
@@ -283,6 +297,9 @@ def _plan(root, job_id, state, packet, errors_for, feedback) -> list[tuple]:
         revise = [x for x in review['items'] if x['decision'] == 'revise']
         found = unit_findings(packet, unit, candidate, errors_for([t for _, _, t in paragraphs(candidate)]))
         if _settled(root, job_id, uid, slot, review, revise, found):
+            continue
+        if given_up(uid, jobs.load(root, job_id)['chunks'][uid], 'repair', unresolved={
+                'review': revise, 'program': found}):
             continue
         pending.append(uid)
         text = (head + prompt('export_write.md') + '\n' + prompt('export_repair.md') + '\n```json\n'
@@ -297,11 +314,15 @@ def _plan(root, job_id, state, packet, errors_for, feedback) -> list[tuple]:
     if smooth.get('status') in DONE:
         return steps
     if not smooth.get('candidate'):
+        if given_up(SMOOTH, smooth, 'produce'):
+            return steps
         steps.append(('produce', SMOOTH, note(SMOOTH, 'produce', head + prompt('export_smooth.md')),
                       _smooth_packet(root, job_id, state, packet), schemas.EXPORT_SMOOTH, 'producer'))
         return steps
     candidate = jobs.artifact(root, state, 'candidate', SMOOTH)
     if not smooth.get('review'):
+        if given_up(SMOOTH, smooth, 'review', [pid for pid, _ in smooth_paragraphs(candidate)]):
+            return steps
         steps.append(('review', SMOOTH, note(SMOOTH, 'review', head + prompt('export_smooth_review.md')),
                       smooth_review_packet(root, job_id, state, packet, candidate), schemas.EXPORT_REVIEW,
                       'reviewer'))
@@ -309,6 +330,9 @@ def _plan(root, job_id, state, packet, errors_for, feedback) -> list[tuple]:
     review = jobs.require_independent_review(root, state, SMOOTH)
     revise = [x for x in review['items'] if x['decision'] == 'revise']
     if _settled(root, job_id, SMOOTH, smooth, review, revise, []):
+        return steps
+    if given_up(SMOOTH, jobs.load(root, job_id)['chunks'][SMOOTH], 'repair',
+                 unresolved={'review': revise, 'program': []}):
         return steps
     text = (head + prompt('export_smooth.md') + '\n' + prompt('export_smooth_repair.md') + '\n```json\n'
             + json.dumps({'review_findings': revise}, ensure_ascii=False) + '\n```\n')
@@ -341,6 +365,50 @@ def _settled(root, job_id, chunk, slot, review, revise, found) -> bool:
     return False
 
 
+def _step_key(slot: dict, kind: str) -> str:
+    """A step of one unit in one repair round (``review@1``): each has its own budget, as an ingest slot does."""
+    return f'{kind}@{int(slot.get("round", 0))}'
+
+
+def _last_refusal(slot: dict, kind: str) -> str | None:
+    return (slot.get('refused') or {}).get(_step_key(slot, kind), {}).get('message')
+
+
+def _refused(root, job_id, chunk: str, kind: str, message: str) -> int:
+    """Count an answer of step ``kind`` of ``chunk`` that failed the program's checks, in the job state (an export
+    run again goes on counting); returns the count so far. :func:`_given_up` reads it."""
+    with vault_lock(root):
+        state = jobs.load(root, job_id)
+        slot = state.setdefault('chunks', {}).setdefault(chunk, {})
+        rows = slot.setdefault('refused', {})
+        row = rows.setdefault(_step_key(slot, kind), {'count': 0})
+        row.update(count=int(row['count']) + 1, message=str(message)[:2000])
+        state['updated_at'] = jobs.now()
+        write_json(root, jobs.location(job_id), state)
+        return row['count']
+
+
+def _given_up(root, job_id, chunk: str, slot: dict, kind: str, paragraph_ids=(), unresolved=None) -> bool:
+    """True when the answers of step ``kind`` of ``chunk`` failed the program's checks more than
+    ``max_invalid_retries`` times; the unit is then settled ``escalated``, as when its repair rounds run out: kept,
+    marked and listed for the owner (a review that never passed: each paragraph it was to judge, "not reviewed";
+    a writer that never answered: the unit, with nothing of it in the article)."""
+    row = (slot.get('refused') or {}).get(_step_key(slot, kind)) or {}
+    count = int(row.get('count', 0))
+    if count <= config.review_policy().max_invalid_retries:
+        return False
+    who = 'review' if kind == 'review' else 'writer'
+    why = f'its {who} answer failed validation {count} times, so it was not reviewed: {row.get("message", "")}' \
+        if kind == 'review' else f'its {who} answer failed validation {count} times: {row.get("message", "")}'
+    unresolved = dict(unresolved or {'review': [], 'program': []})
+    unresolved['review'] = list(unresolved.get('review') or []) + [{'id': pid, 'decision': 'revise', 'reason': why}
+                                                                   for pid in paragraph_ids]
+    unresolved['answer'] = why
+    _set_chunk(root, job_id, chunk, status='escalated', unresolved=unresolved,
+               **({'unwritten': True} if not slot.get('candidate') else {}))
+    return True
+
+
 def smooth_review_packet(root, job_id, state, packet, candidate) -> dict:
     """What the reviewer sees of the smoothing step: what that step was shown, and what it wrote."""
     shown = _smooth_packet(root, job_id, state, packet)
@@ -350,7 +418,10 @@ def smooth_review_packet(root, job_id, state, packet, candidate) -> dict:
 
 
 def _final_units(root, state, packet) -> dict:
-    return {u['id']: jobs.artifact(root, state, 'candidate', u['id']) for u in packet['units']}
+    """The final text of each unit; a unit whose writer never gave a valid answer has none (:func:`_given_up`)."""
+    chunks = state.get('chunks') or {}
+    return {u['id']: jobs.artifact(root, state, 'candidate', u['id']) for u in packet['units']
+            if (chunks.get(u['id']) or {}).get('candidate')}
 
 
 def _smooth_packet(root, job_id, state, packet) -> dict:
@@ -363,7 +434,7 @@ def _smooth_packet(root, job_id, state, packet) -> dict:
     sections = []
     for section in packet['sections']:
         entries = []
-        for uid in section['units']:
+        for uid in (u for u in section['units'] if u in units):
             paras = paragraphs(units[uid])
             unit = _unit(packet, uid)
             entries.append({'unit': uid, 'headings': [p['heading'] for p in unit['parts'] if p['heading']],
@@ -470,11 +541,12 @@ def advance(root: Path, job_id: str, *, producer, reviewer, checker=None, worker
                 return {'job_id': job_id, 'status': 'awaiting_submission', 'handoffs': handoffs}
             for chunk, kind, error in failed:
                 key = (chunk, kind)
+                if error.get('code') == 'INVALID_OUTPUT':  # counted in the job state; planning gives it up
+                    _refused(root, job_id, chunk, kind, str(error.get('message', '')))
+                    continue
                 failures[key] = failures.get(key, 0) + 1
                 if failures[key] >= MAX_FAILURES or not error.get('retryable', False):
                     raise ExecutorFailure(error)
-                if error.get('code') == 'INVALID_OUTPUT':
-                    feedback[key] = str(error.get('message', ''))[:2000]
         state = jobs.load(root, job_id)
         article, report = assemble(root, state, packet, errors_for, checker)
         if unchecked:
@@ -541,13 +613,16 @@ def _flags(state) -> dict:
         for finding in unresolved.get('program') or []:
             if finding.get('paragraph'):
                 out.setdefault(prefix + finding['paragraph'], _one_sentence(f"{finding['code']}: {finding['detail']}"))
+        if slot.get('unwritten'):  # its writer never gave a valid answer: nothing of it to mark, so the whole step
+            out.setdefault(chunk, _one_sentence(unresolved.get('answer')))
     return out
 
 
 def assemble(root, state, packet, errors_for, checker) -> tuple[dict, dict]:
     """The article as blocks, after the smoothing answer; and the program-check report."""
     units = _final_units(root, state, packet)
-    smooth = jobs.artifact(root, state, 'candidate', SMOOTH)
+    smooth = jobs.artifact(root, state, 'candidate', SMOOTH) if \
+        ((state.get('chunks') or {}).get(SMOOTH) or {}).get('candidate') else {}
     index = checks.CardIndex.from_input(packet)
     cites_of = {f'{uid}/{pid}': {index.by_link[c]['id'] for c in checks.citations(text) if c in index.by_link}
                 for uid, cand in units.items() for pid, _, text in paragraphs(cand)}
@@ -563,7 +638,7 @@ def assemble(root, state, packet, errors_for, checker) -> tuple[dict, dict]:
     sections, rows = [], []
     for section in packet['sections']:
         blocks = []
-        for uid in section['units']:
+        for uid in (u for u in section['units'] if u in units):
             unit = _unit(packet, uid)
             heading_of = {p['part']: p['heading'] for p in unit['parts']}
             for part in units[uid]['parts']:
