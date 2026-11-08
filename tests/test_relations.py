@@ -105,8 +105,8 @@ def test_the_reviewer_is_asked_to_check_examples_links_and_better_domains():
 
 def test_the_producer_is_asked_for_intuition_contrasts_and_links_to_neighbours():
     produce = task_text('produce_cards.md')
-    assert 'write them whenever the chunk or the `neighbors` support them' in produce
-    assert 'Link a card to every neighbour it is closely related to' in produce
+    assert 'write them whenever the chunk or the candidate cards support them' in produce
+    assert 'Link a card to every candidate it is closely related to' in produce
 
 
 @pytest.mark.parametrize('marked', [True, False])

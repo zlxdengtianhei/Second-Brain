@@ -38,9 +38,10 @@ from ..executors.base import CHUNK_TOO_LARGE, INVALID_OUTPUT, ExecutorFailure
 from ..locks import job_lock
 from ..store import Change, Conflict, digest, read_bytes
 from ..vault import Card, append_list_items, parse_note, read_snapshot
+from .. import retrieval
 from . import card_diagrams, source_check
 from .chunking import chunk_text
-from .routing import essence, route
+from .routing import route
 
 KIND = 'ingest'
 METHOD = 'ingest/3'
@@ -176,9 +177,10 @@ def prepare(root: Path, source: Path, *, settings: config.Settings | None = None
     place = {'placement': _placement(snapshot, placement)} if placement and any(placement.values()) else {}
     chunks = []
     for chunk in chunk_text(text, settings.ingest.chunk_chars):
-        routed = route(root, snapshot, text[chunk['start']:chunk['end']], domains=settings.ingest.candidate_domains)
+        routed = route(root, snapshot, text[chunk['start']:chunk['end']], domains=settings.ingest.candidate_domains,
+                       k=settings.ingest.candidates_k)
         chunks.append({**chunk, 'candidate_domains': _with_placement(routed['domains'], place),
-                       'neighbors': routed['neighbors'],
+                       **_producer_candidates(snapshot, routed, settings.ingest.candidates_chars),
                        'routing': {'votes': routed['votes'], 'filled': routed['filled'],
                                    'passages': routed['passages']}})
     domains = sorted(snapshot.catalog['domains'])
@@ -196,13 +198,42 @@ def prepare(root: Path, source: Path, *, settings: config.Settings | None = None
                      'new_topics_per_source': settings.ingest.new_topics_per_source,
                      'id_prefix': settings.ingest.id_prefix, 'language': settings.card_language,
                      'diagrams': settings.card_diagrams,
-                     'after_ingest': settings.ingest.after_ingest},
+                     'after_ingest': settings.ingest.after_ingest,
+                     **_candidate_settings(settings)},
         'snapshot_fingerprint': snapshot.fingerprint,
         **place,
     }
     state = jobs.create(root, job_id, KIND, packet)
     return {**state, 'source_sha256': sha, 'chunks': [c['chunk_id'] for c in chunks],
             'inbox_path': inbox_path}
+
+
+def _candidate_settings(settings: config.Settings) -> dict:
+    """The candidate-card settings a job freezes (see :mod:`secondbrain.retrieval`)."""
+    return {'candidates_k': settings.ingest.candidates_k, 'candidates_chars': settings.ingest.candidates_chars,
+            'candidates_hop': settings.ingest.candidates_hop}
+
+
+#: Candidate settings of a job frozen before they existed: the values that job ran with.
+_CANDIDATE_DEFAULTS = {'candidates_k': 'auto', 'candidates_chars': 40000, 'candidates_hop': 0}
+
+
+def _frozen(packet: dict, key: str):
+    """A frozen setting of the job, or what a job frozen before the setting existed used."""
+    settings = packet.get('settings') or {}
+    return settings[key] if key in settings else _CANDIDATE_DEFAULTS[key]
+
+
+#: The view each route's candidates get in a producer packet: enough to link and to see what exists.
+PRODUCER_LEVELS = {'words': 'brief'}
+
+
+def _producer_candidates(snapshot, routed: dict, budget: int) -> dict:
+    """``{candidates, candidate_cards}`` of a chunk: its routed cards at the views that fit ``budget``."""
+    entries = retrieval.merge(routed['candidates'].values())
+    table, _ = retrieval.fit(snapshot, entries, budget, PRODUCER_LEVELS)
+    return {'candidates': {key: retrieval.keep(rows, table) for key, rows in routed['candidates'].items()},
+            'candidate_cards': table}
 
 
 def _require_some_taxonomy(snapshot, lay) -> None:
@@ -277,20 +308,21 @@ def retry(root: Path, job_id: str, *, settings: config.Settings | None = None) -
     validate_catalog(snapshot.catalog)
     chunks = []
     for cid in [c['chunk_id'] for c in effective_chunks(old, parent) if c['chunk_id'] in open_items]:
-        chunk = {k: v for k, v in _chunk(old, cid).items() if k not in {'candidate_domains', 'neighbors', 'routing'}}
+        chunk = {k: v for k, v in _chunk(old, cid).items()
+                 if k not in {'candidate_domains', 'neighbors', 'candidates', 'candidate_cards', 'routing'}}
         routed = route(root, snapshot, old['source']['text'][chunk['start']:chunk['end']],
-                       domains=settings.ingest.candidate_domains)
+                       domains=settings.ingest.candidate_domains, k=_frozen(old, 'candidates_k'))
         # the domains the parent's reviewers pointed to, and where the open cards last were
         named = [d for d in _reviewed_domains(root, parent, old, cid, open_items[cid])
                  if d in snapshot.catalog['domains'] and d not in routed['domains']]
         chunks.append({**chunk, 'candidate_domains': _with_placement(routed['domains'] + named, old),
-                       'neighbors': routed['neighbors'],
+                       **_producer_candidates(snapshot, routed, _frozen(old, 'candidates_chars')),
                        'routing': {'votes': routed['votes'], 'filled': routed['filled'],
                                    'passages': routed['passages'], 'named_by_review': named}})
     for card_list in written.values():
         for card in card_list:
             if card['id'] in snapshot.cards:
-                card['essence'] = essence(snapshot.cards[card['id']])
+                card['essence'] = cardfmt.view(snapshot.cards[card['id']], 'brief')['essence']
                 quote = _source_locator(snapshot.cards[card['id']], old['source']['sha256'])
                 if quote:
                     card['source_quote'] = quote
@@ -645,7 +677,7 @@ def producer_packet(root: Path, state: dict, packet: dict, slot: str) -> dict:
            'domains': domains,
            'candidate_taxonomies': _candidate_taxonomies(packet, chunk['candidate_domains']),
            **_relation_views(packet['catalog'], chunk['candidate_domains']),
-           'neighbors': chunk['neighbors'],
+           **_chunk_candidates(chunk),
            'other_chunks_cards': _other_cards(root, state, packet, base),
            **({'placement': packet['placement']} if packet.get('placement') else {}),
            'rules': {'new_topics_per_source': packet['settings']['new_topics_per_source'],
@@ -673,6 +705,15 @@ def producer_packet(root: Path, state: dict, packet: dict, slot: str) -> dict:
     return out
 
 
+def _chunk_candidates(chunk: dict) -> dict:
+    """A frozen chunk's ``{candidates, candidate_cards}``; a chunk frozen with ``neighbors`` reads as one key."""
+    if 'candidates' in chunk:
+        return {'candidates': chunk['candidates'], 'candidate_cards': chunk['candidate_cards']}
+    old = [n for n in chunk.get('neighbors') or [] if isinstance(n, dict) and n.get('id')]
+    return {'candidates': {'chunk': [{'id': n['id'], 'rank': i, 'via': ['words']} for i, n in enumerate(old, 1)]}
+            if old else {}, 'candidate_cards': {n['id']: n for n in old}}
+
+
 def _domains_named(packet: dict, findings: dict) -> list:
     """Domains a reviewer asked for: ``suggested_domain`` fields, or domain names in the reasons."""
     names = sorted(packet['catalog']['domains'], key=len, reverse=True)
@@ -691,76 +732,24 @@ def _findings(review: dict) -> dict:
             'coverage': review.get('coverage') if (review.get('coverage') or {}).get('decision') != 'accept' else None}
 
 
-#: Existing cards shown to the reviewer per candidate card, to judge duplicates and missing links
-#: (in drill 2, 10 of 16 old cards a judge said should have been linked were in the top 5, 5 in the top 3).
-NEAR_DUPLICATES_PER_CARD = 5
-#: Bytes of propositions the reviewer packet carries for those cards in all; past it, the
-#: lower-ranked neighbours are shown by title and essence only (the drill source's 66 cards
-#: once made an 813 KB packet, 80% of it whole neighbour bodies).
-NEAR_DUPLICATE_PROPOSITION_BYTES = 150_000
+#: The view each route's candidates get in a reviewer packet: what a repeat or a conflict is judged on.
+REVIEWER_LEVELS = {'named': 'full', 'written': 'full', 'words': 'full', 'hop': 'brief', 'shelf': 'title'}
 
 
-def _neighbor_query(card: dict) -> str:
-    """The search text for a card's neighbours: title, essence and first three propositions."""
-    return ' '.join([str(card.get('title') or ''), str(card.get('essence') or '')]
-                    + [str(p) for p in (card.get('propositions') or [])[:3]])
+def _review_candidates(root: Path, snapshot, packet: dict, cards: list) -> tuple[dict, dict]:
+    """``({slug: [{id, rank, via}]}, {id: view})`` for the reviewer packet.
 
-
-def _neighbor_ids(root: Path, snapshot, card: dict) -> list[str]:
-    from ..index import search
-    query = _neighbor_query(card)
-    hits = search(root, snapshot, query, NEAR_DUPLICATES_PER_CARD) if query.strip() else []
-    return [h['id'] for h in hits]
-
-
-def _card_sections(body: str) -> dict:
-    """``{heading: text}`` of the ``## `` sections of a card body."""
-    out, current = {}, None
-    for line in body.split('\n'):
-        if line.startswith('## '):
-            current = line[3:].strip()
-            out.setdefault(current, [])
-        elif current is not None:
-            out[current].append(line)
-    return {k: '\n'.join(v).strip() for k, v in out.items()}
-
-
-def _card_digest(card) -> tuple[dict, list[str]]:
-    """``(title, domain and essence; propositions)`` of an existing card: what a duplicate judgement needs.
-
-    The diagram, related, contrast and review-card sections are left out.
+    Each existing card appears once in the view table, however many proposed
+    cards it is near. Past ``candidates_chars`` the lower-ranked cards are
+    shown at a shorter view (:func:`secondbrain.retrieval.fit`).
     """
-    parts = _card_sections(card.body)
-
-    def first(key):
-        return next((parts[h[key]] for h in cardfmt.HEADINGS.values() if parts.get(h[key])), '')
-    text = ' '.join(first('essence').split()) or essence(card)
-    props = [line[2:].strip() for line in first('propositions').split('\n') if line.startswith('- ')]
-    return {'title': card.title, 'domain': card.domain, 'essence': text[:600]}, props
-
-
-def _near_duplicates(root: Path, snapshot, cards: list) -> tuple[dict, dict]:
-    """``({slug: [existing ids]}, {id: digest})`` for the reviewer packet.
-
-    Each existing card appears once in the digest table, however many
-    candidates it is near. Propositions are added best rank first (every
-    candidate's closest neighbour before any second-closest) until
-    :data:`NEAR_DUPLICATE_PROPOSITION_BYTES` is spent.
-    """
-    near = {c['slug']: _neighbor_ids(root, snapshot, c)
-            for c in cards if isinstance(c, dict) and isinstance(c.get('slug'), str)}
-    table, budget = {}, NEAR_DUPLICATE_PROPOSITION_BYTES
-    for rank in range(NEAR_DUPLICATES_PER_CARD):
-        for ids in near.values():
-            if rank >= len(ids) or ids[rank] in table:
-                continue
-            digest_, props = _card_digest(snapshot.cards[ids[rank]])
-            cost = len(json.dumps(props, ensure_ascii=False).encode('utf-8'))
-            if props and cost <= budget:
-                digest_['propositions'] = props
-                budget -= cost
-            table[ids[rank]] = digest_
-    return near, table
+    k = retrieval.k_for(_frozen(packet, 'candidates_k'), 'reviewer')
+    per_card = {c['slug']: retrieval.candidates(root, snapshot, retrieval.card_query(c), k=k,
+                                                hop_from=_frozen(packet, 'candidates_hop'))
+                for c in cards if isinstance(c, dict) and isinstance(c.get('slug'), str)}
+    table, _ = retrieval.fit(snapshot, retrieval.merge(per_card.values()), _frozen(packet, 'candidates_chars'),
+                             REVIEWER_LEVELS)
+    return {slug: retrieval.keep(rows, table) for slug, rows in per_card.items()}, table
 
 
 def review_packet(root: Path, state: dict, packet: dict, slot: str) -> dict:
@@ -771,10 +760,10 @@ def review_packet(root: Path, state: dict, packet: dict, slot: str) -> dict:
     snapshot = read_snapshot(root)
     domains = sorted({c['domain'] for c in candidate.get('cards', []) if c.get('domain') in packet['catalog']['domains']}
                      | {t['domain'] for t in candidate.get('new_topics', []) if t.get('domain') in packet['catalog']['domains']})
-    near, near_cards = _near_duplicates(root, snapshot, candidate.get('cards', []))
+    near, near_cards = _review_candidates(root, snapshot, packet, candidate.get('cards', []))
     out = {'chunk': {'id': base, 'text': _chunk_text(packet, base)},
            'candidate': shown,
-           'near_duplicates': near, 'near_duplicate_cards': near_cards,
+           'candidates': near, 'candidate_cards': near_cards,
            'taxonomies': _candidate_taxonomies(packet, domains),
            'domains': [{'slug': d, 'question': m.get('question')}
                        for d, m in sorted(packet['catalog']['domains'].items())],
@@ -1556,12 +1545,15 @@ def _source_check_input(root: Path, packet: dict, settled: list[dict]) -> dict:
     snapshot = read_snapshot(root)
     domains = sorted({c['domain'] for o in settled for c in o['accepted'].values()})
 
-    def near_existing(card):
-        return [{'id': i, 'title': snapshot.cards[i].title, 'domain': snapshot.cards[i].domain}
-                for i in _neighbor_ids(root, snapshot, card)[:source_check.NEAR_EXISTING]]
+    k = retrieval.k_for(_frozen(packet, 'candidates_k'), 'merge_check')
+
+    def near_existing(card):  # only to add links: the brief view says what each card is
+        entries = retrieval.candidates(root, snapshot, retrieval.card_query(card), k=k)
+        return [{**cardfmt.view(snapshot.cards[e['id']], 'brief'), 'rank': e['rank'], 'via': e['via']}
+                for e in entries]
     written = replace(snapshot, cards={i: snapshot.cards[i] for i in _written_ids(packet) if i in snapshot.cards})
     slugs = _written_slugs(packet)  # a retry card may link a written card by its slug
-    frozen = source_check.frozen_input(settled, packet['source'], near_existing=near_existing,
+    frozen = source_check.frozen_input(settled, packet['source'], candidates=near_existing,
                                        near_written=(lambda card: _near_written(written, card, slugs))
                                        if written.cards else None,
                                        relation_views=_relation_views(packet['catalog'], domains))
@@ -1579,7 +1571,7 @@ def _near_written(written, card: dict, slugs: dict) -> list[dict]:
     its slug (when known), title, domain, essence and propositions.
     """
     from ..search import search as rank
-    query = _neighbor_query(card)
+    query = retrieval.card_query(card)
     ranked = [h['id'] for h in rank(written, query, len(written.cards))] if query.strip() else []
     closest = ranked[:source_check.NEAR_WRITTEN]
     linked = {slugs.get(r.get('target'), r.get('target')) for r in card.get('relations') or [] if isinstance(r, dict)}
@@ -1589,8 +1581,9 @@ def _near_written(written, card: dict, slugs: dict) -> list[dict]:
     slug_of = {i: s for s, i in slugs.items()}
     out = []
     for i in (closest + linked)[:source_check.NEAR_WRITTEN_MAX]:
-        digest_, props = _card_digest(written.cards[i])
-        out.append({'id': i, **({'slug': slug_of[i]} if i in slug_of else {}), **digest_, 'propositions': props})
+        shown = cardfmt.view(written.cards[i], 'full')
+        out.append({**({'slug': slug_of[i]} if i in slug_of else {}), **shown,
+                    'propositions': shown.get('propositions') or []})
     return out
 
 
@@ -1757,7 +1750,7 @@ def _unique_title(title: str, taken: set) -> str:
 def content_digest(card) -> str:
     """Digest of a card's text apart from its related section (which back links change) and front matter."""
     related = {h['related'] for h in cardfmt.HEADINGS.values()}
-    parts = {k: v for k, v in _card_sections(card.body).items() if k not in related}
+    parts = {k: v for k, v in cardfmt.sections(card.body).items() if k not in related}
     return digest(json.dumps(parts, ensure_ascii=False, sort_keys=True).encode('utf-8'))
 
 

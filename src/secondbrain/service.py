@@ -115,18 +115,21 @@ class Service:
         if offset < 0 or not 1 <= limit <= 100:
             raise ValueError('offset must be >= 0 and limit 1-100')
         if part == 'overview':
-            return {k: v for k, v in packet.items() if k not in {'cards', 'taxonomy', 'catalog', 'source', 'neighbors', 'repair_feedback'}} | {
+            return {k: v for k, v in packet.items() if k not in {'cards', 'taxonomy', 'catalog', 'source', 'neighbors',
+                                                                  'candidates', 'repair_feedback'}} | {
                 'card_count': len(packet.get('cards', []))}
         if part == 'cards':
             cards = packet.get('cards', [])
             return {'total': len(cards), 'offset': offset, 'cards': cards[offset:offset + limit]}
-        if part in {'taxonomy', 'catalog', 'neighbors'}:
+        if part in {'candidates', 'neighbors'}:  # `neighbors`: the old name, read for one version
+            return _candidates_part(packet)
+        if part in {'taxonomy', 'catalog'}:
             if part not in packet:
                 raise ValueError(f'this {packet["kind"]} job has no {part} part')
             return packet[part]
         if part in {'candidate', 'review'}:
             return jobs.artifact(self.root, jobs.load(self.root, job_id), part)
-        raise ValueError('part must be overview, cards, taxonomy, catalog, neighbors, candidate or review')
+        raise ValueError('part must be overview, cards, taxonomy, catalog, candidates, candidate or review')
 
     def search(self, query: str, limit: int = 12):
         from .index import search
@@ -290,3 +293,19 @@ def refresh(root: Path, *, job_id: str, domains: list[str] | None = None, apply:
               'issues': p.issues, 'paths': [c.relative_path for c in changes]}
     return jobs.freeze_projection(root, job_id, changes,
                                   checks=classification.snapshot_checks(s, changes), result=result)
+
+
+def _candidates_part(packet: dict) -> dict:
+    """The candidate cards a job froze: a top-level ``candidates`` (or old ``neighbors``), else an ingest job's per chunk.
+
+    The old part read only a top-level ``neighbors``, which no job kind writes; an
+    ingest job keeps its candidate cards in each chunk.
+    """
+    for key in ('candidates', 'neighbors'):
+        if key in packet:
+            return packet[key]
+    chunks = [c for c in packet.get('chunks') or [] if isinstance(c, dict) and ('candidates' in c or 'neighbors' in c)]
+    if not chunks:
+        raise ValueError(f'this {packet.get("kind")} job has no candidates part')
+    return {c['chunk_id']: {'candidates': c.get('candidates'), 'candidate_cards': c.get('candidate_cards')}
+            if 'candidates' in c else {'neighbors': c.get('neighbors')} for c in chunks}

@@ -103,8 +103,12 @@ class IngestConfig:
     converter: str = 'none'           # none | markitdown
     id_prefix: str = 'kc_'
     max_source_bytes: int = 8 * 1024 * 1024
-    neighbors_per_card: int = 3
     candidate_domains: int = 3
+    #: Candidate cards (secondbrain.retrieval): first-route cards per query ("auto": the built-in count of each
+    #: role), the characters of retrieved card views a packet may hold, and the second route's start points.
+    candidates_k: object = 'auto'
+    candidates_chars: int = 40000
+    candidates_hop: int = 0
 
     def __post_init__(self):
         if self.after_ingest not in {'move', 'keep'}:
@@ -113,6 +117,12 @@ class IngestConfig:
             raise ValueError('ingest.converter must be "none" or "markitdown"')
         if not 1000 <= int(self.chunk_chars) <= 400000:
             raise ValueError('ingest.chunk_chars must be between 1000 and 400000')
+        if self.candidates_k != 'auto' and not (isinstance(self.candidates_k, int) and 1 <= self.candidates_k <= 100):
+            raise ValueError('ingest.candidates_k must be "auto" or a whole number from 1 to 100')
+        if not (isinstance(self.candidates_chars, int) and 1000 <= self.candidates_chars <= 1_000_000):
+            raise ValueError('ingest.candidates_chars must be a whole number from 1000 to 1000000')
+        if not (isinstance(self.candidates_hop, int) and 0 <= self.candidates_hop <= 10):
+            raise ValueError('ingest.candidates_hop must be a whole number from 0 to 10')
 
 
 @dataclass(frozen=True)
@@ -186,7 +196,7 @@ def parse(data: dict, *, source: Path | None = None) -> Settings:
         producer=_dataclass(EndpointConfig, endpoints['producer'], 'executor.producer') if endpoints['producer'] else None,
         reviewer=_dataclass(EndpointConfig, endpoints['reviewer'], 'executor.reviewer') if endpoints['reviewer'] else None,
         review=review,
-        ingest=_dataclass(IngestConfig, _section(data, 'ingest'), 'ingest'),
+        ingest=_dataclass(IngestConfig, _ingest_keys(_section(data, 'ingest')), 'ingest'),
         card_language=language,
         card_language_set='language' in cards,
         card_diagrams=diagrams,
@@ -195,6 +205,15 @@ def parse(data: dict, *, source: Path | None = None) -> Settings:
         state_dir=Path(state).expanduser().absolute() if state else None,
         source=source,
     )
+
+
+#: ``[ingest]`` keys of earlier versions that are still read, and ignored, for one version.
+RETIRED_INGEST_KEYS = ('neighbors_per_card',)
+
+
+def _ingest_keys(values: dict) -> dict:
+    """``[ingest]`` without retired keys (``neighbors_per_card`` was never read; see ``candidates_k``)."""
+    return {k: v for k, v in values.items() if k not in RETIRED_INGEST_KEYS}
 
 
 def config_path() -> Path:
@@ -320,6 +339,9 @@ after_ingest = "move"        # move | keep
 new_topics_per_source = 2
 converter = "none"           # none | markitdown
 id_prefix = "kc_"
+candidates_k = "auto"        # existing cards per query, or "auto" (each role's built-in count)
+candidates_chars = 40000     # characters of retrieved card views per packet (named cards do not count)
+candidates_hop = 0           # second route: relation neighbours of the first N hits (0: off)
 
 [cards]
 # language = "en"            # en | zh (card headings; text of maps, HOME and review pages).

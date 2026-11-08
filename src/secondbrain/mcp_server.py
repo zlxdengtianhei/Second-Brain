@@ -36,7 +36,7 @@ def create_server(root: Path, *, writer: bool = False):
 
     @server.tool(annotations=readonly)
     def read_task(job: str, part: str = 'overview', offset: int = 0, limit: int = 20) -> dict | list | None:
-        """Read a job's frozen input. Parts: overview, cards, taxonomy, catalog, neighbors, candidate, review."""
+        """Read a job's frozen input. Parts: overview, cards, taxonomy, catalog, candidates, candidate, review."""
         return service.read_task(job, part, offset, limit)
 
     @server.tool(annotations=readonly)

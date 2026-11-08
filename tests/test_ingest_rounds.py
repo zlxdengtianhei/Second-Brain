@@ -4,6 +4,8 @@ from __future__ import annotations
 import json
 from dataclasses import replace
 
+from secondbrain import retrieval
+from secondbrain import cards as cardfmt
 from secondbrain import cli, config, jobs
 from secondbrain import layout as layouts
 from secondbrain.executors import FakeExecutor
@@ -164,42 +166,45 @@ def lantern_vault(tmp_path):
     return root
 
 
-def test_near_duplicates_show_essence_and_propositions_once_per_card(tmp_path):
+def test_review_candidates_show_each_existing_card_once_at_the_full_view(tmp_path):
     root = lantern_vault(tmp_path)
     snapshot = read_snapshot(root)
-    near, table = ingest._near_duplicates(root, snapshot, list(CARDS.values()))
-    assert set(near) == set(CARDS) and all(len(ids) <= ingest.NEAR_DUPLICATES_PER_CARD for ids in near.values())
-    assert {i for ids in near.values() for i in ids} == set(table)  # each existing card once
+    near, table = ingest._review_candidates(root, snapshot, {'settings': {}}, list(CARDS.values()))
+    assert set(near) == set(CARDS) and all(len(rows) <= retrieval.AUTO_K['reviewer'] for rows in near.values())
+    assert {e['id'] for rows in near.values() for e in rows} == set(table)  # each existing card once
+    assert all(e['via'] == ['words'] for rows in near.values() for e in rows)
     lantern = table['card_lantern']
-    assert lantern == {'title': 'Lantern queues in brief', 'domain': DOMAIN,
-                       'essence': 'A lantern queue keeps arrival order.',
-                       'propositions': ['P1. Items keep arrival order.', 'P2. Readers skip ahead by lit markers.']}
+    assert lantern == {'id': 'card_lantern', 'title': 'Lantern queues in brief', 'domain': DOMAIN,
+                       'pillar': PILLAR, 'topic': TOPIC, 'essence': 'A lantern queue keeps arrival order.',
+                       'propositions': ['Items keep arrival order.', 'Readers skip ahead by lit markers.'],
+                       'flashcards': [{'q': 'What is it?', 'a': 'A lantern queue keeps arrival order.'}]}
 
 
-def test_near_duplicate_propositions_stop_at_the_byte_budget_best_rank_first(tmp_path, monkeypatch):
+def test_review_candidates_past_the_budget_lose_view_levels_lowest_rank_first(tmp_path):
     root = lantern_vault(tmp_path)
     snapshot = read_snapshot(root)
-    near, _ = ingest._near_duplicates(root, snapshot, list(CARDS.values()))
-    best = [ids[0] for ids in near.values() if ids]
+    near, _ = ingest._review_candidates(root, snapshot, {'settings': {}}, list(CARDS.values()))
+    best = [rows[0]['id'] for rows in near.values() if rows]
     first = best[0]
-    cost = len(json.dumps(ingest._card_digest(snapshot.cards[first])[1], ensure_ascii=False).encode('utf-8'))
-    monkeypatch.setattr(ingest, 'NEAR_DUPLICATE_PROPOSITION_BYTES', cost)
-    _, table = ingest._near_duplicates(root, snapshot, list(CARDS.values()))
-    assert 'propositions' in table[first]
-    assert [i for i, d in table.items() if 'propositions' in d] == [first]
-    assert all(d['essence'] for d in table.values())
+    entries = retrieval.merge(near.values())
+    full = cardfmt.view_chars(cardfmt.view(snapshot.cards[first], 'full'))
+    others = sum(cardfmt.view_chars(cardfmt.view(snapshot.cards[e['id']], 'brief')) for e in entries if e['id'] != first)
+    table, report = retrieval.fit(snapshot, entries, full + others, ingest.REVIEWER_LEVELS)
+    assert [i for i, d in table.items() if 'propositions' in d] == [first]  # the best-ranked keeps its propositions
+    assert all(d['essence'] for d in table.values()) and report['lowered'] == len(entries) - 1
+    assert report['chars'] <= report['budget']
 
 
-def test_the_review_packet_carries_digests_not_bodies(tmp_path):
+def test_the_review_packet_carries_views_not_bodies(tmp_path):
     root = lantern_vault(tmp_path)
     _, seen = run(root, [first_candidate(), {'cards': [FIXED_DIMMING], 'new_topics': [],
                                              'coverage': rows(FIXED_DIMMING)}],
                   [first_review(), accept('marker-dimming')])
     packet = seen['reviewer'][0].packet
-    assert set(packet['near_duplicates']) == set(CARDS)
-    assert all(isinstance(i, str) for ids in packet['near_duplicates'].values() for i in ids)
-    assert 'body' not in json.dumps(packet['near_duplicate_cards']) and 'Review cards' not in json.dumps(packet)
-    assert 'near_duplicate_cards' in seen['reviewer'][0].prompt
+    assert set(packet['candidates']) == set(CARDS)
+    assert all(isinstance(e['id'], str) and e['via'] for rows in packet['candidates'].values() for e in rows)
+    assert 'body' not in json.dumps(packet['candidate_cards']) and 'Review cards' not in json.dumps(packet)
+    assert 'candidate_cards' in seen['reviewer'][0].prompt
 
 
 # --- what sb status and sb doctor report -------------------------------------------------------

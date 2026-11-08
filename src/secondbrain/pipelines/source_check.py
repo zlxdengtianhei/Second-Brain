@@ -15,7 +15,7 @@ gets every accepted card and new topic of the source side by side and gives one
 decision per card and per new topic:
 
 - ``keep``, with ``links`` to related cards of the source (or to the existing
-  cards listed as its neighbours) that it does not link yet;
+  cards listed as its candidates) that it does not link yet;
 - ``same`` as another card: the two make the same core claim. The card is not
   written; the propositions and flashcards it adds (``carry``, copied exactly)
   go to the card it repeats, and so do its links;
@@ -55,8 +55,6 @@ TOPIC_DECISIONS = ('keep', 'same')
 MAX_PROPOSITIONS, MAX_FLASHCARDS = 12, 8
 #: ``[[Title]]``, ``[[Title#heading]]`` and ``[[Title|alias]]`` in card text.
 _WIKILINK = re.compile(r'\[\[([^\[\]|#]+)((?:#[^\[\]|]*)?)((?:\|[^\[\]]*)?)\]\]')
-#: Existing cards shown per card as possible link targets (drill 3: the Euclid card was second).
-NEAR_EXISTING = 3
 #: Cards earlier jobs of the source wrote, shown per card of a retry: the closest by score (the real-vault retry
 #: card's three repeated cards ranked first, second and fourth), then the ones it links, up to the maximum in all.
 NEAR_WRITTEN, NEAR_WRITTEN_MAX = 5, 8
@@ -103,12 +101,12 @@ def needed(settled: list[dict], written: bool = False) -> bool:
 
 
 def frozen_input(settled: list[dict], source: dict, *, relation_views: dict,
-                 near_existing: Callable[[dict], list[dict]] = lambda card: [],
+                 candidates: Callable[[dict], list[dict]] = lambda card: [],
                  near_written: Callable[[dict], list[dict]] | None = None) -> dict:
     """What the reviewer judges: every accepted card and new topic, sorted by where they are filed.
 
-    ``near_existing(card)`` gives the existing cards (id, title, domain) a card
-    may link; ``near_written(card)``, in a retry, the cards earlier jobs of the
+    ``candidates(card)`` gives the existing cards (brief view, with ``rank`` and
+    ``via``) a card may link; ``near_written(card)``, in a retry, the cards earlier jobs of the
     source wrote that are closest to it or that it links, at most
     :data:`NEAR_WRITTEN_MAX` (id, title, domain, essence, propositions);
     ``relation_views`` the relation types and their meanings.
@@ -133,7 +131,7 @@ def frozen_input(settled: list[dict], source: dict, *, relation_views: dict,
                                      if isinstance(f, dict)],
                       'relations': relations, 'linked_from': sorted(linked_from.get(slug, [])),
                       'isolated': not relations and not linked_from.get(slug),
-                      'near_existing': near_existing(c)[:NEAR_EXISTING],
+                      'candidates': candidates(c),
                       **({'near_written': near_written(c)} if near_written else {})})
     cards.sort(key=lambda c: (c['domain'], c['pillar'], c['topic'], c['chunk'], c['slug']))
     topics = []
@@ -229,7 +227,7 @@ def validate_answer(frozen: dict, payload: Any, closed: Callable[[str, str, str]
             errors.append(f'cards: {slug} is "same"; put its links on {merged[slug]}')
             continue
         existing = {e['id']: e.get('domain')
-                    for e in list(cards[slug]['near_existing']) + list(cards[slug].get('near_written') or [])}
+                    for e in list(link_candidates(cards[slug])) + list(cards[slug].get('near_written') or [])}
         for i, link in enumerate(links):
             at = f'cards: {slug}.links[{i}]'
             target, kind = link.get('target') if isinstance(link, dict) else None, (link or {}).get('type')
@@ -237,7 +235,7 @@ def validate_answer(frozen: dict, payload: Any, closed: Callable[[str, str, str]
                 errors.append(f'{at}: {target} is "same" as {merged[target]}; link {merged[target]}')
                 continue
             if target == slug or (target not in cards and target not in existing):
-                errors.append(f'{at}.target must be another card of the packet or one of its near_existing'
+                errors.append(f'{at}.target must be another card of the packet or one of its candidates'
                               + (' or near_written' if written[slug] else '') + ' ids')
                 continue
             if {(slug, target), (target, slug)} & (linked | added):
@@ -259,6 +257,11 @@ def validate_answer(frozen: dict, payload: Any, closed: Callable[[str, str, str]
     if errors:
         raise ValueError('; '.join(errors))
     return payload
+
+
+def link_candidates(card: dict) -> list:
+    """The existing cards a card of the frozen input may link (``near_existing`` in inputs frozen before ``candidates``)."""
+    return card.get('candidates', card.get('near_existing')) or []
 
 
 def _final_domains(frozen: dict, topics: dict) -> dict:

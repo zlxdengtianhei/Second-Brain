@@ -206,6 +206,103 @@ def add_related(body: str, relations: list[Relation], *, language: str = 'en',
     return '\n'.join(lines[:start + 1] + section + lines[end:])
 
 
+#: How much of a card a model is shown, least to most. ``title``: id and title (a topic's shelf);
+#: ``brief``: also domain, pillar, topic and the essence (cut to :data:`ESSENCE_CHARS`); ``full``: also every
+#: proposition and every review card, question and answer (what a duplicate judgement and a merge read);
+#: ``body``: the whole card body. Every packet takes existing cards through :func:`view`.
+VIEWS = ('title', 'brief', 'full', 'body')
+ESSENCE_CHARS = 300
+#: A card not in sb format (no ``- Pn.`` propositions, or a review-card line without ``::``) shows this much
+#: of its body at ``full`` (``excerpt``), marked ``format: legacy``.
+LEGACY_CHARS = 1500
+_PROPOSITION = re.compile(r'^- P(\d+)\.\s*(.*)$')
+
+
+def sections(body: str) -> dict:
+    """``{heading: text}`` of the ``## `` sections of a card body."""
+    out, current = {}, None
+    for line in body.split('\n'):
+        if line.startswith('## '):
+            current = line[3:].strip()
+            out.setdefault(current, [])
+        elif current is not None:
+            out[current].append(line)
+    return {k: '\n'.join(v).strip() for k, v in out.items()}
+
+
+def _section(parts: dict, key: str) -> str | None:
+    """The text of the section named ``key`` (essence, propositions ...) in any language, or None."""
+    return next((parts[h[key]] for h in HEADINGS.values() if h[key] in parts), None)
+
+
+def essence_of(body: str) -> str:
+    """The card's one sentence: its essence section, else the first line of its first section."""
+    text = ' '.join((_section(sections(body), 'essence') or '').split())
+    if not text:
+        match = re.search(r'^## [^\n]*\n+([^\n#][^\n]*)', body, re.M)
+        text = (match.group(1) if match else body.strip().split('\n', 1)[0]).strip()
+    return text[:ESSENCE_CHARS]
+
+
+def propositions_of(body: str) -> list[str] | None:
+    """The propositions in order (without ``- Pn.``), or None when they are not numbered ``P1``, ``P2`` ... ."""
+    text = _section(sections(body), 'propositions')
+    if text is None:
+        return None
+    lines = [line for line in text.split('\n') if line.strip()]
+    out = []
+    for n, line in enumerate(lines, 1):
+        match = _PROPOSITION.match(line.strip())
+        if not match or int(match.group(1)) != n:
+            return None
+        out.append(match.group(2).strip())
+    return out
+
+
+def flashcards_of(body: str) -> list[dict] | None:
+    """The review cards ``[{q, a}]`` (none without that section), or None when a line of it has no ``::``."""
+    text = _section(sections(body), 'flashcards')
+    if text is None:
+        return []
+    out = []
+    for line in (x for x in text.split('\n') if x.strip()):
+        q, sep, a = line.partition('::')
+        if not sep:
+            return None
+        out.append({'q': q.strip(), 'a': a.strip()})
+    return out
+
+
+def view(card, level: str) -> dict:
+    """``card`` (a vault card) as a model sees it at ``level``, one of :data:`VIEWS`.
+
+    Every level holds the ones before it. At ``full``, a card whose
+    propositions or review cards are not in sb format shows the start of its
+    body instead (``format: legacy``).
+    """
+    if level not in VIEWS:
+        raise ValueError(f'view level must be one of {", ".join(VIEWS)}, got {level!r}')
+    out = {'id': card.id, 'title': card.title}
+    if level == 'title':
+        return out
+    fm = card.fm or {}
+    out.update(domain=card.domain, pillar=fm.get('pillar'), topic=fm.get('topic'), essence=essence_of(card.body))
+    if level == 'brief':
+        return out
+    if level == 'body':
+        return {**out, 'body': card.body}
+    props, flashcards = propositions_of(card.body), flashcards_of(card.body)
+    if props is None or flashcards is None:
+        return {**out, 'format': 'legacy', 'excerpt': card.body[:LEGACY_CHARS]}
+    return {**out, 'propositions': props, 'flashcards': flashcards}
+
+
+def view_chars(shown: dict) -> int:
+    """What a view costs in a packet: the characters of its JSON text."""
+    import json
+    return len(json.dumps(shown, ensure_ascii=False))
+
+
 def render_frontmatter(meta: dict) -> str:
     """YAML frontmatter text; key order follows the card contract."""
     order = ['id', 'title', 'kind', 'domain', 'pillar', 'topic', 'tags', 'aliases', 'sources',

@@ -32,7 +32,7 @@ def test_the_source_domain_wins_over_a_large_domain_with_the_same_generic_words(
     assert max(votes, key=votes.get) == 'agent-harness'
     routed = route(root, snap, SOURCE, domains=2)
     assert routed['domains'][0] == 'algorithms' and routed['passages'] == 6
-    assert [n['domain'] for n in routed['neighbors'][:4]] == ['algorithms'] * 4
+    assert [snap.cards[e['id']].domain for e in routed['candidates']['chunk'][:4]] == ['algorithms'] * 4
     assert routed['votes']['algorithms'] > 0.5
 
 
@@ -147,7 +147,7 @@ def test_a_vault_without_cards_sends_every_domain_taxonomy(tmp_path):
     prepared = ingest.prepare(root, root / '00_Inbox' / 'notes.md')
     [chunk] = jobs.read_input(root, prepared['job_id'])['chunks']
     assert chunk['candidate_domains'] == ['sorting', 'networks', 'cooking']
-    assert chunk['routing']['filled'] == ['sorting', 'networks', 'cooking'] and chunk['neighbors'] == []
+    assert chunk['routing']['filled'] == ['sorting', 'networks', 'cooking'] and chunk['candidates'] == {}
     packet = ingest.producer_packet(root, jobs.load(root, prepared['job_id']),
                                     jobs.read_input(root, prepared['job_id']), 'c01')
     assert set(packet['candidate_taxonomies']) == {'sorting', 'networks', 'cooking'}
@@ -239,8 +239,12 @@ def test_every_passage_brings_its_own_nearest_cards(tmp_path):
     text = ('Binary search keeps a sorted range lo to hi and halves it each step.\n\n'
             'RSVP keeps reservation soft state that expires unless PATH and RESV messages refresh it.\n\n'
             'Multicast routing builds a tree so one packet reaches every member of a group.')
-    routed = route(root, snap, text, domains=2, neighbors=1)  # one card for the whole chunk ...
-    titles = [n['title'] for n in routed['neighbors']]
+    routed = route(root, snap, text, domains=2)  # the best cards for the whole chunk ...
     # ... plus the best cards of each passage, so a long chunk is not left with the few cards of one part
-    assert {'Binary search', 'RSVP soft state', 'Multicast trees'} <= set(titles)
-    assert len(titles) == len(set(titles)) <= routing.MAX_NEIGHBORS
+    per_passage = [{snap.cards[e['id']].title for e in routed['candidates'].get(f'p{n}', [])} for n in (1, 2, 3)]
+    assert 'Binary search' in per_passage[0] and 'RSVP soft state' in per_passage[1]
+    assert 'Multicast trees' in per_passage[2]
+    shown = {e['id'] for rows in routed['candidates'].values() for e in rows}
+    assert len(shown) <= routing.MAX_CANDIDATES
+    one = route(root, snap, text, domains=2, k=1)  # a number: each passage's best card, no whole-chunk list
+    assert set(one['candidates']) == {'p1', 'p2', 'p3'} and all(len(r) == 1 for r in one['candidates'].values())

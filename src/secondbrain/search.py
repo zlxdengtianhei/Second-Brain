@@ -1,7 +1,7 @@
-"""Deterministic full-vault candidate retrieval and neighbor lookup.
+"""Deterministic full-vault candidate retrieval and lookup of cards by id.
 
 Used by ``prepare`` to surface a bounded set of existing-card candidates for
-dedup/reference, and by the runtime read path to fetch full neighbor cards.
+dedup/reference, and by the runtime read path to fetch whole cards by id.
 
 Design notes:
 
@@ -156,15 +156,16 @@ def search(snapshot: Snapshot, query: str, limit: int = DEFAULT_LIMIT) -> list[d
     return out
 
 
-def neighbors(snapshot: Snapshot, ids) -> list[dict]:
+def cards_by_id(snapshot: Snapshot, ids) -> list[dict]:
     """Full ``card_packet`` (full body + all relation edges) for ``ids``.
 
     ``ids`` is a list/tuple/set of existing card ids; order is preserved and
     duplicates collapsed. Missing ids raise ``SearchError`` so the caller never
-    silently drops a requested card.
+    silently drops a requested card. (Not the candidate cards of a query: those
+    are :func:`secondbrain.retrieval.candidates`.)
     """
     if isinstance(ids, str):
-        raise SearchError("neighbors needs a list of ids, not one string")
+        raise SearchError("cards_by_id needs a list of ids, not one string")
     missing = [i for i in ids if i not in snapshot.cards]
     if missing:
         raise SearchError("unknown card ids: %s" % sorted(missing))
@@ -176,3 +177,10 @@ def neighbors(snapshot: Snapshot, ids) -> list[dict]:
         seen.add(cid)
         out.append(card_packet(snapshot.cards[cid]))
     return out
+
+
+def neighbors(snapshot: Snapshot, ids) -> list[dict]:
+    """Old name of :func:`cards_by_id`, kept for one version."""
+    import warnings
+    warnings.warn("search.neighbors is renamed cards_by_id", DeprecationWarning, stacklevel=2)
+    return cards_by_id(snapshot, ids)

@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from secondbrain import cards as cardfmt
 from secondbrain import cli, jobs
 from secondbrain.executors import FakeExecutor
 from secondbrain.pipelines import ingest, source_check
@@ -356,7 +357,7 @@ def test_a_single_chunk_retry_is_checked_against_the_cards_its_source_wrote(tmp_
     monkeypatch.setattr(source_check, 'NEAR_WRITTEN', 1)  # the closest written card, then the ones the card links
     root, job_id, parent, whole = partial_parent(tmp_path, {'arrival-order'})
     ids = {p['slug']: p['id'] for p in parent['produced']}
-    before = ingest._card_digest(read_snapshot(root).cards[ids['queue-order']])[1]
+    before = cardfmt.propositions_of(read_snapshot(root).cards[ids['queue-order']].body)
     done, seen = retry_pending(root, job_id, parent, whole, keep_all, by_slug=by_slug)
     assert len(jobs.read_input(root, done['job_id'])['chunks']) == 1  # only the chunk with the pending card
     [task] = seen
@@ -394,7 +395,7 @@ def test_a_retry_card_that_repeats_a_written_card_is_written_next_to_it_as_needs
                                                         'with': order, 'reason': reason, 'id': arrival}]
     assert done['source_check']['merged'] == []
     # the written card is not changed: nothing carried to it, only the back link of the new relation
-    assert ingest._card_digest(after.cards[order]) == ingest._card_digest(before)
+    assert cardfmt.view(after.cards[order], 'full') == cardfmt.view(before, 'full')
     assert after.cards[order].fm['sources'] == before.fm['sources']
     assert [r['target'] for r in done['restored_relations']] == [arrival]  # kept, not merged away
 
@@ -421,8 +422,9 @@ def test_a_retry_card_is_shown_the_five_closest_written_cards_then_the_closest_i
     assert [e['id'] for e in shown] == ['kc_w15', 'kc_w14', 'kc_w13', 'kc_w12', 'kc_w11',  # the five closest
                                         'kc_w10', 'kc_w10b', 'kc_w9']  # the closest linked ones, ties by id
     assert near(list(reversed(cards))) == shown  # the same whatever order the vault lists them in
-    assert shown[7] == {'id': 'kc_w9', 'slug': 'w9', 'title': 'Card', 'domain': 'd',
-                        'essence': ' '.join(terms[:9] + ['filler'] * 7), 'propositions': ['P1. kc_w9 holds']}
+    assert shown[7] == {'id': 'kc_w9', 'slug': 'w9', 'title': 'Card', 'domain': 'd', 'pillar': None, 'topic': None,
+                        'essence': ' '.join(terms[:9] + ['filler'] * 7), 'propositions': ['kc_w9 holds'],
+                        'flashcards': []}
     assert 'slug' not in shown[0]
     card['relations'] = card['relations'][:2]  # fewer links: all of them shown, no more than five closest otherwise
     assert [e['id'] for e in near(cards)] == ['kc_w15', 'kc_w14', 'kc_w13', 'kc_w12', 'kc_w11', 'kc_w10b']
@@ -441,7 +443,7 @@ def frozen_card(slug, *targets, isolated=False, domain='d', near=(), written=Non
             'propositions': [f'{slug} one', f'{slug} two'],
             'flashcards': [{'q': f'{slug} q{i}?', 'a': f'{slug} a{i}'} for i in (1, 2)],
             'relations': [{'type': 'similar_to', 'target': t} for t in targets], 'linked_from': [],
-            'isolated': isolated, 'near_existing': [{'id': i, 'title': i, 'domain': 'other'} for i in near]}
+            'isolated': isolated, 'candidates': [{'id': i, 'title': i, 'domain': 'other'} for i in near]}
     if written is not None:  # a retry: the closest cards earlier jobs of the source wrote
         card['near_written'] = [{'id': i, 'slug': i[3:], 'title': i, 'domain': 'd', 'essence': i,
                                  'propositions': [f'{i} one']} for i in written]
@@ -487,7 +489,7 @@ def links(slug, *rows):
     (same('a', 'b', links=[{'target': 'c', 'type': 'similar_to'}]), None, 'put its links on b'),
     ({**same('a', 'b'), **links('c', ('a', 'similar_to'))}, None, 'link b'),
     (links('b', ('a', 'similar_to')), None, 'linked already'),
-    (links('b', ('kc_elsewhere', 'similar_to')), None, 'near_existing ids'),
+    (links('b', ('kc_elsewhere', 'similar_to')), None, 'one of its candidates'),
     (links('b', ('c', 'tool_for')), None, "'tool_for' is not open"),
 ])
 def test_the_answer_must_settle_every_card_without_chains(cards, topics, message):
