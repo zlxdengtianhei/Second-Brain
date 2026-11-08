@@ -151,6 +151,34 @@ class FormulaChecker(Protocol):
         """One answer per ``(tex, display)``: ``None`` when it parses, else the error."""
 
 
+class CheckerUnavailable(ValueError):
+    """The MathJax parse check cannot run on this machine (no node, no script, or no ``mathjax-full``)."""
+
+
+#: How to make the check run, or to go on without it knowingly.
+INSTALL = ('Install MathJax for the check: `npm install --prefix ~/.cache/sb-mathjax mathjax-full@3`, then set '
+           'SB_MATHJAX_NODE_PATH=~/.cache/sb-mathjax/node_modules (SB_MATHJAX_CHECK names another checker script). '
+           'Or run `sb export --no-formula-check`: the article then says at the top that its formulas were not '
+           'parse-checked')
+
+
+def preflight(checker) -> str | None:
+    """Why ``checker`` cannot check formulas here, or None when it parses a plain formula and rejects a broken one.
+
+    Run before an export asks any model, so a missing ``node`` or ``mathjax-full`` stops it before the calls
+    are spent rather than after them, and never skips the check without a word.
+    """
+    if checker is None:
+        return 'no checker: node is not on PATH, or tools/mathjax_check.js is missing (SB_MATHJAX_CHECK)'
+    try:
+        good, bad = checker.check([('a_{1}', False), ('\\frac{a}{b', False)])
+    except (ValueError, OSError, subprocess.SubprocessError) as exc:
+        return str(exc)
+    if good is not None or bad is None:
+        return f'{getattr(checker, "name", "the checker")} does not tell a valid formula from a broken one'
+    return None
+
+
 class NodeMathJax:
     """``node tools/mathjax_check.js`` with ``mathjax-full`` on ``NODE_PATH``."""
 
@@ -183,7 +211,7 @@ class NodeMathJax:
                               env=env, timeout=300)
         answers = [json.loads(x) for x in done.stdout.splitlines() if x.strip()]
         if done.returncode != 0 or len(answers) != len(items):
-            raise RuntimeError(f'MathJax check failed: {done.stderr.strip()[:500]}')
+            raise CheckerUnavailable(f'MathJax check failed: {done.stderr.strip()[:500]}')
         return [None if a.get('ok') else str(a.get('error') or 'parse error') for a in answers]
 
 

@@ -413,9 +413,26 @@ def _run_steps(root, job_id, steps, producer, reviewer, workers) -> tuple[list, 
     return handoffs, failures
 
 
+def _has_formulas(packet: dict) -> bool:
+    return any(checks.scan_math(c['body'])[0] for c in packet['cards'].values())
+
+
 def advance(root: Path, job_id: str, *, producer, reviewer, checker=None, workers: int = 4,
-            out_dir: Path | None = None, html: bool = False) -> dict:
-    """Run every step that can run now; write the article once all steps are done."""
+            out_dir: Path | None = None, html: bool = False, formula_check: bool = True) -> dict:
+    """Run every step that can run now; write the article once all steps are done.
+
+    When the cards in scope have formulas, ``checker`` must work (:func:`checks.preflight`) before any model is
+    asked; otherwise :class:`checks.CheckerUnavailable` is raised, unless ``formula_check`` is False: then the
+    formulas are not parse-checked and the article and its report say so.
+    """
+    unchecked = None
+    if _has_formulas(jobs.read_input(root, job_id)):
+        why = checks.preflight(checker)
+        if why and formula_check:
+            raise checks.CheckerUnavailable(f'The formulas of this export cannot be parse-checked ({why}); no model '
+                                            f'was asked. {checks.INSTALL}')
+        if why or not formula_check:
+            unchecked, checker = why or 'sb export --no-formula-check', None
     cache: dict = {}
 
     def errors_for(texts):
@@ -453,6 +470,8 @@ def advance(root: Path, job_id: str, *, producer, reviewer, checker=None, worker
                     feedback[key] = str(error.get('message', ''))[:2000]
         state = jobs.load(root, job_id)
         article, report = assemble(root, state, packet, errors_for, checker)
+        if unchecked:
+            article['unchecked'] = report['formula_check_skipped'] = unchecked
         result = {'job_id': job_id, 'status': 'complete', 'report': report}
         if out_dir is not None:
             result['files'] = write_files(article, report, Path(out_dir), html=html)

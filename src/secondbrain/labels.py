@@ -245,11 +245,13 @@ PAGES = {
 #: the closing list of unused cards, and the section for cards without a valid place.
 EXPORT = {
     'zh': {'hint': '> Typora：偏好设置 → Markdown → 勾选“内联公式”（Inline Math），然后重开 Typora；本文的行内公式写作 `$…$`。',
-           'unused': '未写进正文的卡', 'residual': '未归类的卡', 'flag': '〔此段复核未通过：{reason}〕'},
+           'unused': '未写进正文的卡', 'residual': '未归类的卡', 'flag': '〔此段复核未通过：{reason}〕',
+           'unchecked': '〔本文的公式未经 MathJax 解析检查：{reason}〕'},
     'en': {'hint': '> Typora: Preferences → Markdown → tick "Inline Math", then reopen Typora; inline formulas here '
                    'are written `$…$`.',
            'unused': 'Cards not used in the text', 'residual': 'Unclassified cards',
-           'flag': '[This paragraph did not pass review: {reason}]'},
+           'flag': '[This paragraph did not pass review: {reason}]',
+           'unchecked': '[The formulas of this article were not parse-checked by MathJax: {reason}]'},
 }
 
 

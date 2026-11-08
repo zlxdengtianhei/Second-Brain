@@ -47,6 +47,8 @@ def to_markdown(article: dict) -> str:
     front = yaml.safe_dump(article['meta'], allow_unicode=True, sort_keys=False, width=1000).strip()
     text = labels.export(lang)
     lines = ['---', front, '---', text['hint'], '', f"# {article['title']}", '']
+    if article.get('unchecked'):
+        lines += [text['unchecked'].format(reason=article['unchecked']), '']
 
     def paragraph(body, flag):  # a paragraph the review or the program did not pass says so, on the line before
         return ([text['flag'].format(reason=flag), ''] if flag else []) + [_blocks(body), '']

@@ -219,7 +219,8 @@ class FakeMathJax:
     name = "fake-mathjax"
 
     def check(self, items):
-        return ["Undefined control sequence" if "\\bad" in tex else None for tex, _ in items]
+        return ["Undefined control sequence" if "\\bad" in tex else
+                "Missing close brace" if tex.count("{") != tex.count("}") else None for tex, _ in items]
 
 
 def run(root, *, mode="parallel", skip=None, revise_first=None, rounds=1, out=None, html=False):
@@ -403,10 +404,10 @@ def test_host_mode_hands_off_all_parallel_units_but_one_sequential_unit(vault_ro
     for mode, expected in (("parallel", 4), ("sequential", 1)):
         job = pipeline.prepare(vault_root, domain=DOMAIN, mode=mode)
         host = HostExecutor(command=["sb"])
-        result = pipeline.advance(vault_root, job["job_id"], producer=host, reviewer=host)
+        result = pipeline.advance(vault_root, job["job_id"], producer=host, reviewer=host, checker=FakeMathJax())
         assert result["status"] == "awaiting_submission"
         assert len(result["handoffs"]) == expected
-        again = pipeline.advance(vault_root, job["job_id"], producer=host, reviewer=host)
+        again = pipeline.advance(vault_root, job["job_id"], producer=host, reviewer=host, checker=FakeMathJax())
         assert [h["run_id"] for h in again["handoffs"]] == [h["run_id"] for h in result["handoffs"]]
         assert Path(result["handoffs"][0]["packet_path"]).read_text(encoding="utf-8").count("<task_packet>") == 1
 
@@ -432,7 +433,7 @@ def test_same_family_writer_and_reviewer_are_refused_in_api_attestation(vault_ro
     job = pipeline.prepare(vault_root, domain=DOMAIN, mode="parallel")
     with pytest.raises(ValueError, match="different model families"):
         pipeline.advance(vault_root, job["job_id"], producer=FakeExecutor("glm-a", responder=writer()),
-                         reviewer=FakeExecutor("glm-b", responder=reviewer()))
+                         reviewer=FakeExecutor("glm-b", responder=reviewer()), checker=FakeMathJax())
 
 
 def test_cli_prepare_only(vault_root, tmp_path, capsys):
@@ -506,3 +507,89 @@ def test_the_writer_reads_cards_through_their_view(vault_root):
     entry = skeleton._card_entry(card)
     from secondbrain.cards import view
     assert entry["body"] == skeleton.body_view(view(card, "body")["body"]) and "复习卡" not in entry["body"]
+
+
+# --- the MathJax parse check: checked before any model call, never skipped without a word ------------------------
+class AlwaysOk:
+    name = "always-ok"
+
+    def check(self, items):
+        return [None for _ in items]
+
+
+@pytest.mark.parametrize("checker, why", [
+    (None, "node is not on PATH"),
+    (AlwaysOk(), "does not tell a valid formula from a broken one"),
+])
+def test_an_export_whose_formulas_cannot_be_checked_stops_before_any_model_call(vault_root, checker, why):
+    job = pipeline.prepare(vault_root, domain=DOMAIN, mode="parallel")
+    producer, review = FakeExecutor("gpt-writer", responder=writer()), FakeExecutor("claude-r", responder=reviewer())
+    with pytest.raises(checks.CheckerUnavailable, match=why) as stopped:
+        pipeline.advance(vault_root, job["job_id"], producer=producer, reviewer=review, checker=checker)
+    assert producer.calls == [] and review.calls == [] and "--no-formula-check" in str(stopped.value)
+
+
+@pytest.mark.skipif(not __import__("shutil").which("node"), reason="needs node")
+def test_node_without_mathjax_stops_the_export_before_any_model_call(vault_root, tmp_path):
+    script = Path(__file__).resolve().parents[1] / "tools" / "mathjax_check.js"
+    checker = checks.NodeMathJax(script, node_path=str(tmp_path / "no_modules"))
+    assert "Cannot find module" in checks.preflight(checker)
+    job = pipeline.prepare(vault_root, domain=DOMAIN, mode="parallel")
+    producer = FakeExecutor("gpt-writer", responder=writer())
+    with pytest.raises(checks.CheckerUnavailable, match="Cannot find module"):
+        pipeline.advance(vault_root, job["job_id"], producer=producer,
+                         reviewer=FakeExecutor("claude-r", responder=reviewer()), checker=checker)
+    assert producer.calls == []
+
+
+def test_without_the_check_the_article_says_its_formulas_were_not_checked(vault_root, tmp_path):
+    config.set_review_policy(ReviewPolicy(max_repair_rounds=0))
+    job = pipeline.prepare(vault_root, domain=DOMAIN, mode="parallel")
+    result = pipeline.advance(vault_root, job["job_id"], producer=FakeExecutor("gpt-writer", responder=writer()),
+                              reviewer=FakeExecutor("claude-r", responder=reviewer()), checker=None,
+                              out_dir=tmp_path / "o", formula_check=False)
+    report = result["report"]
+    assert report["formula_parse_checked"] is False and "node is not on PATH" in report["formula_check_skipped"]
+    md = Path(result["files"]["markdown"]).read_text(encoding="utf-8")
+    note = labels.export("zh")["unchecked"].format(reason=report["formula_check_skipped"])
+    assert f"# 合成图谱\n\n{note}\n\n" in md
+
+
+def test_the_command_reports_a_check_that_cannot_run_as_an_error_and_goes_on_only_when_told(vault_root, tmp_path,
+                                                                                         monkeypatch, capsys):
+    from secondbrain import cli
+    monkeypatch.setattr(cli, "export_executors", lambda args, root: (
+        FakeExecutor("gpt-writer", responder=writer()), FakeExecutor("claude-r", responder=reviewer())))
+    monkeypatch.setattr(checks.NodeMathJax, "from_env", classmethod(lambda cls: None))
+    base = ["--vault", str(vault_root), "export", "--domain", DOMAIN, "--out", str(tmp_path / "o"), "--max-rounds", "0"]
+    assert cli.main(base) == 2
+    assert "cannot be parse-checked" in json.loads(capsys.readouterr().err)["error"]
+    assert cli.main(base + ["--no-formula-check"]) == 0
+    assert json.loads(capsys.readouterr().out)["report"]["formula_check_skipped"]
+
+
+def real_checker():
+    checker = checks.NodeMathJax.from_env()
+    return checker if checker is not None and checks.preflight(checker) is None else None
+
+
+@pytest.mark.skipif(real_checker() is None,
+                    reason="needs node and mathjax-full (SB_MATHJAX_NODE_PATH=<folder>/node_modules)")
+def test_the_real_mathjax_checker_tells_valid_formulas_from_broken_ones(vault_root):
+    checker = real_checker()
+    assert checker.check([("a_{3}", False), ("\\bad", False), ("\\frac{a}{b", False), ("a \\mid b", True),
+                          ("\\operatorname{softmax}(x)", False)]) == [None, checker.check([("\\bad", False)])[0],
+                                                                       checker.check([("\\frac{a}{b", False)])[0],
+                                                                       None, None]
+    assert "Undefined control sequence" in checker.check([("\\bad", False)])[0]
+
+    def bad_writer(task):
+        out = writer()(task)
+        if task.chunk == "u01" and task.step == "produce":
+            out["parts"][-1]["paragraphs"].append("记作 $\\bad$。[[合成卡 003]]")
+        return out
+    config.set_review_policy(ReviewPolicy(max_repair_rounds=0))
+    job = pipeline.prepare(vault_root, domain=DOMAIN, mode="parallel")
+    result = pipeline.advance(vault_root, job["job_id"], producer=FakeExecutor("gpt-w", responder=bad_writer),
+                              reviewer=FakeExecutor("claude-r", responder=reviewer()), checker=checker)
+    assert result["report"]["finding_codes"]["formula_parse_error"] == 1 and result["report"]["checker"] == "mathjax"

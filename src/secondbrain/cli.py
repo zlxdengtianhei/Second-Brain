@@ -149,6 +149,8 @@ def parser():
     export.add_argument('--parallel', type=int, default=4, help='Concurrent model calls in API mode (1-8)')
     export.add_argument('--max-rounds', type=int, help='Override [review] max_repair_rounds for this run')
     export.add_argument('--prepare-only', action='store_true', help='Freeze the skeleton; no model call')
+    export.add_argument('--no-formula-check', action='store_true',
+                        help='Go on without the MathJax parse check (the article says so at the top)')
     job = sub.add_parser('job', help='Jobs, runs and host-mode hand-off')
     job_sub = job.add_subparsers(dest='job_command', required=True)
     job_sub.add_parser('list')
@@ -295,7 +297,8 @@ def _export(args, root: Path) -> dict:
     producer, reviewer = export_executors(args, root)
     out = args.out if args.out is not None else root / layouts.of(root).articles
     return pipeline.advance(root, job_id, producer=producer, reviewer=reviewer,
-                            checker=NodeMathJax.from_env(), workers=args.parallel, out_dir=out, html=args.html)
+                            checker=NodeMathJax.from_env(), workers=args.parallel, out_dir=out, html=args.html,
+                            formula_check=not args.no_formula_check)
 
 
 def _review(args, root: Path):
