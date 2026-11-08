@@ -30,6 +30,7 @@ sources = "40_Sources"
 inbox = "00_Inbox"
 reviews = "50_Reviews"
 data = "_data"
+articles = "60_Articles"  # where `sb export` writes articles
 entry_docs = []     # top-level notes whose generated blocks `sb docs` refreshes, e.g. ["Guide.md"]
 
 [executor]
@@ -53,7 +54,10 @@ api_key_env = "SB_REVIEWER_API_KEY"
 require_different_family = true
 allow_same_family_in_host_mode = true
 withhold_producer_reasons = true
-max_repair_rounds = 1
+max_repair_rounds = 2        # content repair rounds per chunk, split card or article unit
+max_invalid_retries = 2      # answers that failed the program's checks, asked for again (per slot)
+focused_review = true        # a repair round's reviewer checks the earlier findings
+amend = true                 # the reviewer may make mechanical fixes with an accept
 
 [model_families]    # substring -> family, merged over the built-in table
 # my-local-model = "local"
@@ -64,6 +68,15 @@ after_ingest = "move"        # move | keep
 new_topics_per_source = 2
 converter = "none"           # none | markitdown
 id_prefix = "kc_"
+candidates_k = 15            # existing cards per search, for every role
+candidates_chars = 40000     # characters of retrieved card views per packet
+candidates_hop = 0           # second route: the cards the first N hits link (0: off)
+candidates_shelf = true      # shelves: the cards of a topic, by title
+review_named = true          # the reviewer sees every existing card the producer named, whole
+review_words_view = "brief"  # brief | full: the search hits in the reviewer packet
+merge_into_existing = true   # a card that extends an existing card goes into it
+context_note = "program"     # off | program | summary | concepts
+context_note_chars = 2000
 
 [cards]
 language = "en"              # en | zh (card headings; text of maps, HOME and review pages)
@@ -74,6 +87,10 @@ extra_reviewers = 0
 
 [git]
 commit = false
+
+[export]
+mode = "sequential"          # sequential | parallel
+# [export.writer] and [export.reviewer]: the models that write and review articles (docs/export.md)
 ```
 
 ## Keys
@@ -98,6 +115,7 @@ Folder names are relative to the vault. Folders must not overlap.
 | `inbox` | `00_Inbox` | new material |
 | `reviews` | `50_Reviews` | the generated daily review page (`sb today`) |
 | `data` | `_data` | registries, the catalog, review logs |
+| `articles` | `60_Articles` | the articles that `sb export` writes: a generated view, not knowledge ([export.md](export.md)) |
 | `home` | `HOME.md` | the generated entry page |
 | `entry_docs` | none | hand-written top-level notes whose generated blocks `sb docs` refreshes, for example `["Guide.md"]`. The last line of the block says that `sb` writes only the block, and that commands named elsewhere in the note are not `sb` commands |
 | `extra_dirs` | none | more top-level folders counted in the folder table on the entry page (and in the optional `kb-dirs` block) |
@@ -126,7 +144,14 @@ A key written into the file (`api_key = ...`) is refused. Keys are read per requ
 | `require_different_family` | true | Producer and reviewer must be different model families when the model name comes from the provider's response (API executor). |
 | `allow_same_family_in_host_mode` | true | In host mode the model name is self-reported; a same-family pair is allowed and the job records `same_family: true`. |
 | `withhold_producer_reasons` | true | The reviewer does not see the producer's reasons. |
-| `max_repair_rounds` | 1 | Repair rounds per chunk for rejected or invalid cards. `sb ingest --max-rounds N` overrides it for one run. |
+| `max_repair_rounds` | 2 | Content repair rounds: how many times a card, a split card or an article unit that a reviewer sent back with a reason is written again. It also limits how often the merge check runs again after a dispute. `sb ingest --max-rounds N` (and `sb export --max-rounds N`) overrides it for one run. 0 to 10. |
+| `max_invalid_retries` | 2 | How many times an answer that failed the program's checks is asked for again, per slot: a chunk, a review, the merge check, a split card, a model note. It does not use a repair round. `sb job skip-source-check` works after this number plus one failures. 0 to 10. |
+| `focused_review` | true | The reviewer of a repair round says whether each earlier finding is fixed. It sends a card back only for a finding that is not fixed, or for a blocking problem (`fact`, `unreadable`, `quote`, `not_a_unit`); other problems go to notes. |
+| `amend` | true | With an accept, the reviewer may add, retype or remove a relation, file the card under an existing topic, or drop a review card. The program checks that the result is legal and applies the fix without a repair round ([ingest.md](ingest.md#review-rules)). |
+
+The defaults come from a test of 1, 2 and 3 repair rounds with both switches on and off: every chunk that reached review settled within one repair round, and 6 of 225 written cards (2.7%) had a real problem.
+
+A job keeps the `[review]` and `[ingest]` settings it was frozen with, so a change here applies to jobs started after it ([Settings a job keeps](ingest.md#settings-a-job-keeps)).
 
 ### `[model_families]`
 
@@ -142,8 +167,18 @@ Maps a substring of a model name to a family, for the independent-review check. 
 | `converter` | `none` | `markitdown` converts non-text files (needs the `markitdown` package). |
 | `id_prefix` | `kc_` | Card ids are this prefix plus the card's slug. |
 | `max_source_bytes` | 8 MiB | Larger sources are refused, not truncated. |
-| `neighbors_per_card` | 3 | Existing cards shown to the reviewer per new card. |
 | `candidate_domains` | 3 | Domains whose taxonomy a producer sees for one chunk. |
+| `candidates_k` | 15 | Existing cards per search, the same for every role: each passage of the producer, each new card of the reviewer, each card of the merge check, and in a retry the cards the source wrote. 1 to 100, or `"auto"` for each role's earlier count. On vaults of 197 to 8,738 cards, more than 15 found no more repeats. |
+| `candidates_chars` | 40000 | Characters of retrieved card views that one packet may hold; the cards the producer named do not count. Past it, lower-ranked cards are shown shorter, then left out ([Candidate cards](ingest.md#candidate-cards)). 1,000 to 1,000,000. |
+| `candidates_hop` | 0 | Second route: the cards that the first N search hits link. 0 is off: in a test, linked cards found no more repeats than a longer search. 0 to 10. |
+| `candidates_shelf` | true | Shelves: the cards of one topic, by title, at most 25. The producer gets the shelves of the topics its search hits are filed under, the reviewer the shelf of each new card's topic. They are packed last, so they are left out first. |
+| `review_named` | true | The reviewer sees, whole, every existing card the producer named: relation targets, `same` coverage rows, conflicts, overlap hints. |
+| `review_words_view` | `brief` | The view of the search hits in the reviewer packet: `brief` or `full`. Set `full` when a Flash-class model reviews: in a test, a DeepSeek reviewer found about 6 points fewer injected errors with `brief`, while an Opus reviewer found about 1 point fewer. |
+| `merge_into_existing` | true | A card that extends an existing card goes into it, or is rewritten as a narrower card when that card would pass 12 propositions or 8 review cards. With `false`, it is written next to the existing card as needs-review. |
+| `context_note` | `program` | The note on where each chunk sits in its source: `off`, `program` (from the source's structure, no model call), `summary` or `concepts` (each adds a cheap model call) ([The context note](ingest.md#the-context-note)). |
+| `context_note_chars` | 2000 | The length of the context note in characters. 200 to 20,000. |
+
+`neighbors_per_card` of earlier versions is still accepted for one version, and ignored.
 
 ### `[cards]`
 
@@ -151,6 +186,16 @@ Maps a substring of a model name to a family, for the independent-review check. 
 |---|---|---|
 | `language` | the vault's language | `en` or `zh`. Sets the section headings of new cards (`en`: Essence, Propositions, Diagram, Intuition and contrasts, Related, Review cards) and the fixed text of the generated pages: maps, `HOME.md` and the daily review page. Card text follows the language of the source. Without this key, `sb` uses the vault's language (recorded in the catalog, else found from its maps, else `en`). If this key names another language than the vault's, writes are refused until `sb language --set` switches the vault. |
 | `diagrams` | true | Run the diagram step after review ([diagrams.md](diagrams.md)). |
+
+### `[export]`
+
+| Key | Default | Meaning |
+|---|---|---|
+| `mode` | `sequential` | `sequential` writes an article unit after unit, each writer seeing the end of the unit before; `parallel` writes every unit at once. `sb export --mode` overrides it for one run. |
+| `[export.writer]` | none | The model that writes articles, with the keys of `[executor.producer]`. Unset: `[executor.producer]`. |
+| `[export.reviewer]` | none | The model that reviews articles, with the same keys. Unset: `[executor.reviewer]`. In API mode it must be of another model family than the writer. |
+
+Details: [export.md](export.md).
 
 ### `[taxonomy]` and `[git]`
 
@@ -169,6 +214,8 @@ Maps a substring of a model name to a family, for the independent-review check. 
 | `SECONDBRAIN_LOCK_WAIT` | seconds to wait for another writer's lock (default 30) |
 | `SECONDBRAIN_NO_CACHE=1` | read every card from disk, without the parse cache |
 | `SECONDBRAIN_TEST_TIMEOUT` | seconds after which one test fails (default 300; `0` turns the limit off; POSIX only) |
+| `SB_MATHJAX_NODE_PATH` | the `node_modules` folder that holds `mathjax-full`, for the formula check of `sb export` |
+| `SB_MATHJAX_CHECK` | another script for that check (default `tools/mathjax_check.js`) |
 
 ## Install extras
 
@@ -177,4 +224,6 @@ Maps a substring of a model name to a family, for the independent-review check. 
 | `api` | `httpx` | the API executor |
 | `mcp` | `mcp` | `sb serve` |
 | `review` | `fsrs` (pinned) | `sb review`, `sb today` and the review page of `sb daily` (without it, `sb daily` writes `HOME.md` only); the review totals in `sb status` |
+| `curate` | `networkx` | the split proposals for topics past 25 cards in `sb curate` |
+| `export` | `markdown`, `pymdown-extensions` | `sb export --html` |
 | `test` | all of the above and `pytest` | running the tests |

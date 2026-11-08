@@ -27,8 +27,8 @@ Configure `[executor.producer]` and `[executor.reviewer]` in the config file (di
 sb ingest <path>                  # or: sb job advance <job_id> --executor api
 ```
 
-Keys come only from `api_key_env` or `api_key_cmd`, never from the config file.
+Keys come only from `api_key_env` or `api_key_cmd`, never from the config file. `sb export --domain <slug>` writes an article the same way; it uses `[export.writer]` and `[export.reviewer]` when they are set, else the producer and the reviewer.
 
 ## MCP instead of the CLI
 
-`sb serve` (read-only) offers `job_packet`, which returns the task text directly; `sb serve --writer` adds `ingest_prepare`, `job_submit` and `job_advance`. The same flow applies: the coordinator never answers a packet itself.
+`sb serve` (read-only) offers `job_packet`, which returns the task text directly; `sb serve --writer` adds `ingest_prepare`, `job_submit` and `job_advance`. The same flow applies: the coordinator never answers a packet itself. `sb export` has no MCP tool; run it with the CLI.

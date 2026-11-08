@@ -2,7 +2,7 @@
 
 [English](agents.md)
 
-入库时需要模型做的工作（生产卡片、复核卡片、提出卡内图）有两种做法：由编程 agent 宿主的子代理完成，或由工具调用 API 端点完成。其余工作都由 `sb` 完成。
+入库时需要模型做的工作（生产卡片、复核卡片、合并核对、拆卡、提出卡内图），以及 `sb export` 的写作与复核，有两种做法：由编程 agent 宿主的子代理完成，或由工具调用 API 端点完成。其余工作都由 `sb` 完成。
 
 ## Agent Skill
 
@@ -15,7 +15,7 @@
 
 agent 负责协调。对每个交接，它都开一个新的子代理，只给一段简短的固定文字，指向任务文件、答案文件和提交命令；它不加入自己对材料的看法。每份答案提交时，`sb` 都会检查，并把错误返回给子代理。然后 agent 反复运行 `sb job advance <job_id> --executor host`，直到任务变成 `applied` 或 `partial`。最后它报告新卡片、待定卡片及复核者的理由、重复卡片，以及需要新支柱或新领域的材料。
 
-如果宿主允许选择模型，给复核者用与生产者不同家族的模型。宿主模式下也接受同一家族的复核，并在任务里记为 `same_family: true`。Claude Code 里的子代理都是 Claude 模型，所以那里的每次复核都属于同一家族。
+如果宿主允许选择模型，给复核者用与生产者不同家族的模型。宿主模式下也接受同一家族的复核，并在任务里记为 `same_family: true`。Claude Code 里的子代理都是 Claude 模型，所以那里的每次复核都属于同一家族。用 Flash 一档的模型做复核时，把 `[ingest] review_words_view` 设成 `"full"`（[configuration.zh-CN.md](configuration.zh-CN.md#ingest)）。
 
 [中文示例库](../examples/vault-zh/)就是这样在 Claude Code 里用中文笔记建成的：7 份来源，31 个子代理（生产者用一个 Claude 模型，复核者用另一个），52 张卡片。[英文示例库](../examples/vault/)也是这样建成的：7 份来源，34 个子代理，42 张卡片。其他宿主（Codex、Pi 等）应该也能这样用，但还没有测试过。
 
@@ -34,6 +34,8 @@ sb job advance <job_id> --executor host   # 下一批交接，或最终状态
 sb job show <job_id>                      # 状态、附理由的待定项、运行记录
 sb job packet <job_id> --role producer    # 再次取出未完成的交接
 sb job abandon <job_id> --run-id <run_id> --reason "sub-agent crashed"
+sb export --domain <slug> --executor host   # 导出文章也走同样的交接循环
+sb export --job <job_id> --executor host    # 下一批交接；各步都完成后写出文章文件
 ```
 
 一个运行 id（run id）只接受一份答案。同一个运行再提交一份不同的答案，会被拒绝。
@@ -48,7 +50,9 @@ sb job abandon <job_id> --run-id <run_id> --reason "sub-agent crashed"
 4. 检查：`sb doctor` 显示配置，以及每个 key 是否可用；`sb doctor --live` 向每个端点发一次小请求。
 5. 运行 `sb ingest <file> --executor api`；或者在设了 `[executor] default = "api"` 时运行 `sb ingest --all`。
 
-遇到限流和服务器错误时，工具会退避后重试。块太大、放不进模型上下文时，工具把它一分为二再试。答案被截断或不是 JSON 时，算作无效答案，并用掉这个块的那一轮返修。
+遇到限流和服务器错误时，工具会退避后重试。块太大、放不进模型上下文时，工具把它一分为二再试。答案被截断、不是 JSON，或某个值的 JSON 类型不对时，算作无效答案：程序重新要一次答案，最多 `[review] max_invalid_retries` 次，不占返修轮。
+
+设了 `[export.writer]` 和 `[export.reviewer]` 时，`sb export` 用它们写作和复核；没设时用生产者和复核者（[export.zh-CN.md](export.zh-CN.md#配置)）。
 
 ## MCP 服务
 

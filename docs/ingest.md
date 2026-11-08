@@ -25,7 +25,7 @@ sb ingest --retry <job>             # try the pending cards of a partial job aga
 sb ingest <file> --domain <slug> --pillar "<pillar>"   # file the cards there (also --topic)
 ```
 
-`--executor host|api` overrides `[executor] default`, and `--max-rounds N` overrides the number of repair rounds for this run.
+`--executor host|api` overrides `[executor] default`, and `--max-rounds N` overrides the number of content repair rounds (`[review] max_repair_rounds`) for this run. The job keeps that number with its other settings ([Settings a job keeps](#settings-a-job-keeps)).
 
 To say where the cards of a source belong, add `--domain <slug>`, optionally with `--pillar "<pillar>"` and then `--topic "<topic>"` (the MCP tool `ingest_prepare` takes the same three arguments). The placement is frozen with the job, and retries keep it; `--retry` together with a placement flag is an error. If the source was frozen earlier with another placement, the job keeps that one, and `sb ingest` (or `ingest_prepare`) returns a `placement_note` that says so. The placement domain comes first among each chunk's candidate domains. Producers file cards there, unless a card's subject already has its own topic in the taxonomy (an algorithm, a data structure, another language); reviewers send back a card filed elsewhere without that reason. A domain, pillar or topic that does not exist is refused, and the error lists what exists; `--topic` must already be one of the pillar's `topics`. No command creates a topic: add its name under the pillar's `topics:` in `20_MOCs/_pillars/<MOC>.yaml`, or let `sb curate` propose it.
 
@@ -33,15 +33,18 @@ To say where the cards of a source belong, add `--domain <slug>`, optionally wit
 
 | Step | What happens |
 |---|---|
-| Freeze | The source bytes, the extracted text, the chunks, the catalog, the full taxonomy and the nearest cards are stored as the job's input, with a hash. Only UTF-8 text is read unless a converter is configured. A source over `max_source_bytes` is refused. |
+| Freeze | The source bytes, the extracted text, the chunks, the catalog, the full taxonomy, the candidate cards of each chunk, the review rules and the `[ingest]` settings are stored as the job's input, with a hash. Only UTF-8 text is read unless a converter is configured. A source over `max_source_bytes` is refused. |
 | Chunk | The text is cut into exact consecutive slices of about `chunk_chars` characters, at headings and blank lines first, then at sentence ends. |
-| Route | Each paragraph of a chunk is searched against the existing cards. The domains of the best matches become the chunk's candidate domains. The best matches for the whole chunk, then the best three of each paragraph (40 at most), become its neighbours. |
-| Produce | The producer gets the chunk, all domains with their guiding questions, the full taxonomy of the candidate domains (with card counts per topic), the neighbours and, in API mode, the cards already proposed for earlier chunks of the same source: there the chunks run one after another. In host mode `sb ingest` hands out every first-round producer task at once, so those producers see no other chunk's cards. It returns cards, proposed new topics and a coverage table. |
-| Check | Code validates the answer when it is submitted (list below). Errors go back to the producer; an invalid answer uses the chunk's repair round. |
-| Review | The reviewer gets the chunk, the cards without the producer's reasons, the cards of all other chunks of the source, for each new card the ids of the five closest existing cards, each of those cards once with its title, domain, essence and (within a size budget) its propositions, and the taxonomy. It decides `accept`, `revise` or `duplicate` for each card, `accept` or `revise` for each new topic, and whether the coverage table is right, each with a reason. It does not ask for a revision only because another chunk makes the same point; the source check settles that. It sends back a `depends_on` or `required_by` that makes a card about a library, tool or language feature a prerequisite of the idea it implements, or of a card about another language: such cards use `similar_to` or `contrasts_with`. When it accepts a card that links an existing card, it also sets `overlap`: `distinct` if the card holds a recallable unit of its own, or `needs_review` with `overlap_with` naming the linked card it mostly repeats. A card whose points are mostly spread over several existing cards, adding only examples or cases, is `needs_review` too, with the card it repeats most. A card that adds no recallable unit of its own is a `duplicate`. Producer and reviewer can flag `conflicts`, where a new card disagrees with an existing one. |
-| Repair | Cards marked `revise` go back to the producer with the reviewer's findings, once by default. Accepted cards are kept. The producer sees the cards of all other chunks here too. The round also sees what earlier rounds settled without a card (duplicates of existing cards, passages out of scope, as `already_settled`) and does not write those again. When the reviewer refused a new topic, the accepted cards under it come back as `refile_cards`; the producer may file them, with the same slug, under a renamed topic or an existing one, and they are reviewed again. A rejected card that the repair splits or drops does not stay pending; the coverage verdict of the later round decides. |
-| Gate | A card is written only if a reviewer in a different run accepted it. Cards still rejected become pending with the reasons. A card that is still filed under a rejected new topic after the repair also becomes pending. |
-| Source check | When the accepted cards come from two or more chunks, one reviewer judges them all together, with the source's new topics: it merges cards that make the same claim, adds missing links and merges repeated new topics. In a retry it also compares the cards with the cards earlier jobs of the source wrote, even for one chunk ([below](#the-source-check)). |
+| Context note | When a source has two or more chunks, each chunk gets a note on where it sits in the source: the headings it starts under, the end of the chunk before, and the outline of the source ([below](#the-context-note)). |
+| Route | Each passage of a chunk (the text between blank lines, with its heading) is searched against the existing cards. The domains of the best matches become the chunk's candidate domains. The 15 best matches of each passage become its candidate cards ([below](#candidate-cards)). A block longer than 400 characters with 7 or more lines and no blank line between them, such as a summary list, is searched line by line. |
+| Produce | The producer gets the chunk and its context note, all domains with their guiding questions, the full taxonomy of the candidate domains (with card counts per topic), the candidate cards of each passage, the shelves of their topics and, in API mode, the cards already proposed for earlier chunks of the same source: there the chunks run one after another. In host mode `sb ingest` hands out every first-round producer task at once, so those producers see no other chunk's cards. It returns cards, proposed new topics and a coverage table. A coverage row says that a passage became a card, that existing cards hold all of it already (`same`, with their ids in `with`), that it is not worth keeping (`out_of_scope`), or that it needs a new pillar or domain (`needs_taxonomy`). A card may carry an `overlap_hint`, for example that it extends an existing card; it is a proposal, and the program never reads it for an outcome. |
+| Check | Code validates the answer when it is submitted (list below). Errors go back to the producer. An invalid answer is asked for again, up to `max_invalid_retries` times; it does not use a repair round. |
+| Review | A reviewer in a different run gets the chunk and its context note, the cards without the producer's reasons, the cards of all other chunks of the source, the existing cards to compare each card with ([Candidate cards](#candidate-cards)), and the taxonomy. It decides `accept` or `revise` for each card and each new topic, and whether the coverage table is right, each with a reason. A `same` coverage row is right only when the existing cards it names hold every point of the passage. For each accepted card the reviewer also says how much it repeats the vault: `same`, `extends` or `distinct`, with `with` naming the existing cards ([How much a card repeats](#how-much-a-card-repeats)). With an accept it can make mechanical fixes and write notes, each of a kind ([Review rules](#review-rules)). It does not ask for a revision only because another chunk makes the same point; the merge check settles that. It sends back a `depends_on` or `required_by` that makes a card about a library, tool or language feature a prerequisite of the idea it implements, or of a card about another language: such cards use `similar_to` or `contrasts_with`. Producer and reviewer can flag `conflicts`, where a new card disagrees with an existing one. |
+| Repair | Cards marked `revise` go back to the producer with the reviewer's findings, for up to `max_repair_rounds` rounds (2 by default). Accepted cards are kept. The producer sees the cards of all other chunks here too. The round also sees what earlier rounds settled without a card (passages that existing cards hold, passages out of scope, as `already_settled`) and does not write those again. When the reviewer refused a new topic, the accepted cards under it come back as `refile_cards`; the producer may file them, with the same slug, under a renamed topic or an existing one, and they are reviewed again. A rejected card that the repair splits or drops does not stay pending; the coverage verdict of the later round decides. The reviewer of a repair round checks whether each earlier finding is fixed ([Review rules](#review-rules)). |
+| Gate | A card is written only if a reviewer in a different run accepted it. An accept with a note of a blocking kind counts as a revise. Cards still rejected after the last round become pending with the reasons. A card that is still filed under a rejected new topic after the repair also becomes pending. |
+| Sort | The program sorts the accepted cards by the reviewer's level: a `same` card is not written and is listed under `duplicates`; an `extends` card goes into the patch set of its existing card; a `distinct` card goes on to the merge check. |
+| Merge check | One reviewer judges the cards of the source together: the `distinct` cards against each other, the new topics, and one patch for each existing card that cards of the source extend ([below](#the-merge-check)). It runs when the `distinct` cards come from two or more chunks, or when a card waits for its patch. |
+| Split | When a patch would take an existing card past 12 propositions or 8 review cards, the new card is rewritten as a narrower card in a split slot and reviewed again ([below](#a-card-that-extends-an-existing-card)). |
 | Diagram | Accepted cards go through the diagram step ([diagrams.md](diagrams.md)). |
 | Write | One transaction (below). |
 | Commit | With `[git] commit = true`, the written paths are committed. A failed commit is recorded and does not undo the write. |
@@ -58,30 +61,235 @@ To say where the cards of a source belong, add `--domain <slug>`, optionally wit
 - a duplicate slug, a slug whose card id an existing card already has (`spacing-effect` when `kc_spacing-effect` exists), a title that cannot be a file name, or a title that an existing card already has;
 - fewer than two or more than four question-and-answer pairs, or `::` inside them;
 - a card id written into the text (cards refer to each other by `[[Title]]`);
-- a card that is missing from the coverage table, or a coverage row whose quote is not in the chunk.
+- a card that is missing from the coverage table, or a coverage row whose quote is not in the chunk;
+- a value of the wrong JSON type anywhere in the answer, such as an object where a name must be a string ([below](#answers-of-the-wrong-shape)).
 
-### The source check
+Two titles, or two topic names, clash when they are the same text in the sense of [What counts as the same text](#what-counts-as-the-same-text).
 
-Each chunk is produced and reviewed on its own. So two chunks can each write a card on the same point, cards of different chunks that belong together are not linked, and two chunks can each propose a new topic for the same subject. Once every chunk has settled, and before the diagram step, one more reviewer hand-off (`chunk: xc01`, `step: source_check`) gets every accepted card and every new topic of the source, sorted by domain, pillar and topic. It gives one decision per card:
+## Candidate cards
 
-- `same`, with `with` naming another card's slug: the two cards make the same core claim (one is a subset of the other, or both answer the same question). This card is not written. The propositions and flashcards it adds go to the other card, copied word for word in `carry`, together with its source quotes. A carried item that uses a name only the dropped card defines needs the proposition that defines it too. `carry.replace` (`[{"proposition": "P2", "by": "<proposition of this card, word for word>"}]`) puts a fuller proposition, such as the same point with an example, in place of the kept one instead of next to it. Carried items that repeat the kept card word for word (ignoring spaces and punctuation) are skipped. The kept card may then hold at most 12 propositions and 8 flashcards (a new card holds 4). Its `sources` gets a second entry with the dropped card's source passage, and `propositions` in that entry names the carried propositions. Links to the dropped card go to the kept card, and its own links move there, unless that card already links the target or the move would make a link to itself or two links pointing both ways. A text link `[[dropped card title]]` in any kept card, also with `#heading` or `|alias`, now points to the kept card; a link that would point to the card itself becomes plain text.
-- `keep`: no other card makes its core claim. A kept card can get `links`: relations it should have and does not have yet, to other cards of the source (by slug) or to one of the three nearest existing cards listed for it (`near_existing`, by id). A link needs a type open to both domains, may not add a second relation to a pair, and may not point to a card that is `same`.
+Every role that compares new cards with the vault gets its existing cards from one function: the producer, the chunk reviewer, the merge check and the split slot. A candidate is only a card to look at. Whether a new card repeats it is the reviewer's judgement, never a score.
 
-In a retry ([Jobs and recovery](#jobs-and-recovery)) the cards are the ones the parent left pending. They missed the parent's source check, and the cards they may repeat are now in the vault: in a test of a real vault, a retry wrote a card as `confirmed` although three cards of its parent already held its points. So in a retry the check runs whenever a card is accepted and earlier jobs of the source wrote cards, also for one chunk. Each card then also lists `near_written`: the five cards earlier jobs of the source wrote that are closest to it (ranked by score among those cards only, best first, ties by id), then the written cards it links, the closer ones first, eight in all at most; each with its essence and propositions. `same` may name one of them by id; for a repeat spread over several, the one it repeats most. The written card is not changed and nothing is carried. The new card must link the written card (in its relations or in `links`), is written with `status: needs-review`, and is listed under `needs_review` and `source_check.same_as_written`. `links` may also point to `near_written` cards.
+Each candidate row names its route in `via`:
 
-Known limit: carried text is always copied word for word, and the checker never rewrites it. So a kept card can still state the same point twice, once in its own words and once in a carried item that adds an example, and a carried example can use a variable name the kept card does not define. In a replay of a test ingest this happened in 3 of 20 merges, plus one example name. Exact repeats are skipped and `carry.replace` covers a fuller wording of the same point; you tidy the rest when you review the cards. A retry card that repeats a written card is flagged, not merged: you merge the two by hand, or set `status: confirmed` to keep both. A card that repeats a card of another source is judged only by the chunk reviewer, against the five closest existing cards.
+| `via` | The card |
+|---|---|
+| `named` | The producer named it: a relation target, a conflict, an `overlap_hint` or a `same` coverage row. |
+| `written` | In a retry: a card that an earlier job of the same source wrote. |
+| `words` | A search hit: one of the 15 best cards of a lexical (BM25) search over the whole vault. |
+| `hop` | A card that a search hit links. Off by default (`candidates_hop = 0`). |
+| `shelf` | A card filed under the same topic, at most 25 per topic. |
 
-A card with no relations is marked `isolated: true` in the packet. It must get a link, be linked by another card, or say in `alone` why it stands alone.
+A card is shown at one of four views. Each view holds the one before it:
 
-It gives one decision per new topic: `keep`, or `same` with another new topic's id. In the second case, the topic's cards are filed under that topic (its domain, pillar and topic), and the topic is not added. When the job has a placement (`--domain`), the topic at the placement is the one kept.
+| View | Holds |
+|---|---|
+| `title` | the id and the title |
+| `brief` | also the domain, pillar, topic and the essence (cut at 300 characters) |
+| `full` | also every proposition and every review card with its answer |
+| `body` | the whole card body (only `sb export` uses it) |
 
-`sb job submit` refuses an answer that leaves a card or topic without a decision, points `same` at a card that is itself `same`, carries text that is not copied exactly, replaces a proposition the kept card does not have or replaces one twice, puts the same text in `replace` and in `propositions`, goes over the 12 and 8 limits, breaks a link rule, leaves an isolated card without a link or `alone`, or gives no reason for `same`. For a written card, it also refuses `same` with an id that is not in the card's `near_written`, a `carry`, or a card that does not link the written card. In API mode, an answer that still fails after `max_repair_rounds` corrections (default 1) is recorded as skipped, and the cards are written as the chunk reviews left them. In host mode, run `sb job skip-source-check <job> --reason "<why>"` when the check keeps failing. It works only after `max_repair_rounds` + 1 failures (default 2; refused answers, abandoned or failed runs and invalid outputs count together), and below that it says how many there are so far. It abandons the open run and records the skip; the next `sb job advance` draws the diagrams and writes the cards as the chunk reviews left them, without merging or linking across chunks. The job result reports the outcome under `source_check`: `merged` (with `carried` counts, `replaced` and `repeats_skipped`), `same_as_written` (a retry's cards written as needs-review next to a written card, with `with` and the reason), `added_links`, `alone`, `refiled_topics`, `moved_relations` and `rewritten_links`, or `status: skipped` with the reason.
+A card whose propositions are not numbered `P1`, `P2` ... or whose review cards have no `::` shows the start of its body at `full`, marked `format: legacy`.
+
+**One budget.** In one packet, the views of the retrieved cards take at most `candidates_chars` characters (40,000). Each existing card is shown once, however many new cards it is near. The cards are packed in the order of the first table: named, written, search hits, hop, shelf. Named cards keep their view and do not count. When the others are too long, the lowest-ranked card at the highest view loses one level (`full` to `brief`, `brief` to `title`), one card at a time, so the best-ranked cards keep the most. When every card is at `title` and the packet is still too long, the lowest-ranked titles are left out. So a shelf loses its titles before any search hit does. When the named cards alone take more than twice the budget, the chunk is split in halves and produced again.
+
+What each role gets:
+
+| Role | Cards | Views |
+|---|---|---|
+| Producer | for each passage, its 15 search hits; the shelves of the topics those hits are filed under, in the order of their best hit, each with the best-ranked cards first | hits `brief`, shelves `title` |
+| Chunk reviewer | for each new card: the existing cards the producer named, its 15 search hits and the shelf of the card's topic; in a retry, also the cards earlier jobs of the source wrote; under `#coverage`, the cards the coverage rows name | named cards `full`, never lowered; written cards `full`; hits `brief` (`review_words_view`); shelf `title` |
+| Merge check | for each card, its 15 search hits, only to add links; each card lists them by id, closest first | `brief`, lowered within the budget |
+| Split slot | the existing card the new card narrows | `body` for the producer, `full` for its reviewer |
+
+Why these values:
+
+- **15 hits for every role, at every vault size.** On vaults of 197 to 8,738 cards, 15 was the smallest count after which five more cards found less than 2 more points of the real repeats, at every size. With 15, the search found 95.9% of them.
+- **No second route.** The cards that the hits link found no more repeats than a longer search did.
+- **The whole vault.** Keeping only related domains found 0.68 points fewer repeats and did not read less. About 12% of the top 15 hits were outside the related domains, and some of them were real repeats.
+- **Long lists line by line.** In a summary chapter whose items had no blank line between them, the cards the producer named for the items were among the first 5 hits for 52% of the items when each block was one query, and for all of them when each line was a query.
+- **40,000 characters.** With 20,000, the reviewer found 3 points fewer injected errors. With 80,000, it found no more.
+- **Named cards whole.** The reviewer checks a claim that an existing card already holds a passage against that card. Before, over eleven real jobs, the reviewer saw 6 of the 71 cards that producers named.
+- **Search hits `brief` for the reviewer.** An Opus reviewer found about 1 point fewer injected errors with `brief` than with `full` (62 of 80 against 63 of 80), and read about 12% less. A DeepSeek Flash reviewer found about 6 points fewer. When a Flash-class model reviews, set `review_words_view = "full"`.
+- **Shelves.** A shelf shows what a topic already holds, for filing a card and for finding a repeat under the same topic. It costs about 25 titles per topic. Its effect was not measured; it is on because it is cheap.
+
+## How much a card repeats
+
+One scale with three levels is used wherever a repeat is judged. Every prompt that asks for it gets the same definition:
+
+- `same`: the card holds nothing that the cards in `with` do not hold. Its knowledge may be spread over several of them.
+- `extends`: the card is about the same object or question as the one card in `with`, or one of its sub-questions. It adds details, examples, cases or the answer to a sub-question. Merged into that card, the card still answers one question.
+- `distinct`: the card is about another object or another question. Merged into the card in `with`, that card would no longer answer one question.
+
+More examples or cases on the same question are not a unit of their own: they are `extends`.
+
+**One final judge per value.** Each value that decides what is written has one role that gives it:
+
+| Value | Final judge |
+|---|---|
+| a card's verdict (`accept` or `revise`) and its level against the vault (in a retry, also against the cards the source wrote) | the chunk reviewer |
+| a `distinct` card's level against the other cards of the source; a new topic that is the same as another; the patch of an existing card; a dispute | the merge check |
+| a split card's verdict, and that it does not restate its existing card | the split reviewer |
+| whether a patch fits in 12 propositions and 8 review cards | the program |
+
+The producer only proposes. What becomes of an accepted card:
+
+| Level | Against the vault (chunk reviewer) | Against the source (merge check) |
+|---|---|---|
+| `same` | not written; listed under `duplicates` | not written; its links go to the first card in `with` |
+| `extends` | goes into the existing card ([below](#a-card-that-extends-an-existing-card)) | what it adds goes into the card in `with` |
+| `distinct` | goes on to the merge check | written, with links |
+
+**The decision record.** Each value is appended to the job's decision record (`decision_record` in the job result), with the role, slot and run that gave it. Only the final judge gives a value again, and only for a reason that the job shows: a repair round, a refile under another topic, or a dispute. Any other second value is an error. The write step reads a card's place, relations and outcome only from this record, and `outcomes` in the job result gives the outcome of each accepted card. Before, the same repeat was said in five ways and could end differently by step, and a later step could replace an earlier step's value without a trace.
+
+## A card that extends an existing card
+
+A card that the reviewer finds `extends` an existing card is not written as a new card. What it adds goes into the existing card, as one patch per existing card that the merge check composes:
+
+- new propositions get the next numbers;
+- a fuller wording can replace one proposition, by its number;
+- new review cards go after the old ones; old review cards never change, so their review history stays;
+- the source passage is added to `sources`, with the numbers of the propositions it backs;
+- the relations of the new card move to the existing card.
+
+Every other byte of the existing card stays. The program refuses a patch that would change anything else.
+
+Example: the vault has the card "Lantern queue" with P1 to P4 and three review cards. A new source has the card "Lantern queue order": lanterns leave the queue in the order they were lit, with an example. The reviewer judges it `extends` "Lantern queue". The merge check composes the patch: the example becomes P5, and one new review card asks for the order. "Lantern queue order" is not written, and links to it point to "Lantern queue".
+
+**Too long: the split slot.** When the patch would leave the existing card with more than 12 propositions or more than 8 review cards, the existing card does not change. Each new card that extends it goes to a split slot of its own (`sp01`, `sp02` ...), with only what that card adds: the propositions, review cards, replacements and `already` rows of the patch that come from it. There the producer rewrites it as a narrower card that holds only what the existing card lacks (how it behaves in one case, or one complete example), with a `part_of` or `example_of` relation to the existing card. A card whose propositions the existing card already says, every one of them (`already`), gets no slot: it is not written, and links to it go to the existing card. The program asks again for a split card that has a proposition with the same text as one of the existing card's. When two split cards of the same existing card say the same point, the later slot's card is asked again. Nothing is cut. A split reviewer in another run checks that the card is faithful, readable on its own and one unit. For each proposition of the card it also names, in `matches`, the proposition of the existing card that says the same thing in any words, or `null`. When it accepts a card with a match, the program sends the card back to be written again without that proposition. A split card that is sent back is rewritten in a repair round (`sp01.r1` ...) while `max_repair_rounds` lasts; then it stays pending. The same happens when, inside one source, a card that others merge into would pass the limit: the card that extends it goes to a split slot, and the card it extends stays as it is.
+
+**Written next to the card instead.** The new card is written next to its existing card, with `status: needs-review` and `review_reason: [possible_repeat]`, when:
+
+- the existing card is not in sb's form (its propositions are not numbered `- P1.`, `- P2.` ..., or a line of its review cards has no `::`), or it is gone;
+- its patch still failed the program's checks in the merge check's last answer ([below](#the-merge-check));
+- `[ingest] merge_into_existing` is `false`.
+
+The job result lists such a card under `needs_review`, and `not_merged` says why.
+
+A patch changes the text of the existing card. So its open conflicts are recorded again with the new text: a merge does not settle a disagreement.
+
+Why: before, such a card was written next to the existing card as needs-review, and you merged the two by hand. In a test of 72 accepted cards, the new rule put 40 into their existing cards, split 11, and left none for review; the earlier rule left 53 for review. In a later test, each split slot was given the whole patch: two slots wrote the same narrower card, and what two other cards added was lost. That is why a slot now gets only its own card's additions. On a copy of a large vault, 96.8% of the cards (8,456 of 8,738) were in sb's form and could take a patch.
+
+## The merge check
+
+Each chunk is produced and reviewed on its own. So two chunks can each write a card on the same point, cards of different chunks that belong together are not linked, and two chunks can each propose a new topic for the same subject. Once every chunk has settled, and before the diagram step, one more reviewer hand-off (`chunk: xc01`, `step: source_check`) judges them together. It runs when the chunk reviewers found `distinct` cards in two or more chunks, or when a card waits for its patch.
+
+It reads:
+
+- the decision set: each card a chunk reviewer found `distinct`, sorted by domain, pillar and topic, with its relations, the cards of the source that link it, and its review notes as `[kind] text`;
+- the patch set: each existing card that cards of the source extend, at `full`, with the cards that extend it;
+- the new topics of the source, with the number of cards filed under each;
+- the candidates of each card, only to add links: each card lists them by id, closest first, and one table shows each existing card once, within `candidates_chars`;
+- the outline of the source, when the context note is on.
+
+It does not read the chunk text: the chunk reviewers checked the content. The frozen packet reports its size under `packing`.
+
+**The decision set.** Each card gets its level against the other cards of the source:
+
+- `extends`, with `with` naming one card of the source: what it adds is copied word for word into `carry` (`{"propositions": [...], "flashcards": [{"q": ..., "a": ...}]}`) and added to that card, with its source passage. `replace` (`[{"proposition": "P2", "by": "<this card's proposition, word for word>"}]`) puts a fuller proposition in place of one of that card's. The card is not written. Links to it, in relations and in card text (`[[Title]]`, also with `#heading` or `|alias`), go to the card in `with`, and its own links move there, unless that card already links the target or the move would make a link to itself.
+- `same`: nothing is carried. The card is not written, and its links go to the first card in `with`.
+- `distinct`: the card is written. Its `links` can add relations it should have and does not have yet: to other cards of the source (by slug) or to its candidates (by id).
+
+**The patch set.** For each existing card the merge check composes one patch (`{"target", "propositions", "flashcards", "replace"}`), every item copied word for word from the cards that extend it. When a card has nothing to add, or what it would add answers another question, the merge check lists it in `disputes` with a reason. That card goes back to its chunk reviewer, who judges it again (slot `xr<n>-<slug>`, step `dispute`). Then the merge check runs again as a new round (`xc01.r1` ...), which replaces the whole round before. A card still disputed when `max_repair_rounds` are used up stays pending.
+
+**What the program checks in the answer:**
+
+- **Every proposition is accounted for.** Each proposition of an `extends` card, and of the cards that extend an existing card, is carried, used in `replace`, or named in `already` together with the proposition that says it already (`{"text": "<word for word>", "as": "P3"}`).
+- **No point said twice.** In a patch, and in a carry into a card of the source, each carried proposition and question, and each replacement, is compared with the card it goes into and with the other items carried with it. In a patch, an item with the very same words as an item of the existing card (spaces aside) always goes back: name that item in `already`. An item that only looks the same ([What counts as the same text](#what-counts-as-the-same-text)), or a close wording, goes back too, unless the answer lists the pair in `differs` (`{"text": ..., "from": ..., "reason": ...}`) with why it is another point. `from` names a proposition (`P3`) or review card (`Q2`) of the card, or another item of the same patch. The message names both items. The program never leaves an item out because it looks the same: it asks again. It leaves out by itself only an item with the very same words, spaces aside, that a carry into a card of the source repeats, or that is carried twice.
+- **Judged by the question, never by size.** The merge check must not cut a patch to fit the limit. Past 12 propositions or 8 review cards, the program sends the card to a split slot.
+- **Links:** a type open to both domains, one relation per pair, no link to a card that is not written. A card with no relation at all (`isolated: true`) must get a link, be linked by another card, or say in `alone` why it stands alone.
+- **New topics:** each is `distinct`, or `same` with another new topic's id. In the second case its cards are filed under that topic (its domain, pillar and topic), and the topic is not added. When the job has a placement (`--domain`), the topic at the placement is the one kept.
+
+An answer that fails these checks goes back to the merge check, up to `max_invalid_retries` times. The job result lists every answer that was sent back under `source_check_refusals` (slot, run and message).
+
+The last answer the merge check may give is kept patch by patch. When it fails the checks only in some patches, the patches that pass go into their existing cards. A held card takes nothing: the cards that extend it are written next to it as needs-review, and `patches_held` in the job result names each held card, the cards that extend it and the problems found. When the last answer also fails outside the patches, it is refused as a whole. In API mode the check is then skipped by itself. In host mode, run `sb job skip-source-check <job> --reason "<why>"` when the check keeps failing. It works only after `max_invalid_retries` + 1 rejected answers or given-up runs (3 by default), and below that it says how many there are so far. It abandons the open run and records the skip. The cards are then written as the chunk reviews left them, without merging or linking across chunks, and each card of the patch set is written next to its existing card as needs-review.
+
+Why these checks: in a test, after a patch 14 of 41 synthetic existing cards and 7 of 8 replayed ones said a point twice; before the patch rule, 3 of 20 merges did. In another test with patches past the limit, the merge check cut 8 of 20 patches to exactly the limit, and 5 of them lost a proposition. In a third, one review card of one patch was close to a review card of its existing card: the whole check was skipped, and all seven cards that extended four existing cards were written next to them. Now only the card whose patch fails is held.
+
+**In a retry**, the cards that earlier jobs of the source wrote are candidates of the chunk reviewer (`via: written`), and the reviewer judges each retry card against them on the same scale. A retry card that holds nothing new is `same` as a written card and is not written. One that adds to a written card `extends` it and goes into it. The merge check does not judge written cards.
+
+Known limit: the program finds the same text and close wordings, but not every point restated in other words. For a split card, the split reviewer's `matches` is there for this: in a test, 1 of 23 split cards restated propositions of its existing card in other words (2 more came from slots that were given the whole patch, fixed since). For a patch, the merge check compares item by item, and you may still find a restatement when you review the card.
+
+## The context note
+
+Chunks are cut without overlap, and each is turned into cards on its own. So a chunk that starts with "the three kinds above", or under a heading two levels up, would be read without what it refers to. Overlapping the text would make one passage the business of two chunks, and the same card could be written twice. So each chunk gets a note, `context_note`, that the program takes from the structure of the source. Within `[ingest] context_note_chars` characters (2,000), it holds, in this order:
+
+1. the headings the chunk starts under (at most 200 characters);
+2. the last one or two paragraphs of the chunk before (at most 600 characters, whole paragraphs, else cut at the start of a sentence);
+3. the outline of the source, three levels deep, with the chunk's section marked (the rest of the budget; past that, only the lines around the mark).
+
+The producer, the chunk reviewer and the split slot get the note, marked "only for understanding: not quotable, covers nothing". Quotes are still checked against the chunk alone, so a quote taken from the note is refused. The merge check gets the outline once. A source of one chunk gets no note.
+
+`[ingest] context_note` sets what the note holds:
+
+| Value | The note |
+|---|---|
+| `off` | no note |
+| `program` (default) | the program's note above; no model call |
+| `summary` | also, for each chunk after the first, one cheap producer call (slot `nt-<chunk>`): what came before and what the chunk's references point at, at most 300 characters |
+| `concepts` | also one producer call for the whole source (slot `nt-concepts`): its concepts with the chunks that explain them, at most 600 characters in the note |
+
+A model note that keeps failing the checks is given up, and the chunk keeps the program's note. In host mode these calls are handed out before the chunks that wait for them.
+
+Why `program`: in a test, no card at the start of a chunk was unreadable in any arm (0 of 171), so the test could not show that one arm is better. The program's note did not add repeats across chunk boundaries (8 pairs, against 10 with no note). The model summaries cost a call per chunk and showed no gain.
+
+## Review rules
+
+**Two budgets.** `[review] max_repair_rounds` (2) counts content repair rounds: a card sent back with a reason. `[review] max_invalid_retries` (2) counts answers that failed the program's checks and were asked for again, per slot. The two are counted apart, for chunks, chunk reviews, split cards, the merge check and model notes. Before, one budget counted both, so a malformed answer cost a chunk its only repair round. A review that keeps failing the checks leaves its cards pending.
+
+**Mechanical fixes** (`[review] amend`, on by default). With an accept, the reviewer can fix in `amend` a problem that needs no new knowledge text, instead of sending the card back:
+
+- `add_relation`, `retype_relation`, `remove_relation`: a missing relation, a relation of the wrong type or direction, a wrong relation;
+- `refile`: file the card under a topic the taxonomy has;
+- `drop_flashcard`: drop a review card the chunk does not support (two or more must stay).
+
+The program makes the fixes and checks only that the result is legal: types open both ways, a curated topic, two review cards left, an `extends` card that still links its existing card. A fix that is not legal turns the accept into an ordinary revise. The job result lists every fix under `amended`, with the value before and after, and the merge check sees them.
+
+**Focused review of a repair round** (`[review] focused_review`, on by default). The reviewer of a repair round gets the earlier findings (`previous_findings`) and says for each one whether it is fixed. It sends a card back only when a finding is not fixed, or for a blocking problem (below). Any other problem goes to a `minor` note.
+
+**Notes with a kind.** Each note a reviewer writes is `{"category": "<kind>", "text": "<what and where>"}`, with one of five kinds:
+
+| Kind | Meaning |
+|---|---|
+| `fact` | a statement is wrong: the chunk (for an article, the cited cards) contradicts it or does not say it |
+| `unreadable` | it cannot be understood without the source: it points at the source ("the example above") or leaves out what it relies on |
+| `quote` | a source quote is not in the chunk word for word, or a card is cited for what it does not say |
+| `not_a_unit` | two separate ideas in one card, or a fragment that does not stand on its own |
+| `minor` | wording, style, or something that could be better but is not wrong |
+
+Each proposition must be right by itself. A proposition that, read on its own, says more than the text it comes from (it leaves out a condition, a limit or a case the text gives), says it wrongly, or cannot be understood is `fact` (`unreadable` when it cannot be understood), and the card needs a revise. That the card's essence or a review card still gives the condition is no reason to call the note `minor`. In a replay of the injected-error test, reviewers had noted such a missing condition as `minor` for that reason, and a judge found that 8 of 10 of those cards should have gone back.
+
+The first four kinds are blocking. When a reviewer accepts a card and writes a note of a blocking kind, the program turns the accept into a revise, with the note as its reason. That revise uses a content repair round like any other. When the rounds are used up, the card is pending with that reason. Only `minor` notes leave the decision as it is. The split reviewer and the reviewers of `sb export` follow the same rule. A note in the old form (a plain string), or with another kind, is refused and asked for again.
+
+The job result has two lists, and `sb job show <job>` shows both:
+
+- `notes_turned`: each accept the program turned into a revise: the chunk, the slot, the round (0 for the first review, n for the n-th repair round), the card, the kind and the note;
+- `review_notes`: every note, with its kind.
+
+Why: in two tests, reviewers wrote a real problem in a note and still accepted the card: 3 of 6 real problems in one test, 36 injected errors in the other. The wrong cards were written. Now the program acts on the note, without another model call.
+
+The defaults come from a test of 1, 2 and 3 repair rounds, with focused review and mechanical fixes on and off. Every chunk that reached review settled within one repair round. With both switches on, 6 of 225 written cards (2.7%) had a real problem, and 1 of 7 mechanical fixes was wrong (a relation of the wrong type).
+
+## Answers of the wrong shape
+
+Every model answer, of every role, is first checked against the JSON schema it was asked for. A value of the wrong JSON type (an object for a name, a string for a link, a null where the schema allows none) is refused by name, for example `cards[0].links[0] must be an object, not str`. The answer is then asked for again, within `max_invalid_retries`. An error inside a check is also turned into a refusal that names it. So a wrong answer never stops `sb ingest`; before, some stopped the whole run with a `TypeError` or an `AttributeError` and left it open.
+
+Ingest answers are parsed as strict JSON. An answer that is not JSON is invalid and is asked for again. Only `sb export` reads raw TeX backslashes in an answer ([export.md](export.md)).
+
+## What counts as the same text
+
+Titles, new topic names, carried items and split cards are compared with one test. Two texts are the same when they differ only in case, character width, spaces and a closed table of marks: the sentence marks `, . ; : ? !` (with their CJK forms, and the CJK enumeration comma), quotes, the ellipsis and the em dash. Every other character counts: brackets, `# % & * @ \ _ ^ ~ + = < > | / -`, digits and letters. So "If a < b" and "If a > b" are different texts, and so are "5%" and "5", "C#" and "C", "x_1" and "x1".
+
+Two exceptions keep a mark of the table: one between two digits (3.5, 3:2), and an English `!` or `'` right after a digit or a one-letter name (n!, f'). A formula (`$...$`, `$$...$$`) or inline code is compared as written, with its runs of spaces made one.
+
+A finding of this test only sends an answer back, or warns; it never makes the program drop text. The test sets some characters aside, and some of them change what a text says: "1 KB" and "1 Kb", or "10³" and "103", can come out the same. So the program leaves out by itself only two items with the very same words, spaces aside, and asks again for everything else. Calling two texts the same could lose a point; calling them different at most keeps a repeat. So when in doubt, the test says "different".
 
 ## What is written
 
 In one transaction:
 
-- each accepted card, as `10_Knowledge/<domain>/<title>.md`, rendered by code from the reviewed fields. A card the reviewer marked `needs_review`, or that a retry's source check found repeating a written card, gets `status: needs-review` and is listed in the result as `needs_review`; the review queue does not offer it as a new card until that status changes. `sb status` counts these cards (`needs_review`), `sb status --needs-review` lists them, and `HOME.md` names the count under "What to do now";
+- each accepted card, as `10_Knowledge/<domain>/<title>.md`, rendered by code from the reviewed fields. A card gets `status: needs-review` with its reasons in `review_reason`: `source_unclear` when the producer marked the source unclear and the reviewer accepted it, `possible_repeat` when it extends an existing card that could not take it. Such cards are listed in the result as `needs_review`; the review queue does not offer them as new cards until that status changes. `sb status` counts these cards (`needs_review`), `sb status --needs-review` lists them, and `HOME.md` names the count under "What to do now";
+- the patches of existing cards that new cards extend: propositions, review cards, a source and relations, and nothing else in the card;
 - inverse relations on existing cards, in the front matter and in the related section (the rest of the card stays as it is);
 - accepted new topics in the taxonomy file;
 - a copy of the source in `40_Sources/<first 16 hex of sha256>/<file name>`;
@@ -90,14 +298,65 @@ In one transaction:
 - the MOC pages of the affected domains and the entry page `HOME.md`;
 - with `after_ingest = "move"`, the removal of the inbox file (its bytes are in the source copy).
 
-A relation to a card the reviewer judged a duplicate goes to the existing card it repeats. A relation that cannot be written is listed in the result under `skipped_relations`, with one of two reasons:
+A relation to a card the reviewer judged `same` goes to the existing card it repeats. A relation to a card that went into an existing card goes to that card, and a relation to a card rewritten in a split slot goes to the split card. A relation that cannot be written is listed in the result under `skipped_relations`, with one of two reasons:
 
 - `target card was not written`: the target card is still pending. The relation is carried to retry children, and a child that writes the target adds the relation, with its back link on the earlier card.
 - `target card was dropped in review; add the link by hand if it still matters`: the relation is not carried.
 
-In a retry child, each carried relation gets exactly one outcome. A written one is listed under `restored_relations`, with `target_slug`. Such a row has `linked_as` when the new card already links that card with another type, and `redirected_from` when the target was judged a duplicate of an existing card (the relation then goes to that card and is written on both existing cards) or was merged into another card by the retry's source check. Every other carried relation stays in `skipped_relations` with one of the two reasons above.
+In a retry child, each carried relation gets exactly one outcome. A written one is listed under `restored_relations`, with `target_slug`. Such a row has `linked_as` when the new card already links that card with another type, and `redirected_from` when the target was judged the same as an existing card (the relation then goes to that card and is written on both existing cards) or was merged into another card by the retry's merge check. Every other carried relation stays in `skipped_relations` with one of the two reasons above.
 
-Nothing is merged or corrected automatically: you decide which card is right and fix the other. The job result lists the conflicts as `conflicts`, `sb status` lists every open one under `conflicts`, and `HOME.md` shows their count under "What to do now". A conflict stays open until the text of the existing card changes; back links added to that card do not count. Each conflict counts once per source, card and existing card: when a retry records a conflict its parent recorded, the retry's record is the one shown.
+Conflicts are never settled automatically: you decide which card is right and fix the other. The job result lists the conflicts as `conflicts`, `sb status` lists every open one under `conflicts`, and `HOME.md` shows their count under "What to do now". A conflict stays open until the text of the existing card changes; back links added to that card do not count, and a patch records the card's open conflicts again. Each conflict counts once per source, card and existing card: when a retry records a conflict its parent recorded, the retry's record is the one shown.
+
+### What the job result lists
+
+Besides `produced`, `pending`, `needs_taxonomy`, `out_of_scope`, `new_topics`, `conflicts` and the relation lists above, the result of an ingest job has:
+
+| Field | Holds |
+|---|---|
+| `outcomes` | the outcome of each accepted card: `write`, `patch`, `drop`, `merge_carry` or `merge`; a card written next to its existing card has `write`, one its existing card already covers has `drop`, as `patch_set` says |
+| `decision_record` | every value of the job, with the role, slot and run that gave it |
+| `duplicates` | the cards and passages that existing cards hold already, with `with` and `by` (`reviewer` or `producer`) |
+| `merged_into_existing` | each existing card that took a patch: the cards that went into it, the new proposition numbers, the replaced ones, the number of new review cards, the moved relations and the merge check's `already` rows |
+| `split` | each split card written: its id, the card it came from, the existing card it narrows and its slot |
+| `split_restated` | each split card the program sent back because the split reviewer matched one of its propositions to the existing card: the slot, the round and the `matches` |
+| `patch_set` | each card that extends an existing card, and what became of it: `patched`, `split`, `covered` (the existing card says all of it), `written` (next to the existing card) or `pending` |
+| `merge_set` | each card of the source that was too large to merge into another card of the source: `split` or `pending` |
+| `source_check` | what the merge check did inside the source: `merged` (with `carried` counts), `added_links`, `alone`, `refiled_topics`, `moved_relations` and `rewritten_links`, or `status: skipped` with the reason |
+| `source_check_refusals` | every merge-check answer the program sent back, with the message |
+| `needs_review` | the cards written as needs-review next to an existing card, with `with`, the reason and `not_merged` |
+| `patches_held` | each existing card whose patch failed the checks in the merge check's last answer: the cards that extend it and the problems |
+| `amended` | every mechanical fix, before and after |
+| `review_notes`, `notes_turned` | every review note with its kind; the accepts the program turned into revises ([Review rules](#review-rules)) |
+| `refused_topics` | each new topic a reviewer refused, with the reason and the number of cards filed under it |
+
+## What waits for you
+
+`sb status --owner-items` lists in one place everything that waits for you, each item with its `owner_reason`:
+
+| `owner_reason` | Item |
+|---|---|
+| `source_unclear` | a needs-review card whose source was unclear (also a card marked needs-review before reasons were recorded) |
+| `possible_repeat` | a needs-review card written next to an existing card it extends, with why that card did not take it in `detail` |
+| `conflict` | an open conflict with an existing card |
+| `pending` | a pending item of the latest job of a partly written source; a paragraph of the latest export of an article that did not pass review (`kind: export_paragraph`, [export.md](export.md)) |
+| `needs_taxonomy` | a passage without a place in the taxonomy (`kind: passage`), or a new topic a reviewer refused, with its reason and card count (`kind: refused_topic`) |
+
+The list is made each time from the vault and the jobs; nothing new is stored. `sb status` gives the counts under `owner_items`.
+
+`sb status` also reports topic sizes under `topics`: the topics past one map page (25 cards), each with the `sb curate --domain <slug>` command for its domain; the number of curated topics that no card uses; and the number of cards filed under a topic their taxonomy does not list. For each topic past 25 cards, `sb curate` gets a proposal of how its cards group by the relations among them (`split_proposals`). It is only a hint: `sb curate` still decides, and no card changes. A group of fewer than 5 cards joins the group it links to most, or is listed as scattered; a group still past 25 cards says it needs a second round. The proposal needs the `curate` extra (`networkx`). On the 10 largest topics of a large vault, an independent reviewer found the proposed groups reasonable for 9.
+
+## Settings a job keeps
+
+When a job is frozen, it keeps the `[review]` rules (with `--max-rounds`), the `[ingest]` settings, the vault layout and the card language. Its steps read them from the job, not from the config file. So a change to the config file, or another `--max-rounds`, does not change a job halfway. Only how to run is read live: the endpoints and keys, the config file that a host hand-off names, git commits and the state folder.
+
+A retry child keeps the `[ingest]` settings of its parent and takes the current `[review]` rules. A job frozen before a setting existed runs as that version did: the earlier counts of candidate cards (`candidates_k = "auto"`), no named cards in the review packet, search hits at `full`, no shelves, no merge into existing cards and no context note.
+
+**Jobs of the earlier version** (`method_version: ingest/3` in the job's input) judged repeats on another scale, so this version does not continue them:
+
+- A partial job: run `sb ingest --retry <job>`. The child is a job of this version. It reads its parent's records, runs to the end, and does not write the parent's cards again.
+- A job that was still running: `sb job advance` refuses it and says the way out. Reset it with `sb job reset <job> --reason "<why>"`, then run `sb ingest <inbox path>` again. A retry child of the earlier version: reset it, then run `sb ingest --retry <parent>`.
+
+A finished job of the earlier version is read with the rules it ran under (one repair round, whole review, no mechanical fixes), so `sb job show` shows what it did.
 
 ## Jobs and recovery
 
@@ -110,19 +369,19 @@ sb job advance <job_id> --executor host
 sb recover <job_id> --rollback      # restore every file the job wrote, byte for byte
 sb recover <job_id> --resume        # finish a write that was interrupted
 sb job reset <job_id> --reason "<why>"   # set aside a stuck job that never wrote
-sb job skip-source-check <job_id> --reason "<why>"   # write without the source check after it keeps failing
+sb job skip-source-check <job_id> --reason "<why>"   # write without the merge check after it keeps failing
 sb job prune --days 30              # preview old rollback journals; --apply deletes them
 ```
 
 Before writing, the transaction compares each file with the bytes it planned against. If another program changed a file in between, the job stops as `needs_attention`, and the next `sb job advance` plans the write again from the same reviewed cards. Several sources can be in progress at the same time; writes to one vault happen one at a time under a lock.
 
-A rolled-back source can be ingested again.
+A rolled-back source can be ingested again. A rollback also restores the existing cards that took a patch.
 
 `sb recover <job> --rollback` needs the job's rollback journal (`transaction.json` in the job's state folder), and the tool never deletes it on its own. `sb job prune` previews, with sizes, the journals that may go: finished writes older than `--days` (default 30) that are not the newest write of their source or operation. A source's parent and retry jobs count as one source; other jobs are grouped by operation, such as refresh or daily. `sb job prune --apply` deletes those journals and their write plans; such a write can no longer be undone, and its cards stay. `sb status` shows the state folder under `state_dir`: its size, the size of each top-level folder (`parts`, such as `jobs` and `cache`) and what `sb job prune` would free now (`prunable_mb`). The cache holds the parse cache and the search index; it grows with the vault and is rebuilt if deleted.
 
 `sb ingest --retry <job>` runs the pending cards of a partial job as a child job, `<job>-retry1` and so on, with its own transaction. Roll back a retry child before its parent: while the child's writes are in the vault, `sb recover <parent> --rollback` refuses and names the child. A child that was rolled back or reset does not block a new `sb ingest --retry <parent>`; the new child takes its id.
 
-A retry child sees what earlier jobs of the source settled without a card (duplicates of existing cards, passages out of scope) and does not write those again. Its result has `retry_progress`: `open_before`, `open_after`, `cards_written` and `progress`. When the child wrote no card and left as many items open as it was given (`progress: false`), the result has a `message` instead of a retry `hint`: another retry would likely repeat it. Read the reasons in `pending` (`sb job show <job>`), and retry only after changing what blocked them, such as the taxonomy for a new topic; or leave them open and close the source with `sb inbox skip <file> --reason "..."`. `sb inbox list` and `sb ingest <source>` say the same. `sb ingest --retry` on a job that was already retried does not start another child: it returns a short summary whose `message` names the newest job of the chain, with a `hint` to retry that job when it is partial and made progress.
+A retry child sees what earlier jobs of the source settled without a card (passages that existing cards hold, passages out of scope) and does not write those again. Its result has `retry_progress`: `open_before`, `open_after`, `cards_written` and `progress`. When the child wrote no card and left as many items open as it was given (`progress: false`), the result has a `message` instead of a retry `hint`: another retry would likely repeat it. Read the reasons in `pending` (`sb job show <job>`), and retry only after changing what blocked them, such as the taxonomy for a new topic; or leave them open and close the source with `sb inbox skip <file> --reason "..."`. `sb inbox list` and `sb ingest <source>` say the same. `sb ingest --retry` on a job that was already retried does not start another child: it returns a short summary whose `message` names the newest job of the chain, with a `hint` to retry that job when it is partial and made progress.
 
 ## Other commands for an existing vault
 
@@ -133,10 +392,11 @@ These commands use the same produce, review and gate pattern on cards that are a
 | `sb refresh` | previews the MOC pages that would change; `--apply` writes them. In a vault with MOC pages from elsewhere, the first `--apply` also adds the Breadcrumbs field `BC-list-note-field: down` to each page ([details](new-vault.md#4-check-and-generate-the-maps)) |
 | `sb classify --domain <slug>` | proposes pillar and topic for cards that have none (`--repair-invalid` for cards whose classification is no longer legal) |
 | `sb backlog` | runs classification over a whole domain or vault in batches |
-| `sb curate --domain <slug>` | proposes changes to the pillars and topics of existing domains |
+| `sb curate --domain <slug>` | proposes changes to the pillars and topics of existing domains; for a topic past 25 cards it gets a proposal of how to split it ([above](#what-waits-for-you)) |
 | `sb relocate --source-job <job>` | moves cards to another domain when a classification review suggested it |
 | `sb domcreate --domain <slug> ...` | proposes a new domain from cards that already exist |
 | `sb resume --job <job>` | continues one of these jobs |
+| `sb export --domain <slug>` | writes one map's cards up as an article ([export.md](export.md)) |
 | `sb docs --apply` | regenerates the entry page `HOME.md` (and the generated blocks of `[layout] entry_docs`) |
 | `sb today --apply` | writes the review page of the current review day under `50_Reviews/`: the due and new cards of the review registry, the same queue that `sb review queue` gives during that day. A review day starts at 04:00, so a page made at 01:00 is still for the day before. It does not change `HOME.md`. Needs the `review` extra |
 | `sb daily --apply` | does both, and `HOME.md` links the new page; this is the command HOME names when the page is missing. Without the `review` extra it writes `HOME.md` only and reports `review_extra_missing` |

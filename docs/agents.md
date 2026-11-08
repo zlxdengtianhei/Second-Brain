@@ -2,7 +2,7 @@
 
 [中文](agents.zh-CN.md)
 
-The model work of an ingest (producing cards, reviewing them, proposing diagrams) can be done by sub-agents of a coding-agent harness, or by the tool calling API endpoints. Everything else is done by `sb`.
+The model work of an ingest (producing cards, reviewing them, the merge check, split cards, proposing diagrams) and of `sb export` (writing and reviewing an article) can be done by sub-agents of a coding-agent harness, or by the tool calling API endpoints. Everything else is done by `sb`.
 
 ## Agent Skill
 
@@ -15,7 +15,7 @@ The model work of an ingest (producing cards, reviewing them, proposing diagrams
 
 The agent coordinates. For each hand-off it starts a new sub-agent with a short fixed text that points to the task file, the answer file and the submit command; it does not add its own view of the material. `sb` checks each answer when it is submitted and returns errors to the sub-agent. The agent then runs `sb job advance <job_id> --executor host` until the job is `applied` or `partial`, and reports new cards, pending cards with the reviewer's reasons, duplicates and material that needs a new pillar or domain.
 
-When the harness lets you choose models, give reviewers a model from a different family than the producer. A same-family review is accepted in host mode and recorded as `same_family: true` in the job. In Claude Code all sub-agents are Claude models, so every review there is same-family.
+When the harness lets you choose models, give reviewers a model from a different family than the producer. A same-family review is accepted in host mode and recorded as `same_family: true` in the job. In Claude Code all sub-agents are Claude models, so every review there is same-family. When a Flash-class model reviews, set `[ingest] review_words_view = "full"` ([configuration.md](configuration.md#ingest)).
 
 The [example vault](../examples/vault/) was built this way in Claude Code: 7 sources, 34 sub-agents (producers on one Claude model, reviewers on another), 42 cards. The [Chinese example vault](../examples/vault-zh/) was built the same way from Chinese notes: 7 sources, 31 sub-agents, 52 cards. Other harnesses (Codex, Pi and others) should work the same way, but they have not been tested.
 
@@ -34,6 +34,8 @@ sb job advance <job_id> --executor host   # next hand-offs, or the final state
 sb job show <job_id>                      # state, pending items with reasons, run records
 sb job packet <job_id> --role producer    # the open hand-off again
 sb job abandon <job_id> --run-id <run_id> --reason "sub-agent crashed"
+sb export --domain <slug> --executor host   # the same loop for an article
+sb export --job <job_id> --executor host    # next hand-offs; the article files once all steps are done
 ```
 
 A run id accepts one answer. A second, different answer for the same run is refused.
@@ -48,7 +50,9 @@ The tool calls the endpoints itself. Producer and reviewer must be models of dif
 4. Check: `sb doctor` shows the configuration and whether each key is available; `sb doctor --live` sends one small request to each endpoint.
 5. Run `sb ingest <file> --executor api`, or `sb ingest --all` with `[executor] default = "api"`.
 
-Rate limits and server errors are retried with back-off. A chunk that is too large for the model's context is split in two and retried. An answer that is cut off or not JSON counts as invalid and uses the chunk's repair round.
+Rate limits and server errors are retried with back-off. A chunk that is too large for the model's context is split in two and retried. An answer that is cut off, is not JSON, or has a value of the wrong type counts as invalid: it is asked for again, up to `[review] max_invalid_retries` times, and does not use a repair round.
+
+`sb export` uses the models in `[export.writer]` and `[export.reviewer]` when they are set, else the producer and the reviewer ([export.md](export.md#configuration)).
 
 ## MCP server
 

@@ -12,6 +12,7 @@ Turn notes in an Obsidian inbox into checked, linked knowledge cards, and review
 - **One recoverable write per source.** Cards, a copy of the source, the registries and the maps are written in one transaction. `sb recover <job> --rollback` undoes it byte for byte.
 - **Taxonomy and maps of content.** Every card has a domain, a pillar and a topic. Code regenerates the map pages (MOCs) and the home page.
 - **Diagrams that code draws.** The model only describes a diagram as data that cites the card. Code checks it and writes the Mermaid, or the card gets no diagram.
+- **Articles from your maps.** `sb export` writes the cards of one map up as an article. A second model checks each paragraph against the cards it cites, and code checks citations, numbers and formulas.
 - **Daily review.** An append-only review log with FSRS scheduling, shared by the `sb review` commands and the SecondBrain Review plugin for Obsidian: flip cards, answer questions, get explanations.
 - **Runs where you work.** Use the Agent Skill in a coding-agent harness with sub-agents, the MCP server, or the CLI with any OpenAI-compatible or Anthropic API endpoint.
 
@@ -77,25 +78,26 @@ flowchart TD
     freeze --> produce["Producer drafts cards"]
     produce --> check{"Code checks the answer:<br/>verbatim quotes, taxonomy,<br/>relations, coverage"}
     check -- "errors" --> produce
-    check -- "valid" --> review["Independent reviewer:<br/>accept, revise or duplicate"]
-    review -- "revise: one repair round" --> produce
+    check -- "valid" --> review["Independent reviewer:<br/>accept or revise;<br/>same, extends or distinct"]
+    review -- "revise: up to two repair rounds" --> produce
     review --> gate{"Gate: accepted by<br/>another run?"}
     gate -- "still rejected" --> pending["Pending, with the reviewer's reasons"]
-    gate -- "accepted" --> diagram["Card diagrams: the model describes,<br/>code checks and draws"]
+    gate -- "accepted" --> merge["Merge check: repeats inside the source;<br/>new points go into existing cards"]
+    merge --> diagram["Card diagrams: the model describes,<br/>code checks and draws"]
     diagram --> write["One recoverable transaction:<br/>cards, source copy, registries,<br/>taxonomy, maps and HOME"]
     write --> daily["Daily review: event log + FSRS"]
 ```
 
-1. **Freeze.** `sb ingest` stores the exact bytes of the source, splits it into chunks, and finds candidate domains and the closest existing cards for each chunk.
+1. **Freeze.** `sb ingest` stores the exact bytes of the source, splits it into chunks, and finds candidate domains and the closest existing cards for each chunk. When a source has several chunks, each chunk also gets a note on where it sits in the source.
 2. **Produce.** A producer model gets the chunk, the taxonomy and the closest cards. It answers with JSON: cards (essence, propositions, questions and answers, relations, verbatim quotes) and a coverage table that accounts for every part of the chunk.
 3. **Check.** Code rejects the answer if a quote is not in the source, a domain, pillar or topic does not exist, a relation points nowhere, a title repeats an existing card, or part of the chunk is not accounted for. The producer gets the errors and corrects them.
-4. **Review.** A reviewer in a separate run sees the chunk, the cards without the producer's reasons, and the closest existing cards. It accepts, asks for a revision, or marks a duplicate, with a reason for each card. A card that mostly repeats an existing card it links is still written, marked `needs-review`. Where a new card disagrees with an existing one, the disagreement is recorded and shown by `sb status`; nothing is merged or corrected automatically.
-5. **Gate.** Only accepted cards go on. Rejected cards get one repair round; if they still fail, they stay pending with the reviewer's reasons. `sb ingest --retry <job>` tries the pending cards of a source again. When the accepted cards come from several chunks, one more reviewer checks them together: it merges cards that make the same claim, adds links between cards that belong together, and merges repeated new topics.
+4. **Review.** A reviewer in a separate run sees the chunk, the cards without the producer's reasons, every existing card the producer named (whole), and the closest existing cards. It accepts or asks for a revision, with a reason for each card. For each accepted card it also says how much it repeats the vault: `same` (not written), `extends` (what it adds goes into the existing card) or `distinct`. A note of a blocking kind on an accepted card sends the card back. Where a new card disagrees with an existing one, the disagreement is recorded and shown by `sb status`; a conflict is never settled automatically.
+5. **Gate.** Only accepted cards go on. Rejected cards get up to two repair rounds; if they still fail, they stay pending with the reviewer's reasons. `sb ingest --retry <job>` tries the pending cards of a source again. When the accepted cards come from several chunks, or a card extends an existing card, one more reviewer (the merge check) judges the cards of the source together: it merges cards of different chunks that repeat each other, adds links between cards that belong together, merges repeated new topics, and composes the patch for each existing card that a new card extends. A patch that would make a card too long becomes a narrower card of its own.
 6. **Diagram.** For accepted cards that describe a process or a structure, the model describes a diagram as data. Code checks it and generates Mermaid (see [Card diagrams](#card-diagrams)).
-7. **Write.** One transaction writes the cards, adds inverse relations to existing cards, adds approved new topics to the taxonomy, copies the source to `40_Sources/`, updates the registries, regenerates the affected maps and `HOME.md`, and removes the file from the inbox.
-8. **Review daily.** New cards appear as new in the review queue. Nothing else is needed to register them. A card marked `needs-review` waits until you set its `status` to `confirmed`; `sb status --needs-review` lists these cards.
+7. **Write.** One transaction writes the cards, adds the patches and inverse relations to existing cards, adds approved new topics to the taxonomy, copies the source to `40_Sources/`, updates the registries, regenerates the affected maps and `HOME.md`, and removes the file from the inbox.
+8. **Review daily.** New cards appear as new in the review queue. Nothing else is needed to register them. A card marked `needs-review` waits until you set its `status` to `confirmed`; `sb status --needs-review` lists these cards. `sb status --owner-items` lists everything that waits for you in one place.
 
-Details: [docs/ingest.md](docs/ingest.md).
+Details: [docs/ingest.md](docs/ingest.md). To write one map's cards up as an article: [docs/export.md](docs/export.md).
 
 ## Entry points and executors
 
@@ -191,7 +193,8 @@ Optional extras: `pip install -e ".[api]"` for the API executor, `".[mcp]"` for 
 
 ```text
 src/secondbrain/          the Python package and the `sb` command
-  pipelines/              ingest chain: chunking, routing, produce, review, write, card diagrams
+  pipelines/              ingest chain: chunking, routing, produce, review, merge check, split, write, card diagrams
+  export/                 sb export: outline, program checks, Markdown and HTML
   executors/              host hand-off, OpenAI-compatible and Anthropic API clients
   diagrams/               diagram IR, checks, Mermaid generator, batch tools
   prompts/                producer, reviewer and diagram instructions
@@ -219,6 +222,7 @@ This is version 0.1.0, built in October 2026 from the tool the author uses on a 
 - In host mode the model name is whatever the sub-agent reports. In Claude Code every sub-agent is a Claude model, so every review there is same-family.
 - The API executors are tested with recorded responses, not against live endpoints.
 - The diagram thresholds are defaults chosen from one vault and a 50-card pilot, not calibrated.
+- When the cards have formulas, `sb export` needs Node.js and the `mathjax-full` package for its formula check, or `--no-formula-check` ([docs/export.md](docs/export.md#the-formula-check)).
 - The plugin's interface is in English or Chinese and follows the vault's language by default; the card headings it reads do too, unless set in its settings. The plugin has unit tests; the manual checklist for Obsidian is in its README.
 
 ## License
