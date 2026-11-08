@@ -24,6 +24,13 @@ NOTES = {'type': ['array', 'null'], 'items': NOTE}
 
 PLACEHOLDER = '<!-- notes.definition -->'
 
+#: The rule of D-18 4: in a replay of H4 reviewers noted a condition a proposition had dropped and called it minor,
+#: as the essence or a review card still had it; 8 of the 10 should have been sent back.
+ON_ITS_OWN = ('A proposition that, read on its own, says more than the text it comes from (it leaves out a condition, a '
+              'limit or a case the text gives), says it wrongly, or cannot be understood is `fact` (`unreadable` when '
+              'it cannot be understood) and needs a revise. That the card\'s essence or a review card still gives the '
+              'condition is no reason to call it `minor`: each proposition must be right by itself.')
+
 _DEFINITION = """\
 `notes`: what you noticed beyond your decision, each as `{"category": "<kind>", "text": "<what and where, short>"}`.
 The kind says how much it matters:
@@ -32,7 +39,8 @@ The kind says how much it matters:
 - `quote`: a quotation or citation that does not hold: a source quote that is not in the chunk word for word, or a card cited for what it does not say.
 - `not_a_unit`: it is not one recallable unit: two separate ideas in one card, or a fragment that does not stand on its own.
 - `minor`: wording, style, or something that could be better but is not wrong.
-A note of the first four kinds is a reason to revise: when you accept with such a note, the program sends the item back, with the note as the reason. Write `minor` only for what is not wrong; when something is wrong, revise and give the reason."""
+{on_its_own}
+A note of the first four kinds is a reason to revise: when you accept with such a note, the program sends the item back, with the note as the reason. Write `minor` only for what is not wrong; when something is wrong, revise and give the reason.""".replace("{on_its_own}", ON_ITS_OWN)
 
 
 def definition() -> str:

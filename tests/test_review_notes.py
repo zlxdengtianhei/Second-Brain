@@ -155,3 +155,14 @@ def test_every_reviewer_prompt_that_asks_for_notes_has_the_one_definition():
     assert all(f'`{k}`' in review_notes.definition() for k in review_notes.CATEGORIES)
     assert 'minor' in prompt('review_focused.md') and review_notes.BLOCKING == ('fact', 'unreadable', 'quote',
                                                                                'not_a_unit')
+
+
+def test_the_definition_says_each_proposition_must_be_right_by_itself():
+    """D-18 4: in a replay of H4 reviewers noted the condition a proposition had dropped and called it minor, as the
+    essence or a review card still had it (8 of 10 should have gone back). The one shared definition says that such
+    a proposition is fact (or unreadable) and that the rest of the card is no reason for minor."""
+    assert review_notes.definition().count(review_notes.ON_ITS_OWN) == 1
+    for words in ('read on its own', 'is `fact`', '`unreadable`', 'no reason to call it `minor`'):
+        assert words in review_notes.ON_ITS_OWN
+    for name in ('review_cards.md', 'review_split.md', 'export_review.md', 'export_smooth_review.md'):
+        assert prompt(name).count(review_notes.ON_ITS_OWN) == 1, name
