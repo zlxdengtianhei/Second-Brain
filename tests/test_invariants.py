@@ -239,7 +239,8 @@ def test_p7_a_card_the_reviewer_finds_the_same_leaves_before_the_merge_check_wit
     [check] = seen
     judged = {c['slug'] for c in check.packet['cards']}
     assert judged == {'filler-note', 'lit-marker-cost', 'arrival-order'}  # neither C (same) nor D (extends)
-    assert done['outcomes'] == {'lantern-queue': 'patch', 'queue-order': 'drop', 'filler-note': 'write',
+    # the existing card here is not in sb format: lantern-queue is written next to it (write, as patch_set says)
+    assert done['outcomes'] == {'lantern-queue': 'write', 'queue-order': 'drop', 'filler-note': 'write',
                                 'lit-marker-cost': 'write', 'arrival-order': 'write'}
     assert [d['slug'] for d in done['duplicates'] if d['by'] == 'reviewer'] == ['queue-order']
     assert 'Arrival order in lantern queues' not in {c.title for c in read_snapshot(root).cards.values()}

@@ -77,7 +77,8 @@ def check(frozen, **patch):
 @pytest.mark.parametrize('carried, says', [
     ('每一项都按到达顺序存进灯笼队列。', 'may say again what kc_old P1 says'),          # the same point in other words
     ('灯笼队列按到达顺序保存每一项，读者可以跳到亮着的标记。', 'may say again what kc_old P1 says'),  # P1 and more
-    ('灯笼队列按到达顺序保存每一项', 'says what kc_old P1 says word for word'),          # the same words
+    ('灯笼队列按到达顺序保存每一项', 'looks the same as kc_old P1'),                      # all but a full stop
+    ('灯笼队列按到达顺序保存每一项。 ', 'says what kc_old P1 says word for word'),        # the same words
 ])
 def test_a_carried_proposition_the_card_holds_goes_back(carried, says):
     with pytest.raises(ValueError, match=says):
@@ -101,7 +102,8 @@ def test_a_replacement_that_says_another_proposition_of_the_card_again_goes_back
 @pytest.mark.parametrize('question, says', [
     ('易位时王走几格、车怎么走？', 'may ask again what kc_old Q1 asks'),     # asked again with more in it
     ('灯笼队列按什么顺序保存？', 'may ask again what kc_old Q2 asks'),       # the same question, "this" named
-    ('王车易位时，王走几格?', 'asks what kc_old Q1 asks'),                  # the same question, other punctuation
+    ('王车易位时，王走几格?', 'looks the same as kc_old Q1'),               # the same question, other punctuation
+    ('王车易位时王走几格？', 'asks what kc_old Q1 asks'),                    # the same words
 ])
 def test_a_carried_question_the_card_asks_goes_back(question, says):
     with pytest.raises(ValueError, match=says):
@@ -116,11 +118,16 @@ def test_a_near_match_that_is_another_point_stays_when_the_answer_says_why_an_ex
     assert check(frozen, **patch, differs=[{'text': question, 'from': 'Q1', 'reason': 'it asks about the rook too'}])
     with pytest.raises(ValueError, match='differs\\[0\\].from must name'):
         check(frozen, **patch, differs=[{'text': question, 'from': 'Q9', 'reason': 'r'}])
-    exact = '王车易位时，王走几格?'
+    exact = '王车易位时王走几格？'
     frozen = frozen_with('新的一点。', from_flashcards=[(exact, '答。')])
     with pytest.raises(ValueError, match='asks what kc_old Q1 asks'):
         check(frozen, propositions=['新的一点。'], flashcards=[{'q': exact, 'a': '答。'}],
               differs=[{'text': exact, 'from': 'Q1', 'reason': 'r'}])
+    # D-21: one the comparison finds the same, but not word for word, stays when differs says why
+    marks = '王车易位时，王走几格?'
+    frozen = frozen_with('新的一点。', from_flashcards=[(marks, '答。')])
+    assert check(frozen, propositions=['新的一点。'], flashcards=[{'q': marks, 'a': '答。'}],
+                 differs=[{'text': marks, 'from': 'Q1', 'reason': 'it asks about castling on the other side'}])
 
 
 @pytest.mark.parametrize('proposition, question', [

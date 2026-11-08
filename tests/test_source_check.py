@@ -627,7 +627,7 @@ def test_a_carried_question_the_kept_card_already_asks_word_for_word_is_skipped(
                 'propositions': [f'{slug} one'], 'flashcards': flashcards, 'source_quotes': [f'{slug} quote'],
                 'relations': []}
     asked = [{'q': 'What does x hold?', 'a': 'one'}]
-    again = [{'q': 'What does x hold ?', 'a': 'the number one'}, {'q': 'Why is y kept?', 'a': 'y'}]
+    again = [{'q': 'What  does x hold?', 'a': 'the number one'}, {'q': 'Why is y kept?', 'a': 'y'}]  # spaces apart
     settled = [{'chunk': 'c01', 'accepted': {'a': card('a', asked)}, 'topics': {}},
                {'chunk': 'c02', 'accepted': {'b': card('b', again)}, 'topics': {}}]
     frozen = source_check.frozen_input(settled, {'filename': 'f'}, relation_views={})

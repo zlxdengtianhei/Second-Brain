@@ -144,3 +144,25 @@ def test_h6_a_merge_check_link_given_as_a_string_is_refused_not_a_crash(tmp_path
             validate(answer)
         with pytest.raises(ValueError, match=r'links'):
             source_check.validate_answer(roles['frozen'], answer)
+
+
+def test_a_slip_inside_a_validator_that_the_type_check_lets_through_is_a_refusal():
+    """Third verdict, not blocking 4: the second layer of the guard. The answer has every type right, and the
+    validator still meets a shape it did not expect (a KeyError here): refused by name, never a crash."""
+    @schemas.shape_checked({'type': 'object', 'properties': {'rows': {'type': 'array'}}}, payload=0, what='answer')
+    def validate(payload):
+        return {row['slug']: row for row in payload['rows']}  # a row without "slug" slips
+    assert validate({'rows': [{'slug': 'a'}]}) == {'a': {'slug': 'a'}}
+    with pytest.raises(schemas.ShapeError, match=r"unexpected shape \(KeyError: 'slug'\)"):
+        validate({'rows': [{'name': 'a'}]})
+    with pytest.raises(schemas.ShapeError, match=r'rows must be a list, not str'):
+        validate({'rows': 'a'})
+
+
+def test_every_field_of_a_judgement_again_in_the_wrong_type_is_refused_by_name():
+    """Third verdict, not blocking 4: the dispute re-judge answer was not in the fuzz."""
+    frozen = {'card': {'slug': 'lantern-queue'}}
+    answer = {'slug': 'lantern-queue', 'overlap': 'extends', 'with': ['card_exist'], 'reason': 'it adds markers'}
+    count, cases, problems = fuzz(answer, ingest.REJUDGE_SCHEMA,
+                                  lambda p: ingest._validate_rejudge(frozen, p, {'card_exist'}))
+    assert count == 6 and cases >= 18 and problems == []  # the answer, its four fields, one item of with

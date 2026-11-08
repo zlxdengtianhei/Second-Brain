@@ -2213,9 +2213,10 @@ def _split_item(state: dict, slot: str) -> dict:
 def _patch_fits(old, patch: dict) -> tuple[str | None, list, list]:
     """``(why it does not fit or None, propositions to add, review cards to add)`` for a patch to existing card ``old``.
 
-    What the card already says word for word is left out (``same_text``).
+    Only what the card (or the patch) already says in the same words once spaces are put right is left out; what
+    the comparison only finds the same went back to the merge check at validation (decision D-21).
     """
-    from ..textnorm import same_text
+    from .source_check import exact as same_text
     problem = cardfmt.patchable(old.body)
     if problem:
         return problem, [], []
@@ -2685,9 +2686,9 @@ def _apply_job(root: Path, job_id: str, settled: list[dict] | None = None) -> di
     snapshot = read_snapshot(root)
     writable_snapshot(snapshot)
     fates = _repeat_fates(root, state, packet, settled, check, snapshot)
-    if (check or {}).get('status') == 'skipped':  # no patch was composed: its cards are written, as patch_set says
-        outcomes = {**outcomes, **{s: 'write' for s, f in fates.items() if f['how'] == 'written'}}
-    outcomes = {**outcomes, **{s: 'write' for s, f in fates.items() if f.get('held')}}  # nor for a held patch
+    # a card of the patch set written next to its existing card (the merge check was skipped, its patch was held,
+    # the job does not merge, or the card cannot take a patch) is a written card: the outcome says so, as patch_set
+    outcomes = {**outcomes, **{s: 'write' for s, f in fates.items() if f['how'] == 'written'}}
     accepted = [(o['chunk'], s, _final_card(entries, s, c)) for o in settled for s, c in o['accepted'].items()]
     accepted += [(o['chunk'], s, {**_final_card(entries, s, c), '_not_merged': fates[s]['reason']})
                  for o in settled for s, c in o.get('repeats', {}).items() if fates[s]['how'] == 'written']

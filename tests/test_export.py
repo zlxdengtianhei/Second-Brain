@@ -614,3 +614,15 @@ def test_a_literal_backslash_n_outside_formulas_is_a_finding(vault_root):
             if f["code"] == "literal_newline"] == ["literal_newline"]
     clean = "合成卡 1 的量取 101，记作 $a_{1}$ 与 $\\nabla f$。[[合成卡 001]]"
     assert not [f for f in checks.check_paragraph("p1.1", clean, index) if f["code"] == "literal_newline"]
+
+
+def test_a_backslash_n_inside_inline_code_is_code_not_a_finding(vault_root):
+    """Third verdict, not blocking 3: `s.rstrip("\\r\\n")` in a paragraph about strings is code; only a \\n in the
+    prose is a line break read wrongly."""
+    index = checks.CardIndex.from_input(jobs.read_input(vault_root, pipeline.prepare(vault_root, domain=DOMAIN)["job_id"]))
+    code = '用 `s.rstrip("\\r\\n")` 去掉行尾，量取 101。[[合成卡 001]]'
+    assert "\\n" in code
+    assert not [f for f in checks.check_paragraph("p1.1", code, index) if f["code"] == "literal_newline"]
+    prose = '第一行\\nline two，用 `x`，量取 101。[[合成卡 001]]'
+    assert [f["code"] for f in checks.check_paragraph("p1.1", prose, index) if f["code"] == "literal_newline"] == \
+        ["literal_newline"]

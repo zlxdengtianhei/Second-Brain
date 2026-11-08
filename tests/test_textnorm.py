@@ -44,7 +44,7 @@ def test_any_other_mark_makes_two_texts_different(a, b):
 
 
 def test_plain_drops_only_spaces_and_the_closed_table():
-    assert plain(' A<b, (c)!\tD\n') == 'a<b(c)d'
+    assert plain(' A<b, (c)?\tD\n') == 'a<b(c)d'
     assert plain('Use $a  +\n b$ “here”…') == 'use$a + b$here'
 
 
@@ -67,7 +67,11 @@ def test_a_patch_that_differs_from_the_card_only_in_a_symbol_is_not_dropped():
              'flashcards': [{'q': 'When is a > b swapped?', 'a': 'Never.'}]}
     problem, props, flashcards = ingest._patch_fits(OLD, patch)
     assert problem is None
-    assert props == ['If a > b, swap them.', 'A new fact.']   # the third says P1 again, word for word
+    # D-21: the third only looks like P1 to the comparison; the merge check's validation sends it back, and the
+    # program never leaves it out by itself (only the same words, spaces put right, are left out)
+    assert props == ['If a > b, swap them.', 'A new fact.', 'if a<b swap them']
+    problem, props, _ = ingest._patch_fits(OLD, {'propositions': ['A new fact.', 'A  new fact.', 'If a < b,  swap them.']})
+    assert props == ['A new fact.']
     assert [f['q'] for f in flashcards] == ['When is a > b swapped?']
 
 
