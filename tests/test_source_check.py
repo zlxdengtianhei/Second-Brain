@@ -412,12 +412,22 @@ def test_a_retry_card_the_same_as_a_written_card_is_not_written_and_links_to_it_
     assert done['restored_relations'][0]['target'] == ids['queue-order']
 
 
-def test_a_retry_card_that_extends_a_written_card_is_kept_out_of_the_merge_check(tmp_path):
+def test_a_retry_card_that_extends_a_written_card_goes_into_it_through_the_merge_checks_patch(tmp_path):
     def extends_order(packet, ids):
         return {'overlap': 'extends', 'with': [ids['lantern-queue']], 'reason': 'adds that the order holds'}
     root, ids, done, _, checks = retry_reviewed(tmp_path, extends_order)
-    assert checks == [] and done['outcomes'] == {'arrival-order': 'patch'}
+    [check] = checks
+    assert check.packet['cards'] == []  # nothing in the decision set: the card is not judged there again
+    [group] = check.packet['patch_set']
+    assert group['target'] == ids['lantern-queue'] and [c['slug'] for c in group['from']] == ['arrival-order']
     assert done['status'] == 'applied', done.get('pending')
+    assert done['outcomes'] == {'arrival-order': 'patch'} and done['produced'] == []
+    lantern = read_snapshot(root).cards[ids['lantern-queue']]
+    old = group['card']['propositions']
+    props = cardfmt.propositions_of(lantern.body)
+    assert props[:len(old)] == old  # old propositions keep their words and numbers
+    assert set(group['from'][0]['propositions']) <= set(props)
+    assert len(lantern.fm['sources']) == 2 and done['merged_into_existing'][0]['id'] == ids['lantern-queue']
 
 
 def test_needs_a_check_for_cards_of_the_decision_set_from_two_chunks():

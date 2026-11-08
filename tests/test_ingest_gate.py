@@ -136,7 +136,9 @@ def test_a_card_that_extends_an_existing_card_it_cannot_go_into_is_written_next_
     assert result['status'] == 'applied'
     queue = next(p for p in result['produced'] if p['slug'] == 'lantern-queue')
     assert result['needs_review'] == [{'id': queue['id'], 'title': 'Lantern queue', 'with': EXISTING,
-                                       'reason': 'adds the lit markers to the existing card'}]
+                                       'reason': 'adds the lit markers to the existing card',
+                                       'not_merged': 'its existing card cannot take a patch: '
+                                                     'it has no propositions section'}]
     assert result['outcomes']['lantern-queue'] == 'patch'
     cards = {c.title: c for c in read_snapshot(root).cards.values()}
     assert cards['Lantern queue'].fm['status'] == 'needs-review'

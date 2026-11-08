@@ -41,7 +41,7 @@ from ..locks import job_lock
 from ..store import Change, Conflict, digest, read_bytes
 from ..vault import Card, append_list_items, parse_note, read_snapshot
 from .. import retrieval
-from . import card_diagrams, source_check
+from . import card_diagrams, source_check, split
 from .chunking import chunk_text
 from .routing import route
 
@@ -230,7 +230,8 @@ def _frozen_run(root: Path, packet: dict):
 
 #: Candidate settings of a job frozen before they existed: the values that job ran with (no named cards).
 _CANDIDATE_DEFAULTS = {'candidates_k': 'auto', 'candidates_chars': 40000, 'candidates_hop': 0,
-                       'candidates_shelf': False, 'review_named': False, 'review_words_view': 'full'}
+                       'candidates_shelf': False, 'review_named': False, 'review_words_view': 'full',
+                       'merge_into_existing': False}
 
 
 def _frozen(packet: dict, key: str):
@@ -1285,6 +1286,15 @@ def validate_submission(packet: dict, payload: dict, *, role: str, candidate=Non
     if source_check.is_slot(chunk):
         return source_check.validate_answer(candidate, payload, closed=lambda kind, domain, target: _closed_relation(
             packet['catalog'], kind, domain, target))
+    if _is_rejudge(chunk):
+        return _validate_rejudge(candidate, payload, _vault_ids_titles(root)[0])
+    if split.is_slot(chunk):
+        item = _split_item(state, chunk)
+        if role == 'reviewer':
+            return split.validate_review(payload)
+        taken = {c['slug'] for c in _other_cards(root, state, packet, None)} | set(_vault_ids_titles(root)[0])
+        return split.validate_card(item, payload, text=_chunk_text(packet, item['chunk']), taken=taken,
+                                   catalog_types=set(_relation_types(packet['catalog'])))
     existing_ids, existing_titles, existing_domains = _vault_ids_titles(root)
     if role == 'reviewer':
         return validate_review(candidate, payload, existing_ids, packet['catalog']['domains'])
@@ -1314,7 +1324,8 @@ def _known_topics(root, state, slot: str, payload, kept: dict) -> set:
     in_use |= {(c['domain'], c['pillar'], c['topic']) for s, c in kept.items() if s not in refiled}
     out = set()
     for other, info in (state.get('chunks') or {}).items():
-        if other == slot or not info.get('candidate') or card_diagrams.is_slot(other) or source_check.is_slot(other):
+        if other == slot or not info.get('candidate') or card_diagrams.is_slot(other) or \
+                source_check.is_slot(other) or _is_rejudge(other) or split.is_slot(_base(other)):
             continue
         for t in jobs.artifact(root, state, 'candidate', other).get('new_topics', []):
             key = (t['domain'], t['pillar'], t['name'])
@@ -1341,6 +1352,8 @@ class _Facts:
         """``obj`` (a card, a chunk's coverage, a topic proposal) is judged again in a later round of its chunk."""
         if _base(earlier_slot) != _base(slot) or _round(slot) <= _round(earlier_slot):
             return False
+        if split.is_slot(slot):  # a split slot rewrites one card, its plan's
+            return obj == _split_item(self.state, slot)['slug']
         return obj == _base(slot) or obj in self._objects(slot)
 
     def refiled(self, obj: str, earlier_slot: str, slot: str) -> bool:
@@ -1386,6 +1399,17 @@ def record_decisions(packet: dict, payload: dict, *, role: str, candidate, root,
         return
     if source_check.is_slot(chunk):
         source_check.record(candidate, payload, entries, slot=chunk, run=run['run_id'])
+        return
+    if _is_rejudge(chunk):  # the chunk reviewer's level again, after the merge check disputed it
+        decisions.record(entries, 'overlap.existing', payload['slug'],
+                         {'overlap': payload['overlap'], 'with': list(payload.get('with') or []),
+                          'reason': payload['reason']}, role='reviewer', slot=chunk, run=run['run_id'],
+                         reason='dispute', facts=_Facts(root, state))
+        return
+    if split.is_slot(chunk):
+        producer_run = ((state.get('chunks') or {}).get(chunk) or {}).get('candidate', {}).get('run_id')
+        split.record(_split_item(state, chunk), candidate['card'], payload, entries, slot=chunk, run=run['run_id'],
+                     producer_run=producer_run, facts=_Facts(root, state))
         return
     facts, base = _Facts(root, state), _base(chunk)
     producer_run = ((state.get('chunks') or {}).get(chunk) or {}).get('candidate', {}).get('run_id')
@@ -1451,6 +1475,26 @@ def _routed(state: dict, settled: list[dict]) -> list[dict]:
                 accepted[slug] = card
         out.append({**o, 'accepted': accepted, 'repeats': repeats, 'duplicates': dups})
     return out
+
+
+def _for_merge(root: Path, packet: dict, routed: list[dict]) -> list[dict]:
+    """``routed`` with ``repeats`` cut to the patch set the merge check composes patches for.
+
+    A card that extends an existing card is in it only when the job merges
+    (``merge_into_existing``) and that card exists and can take a patch
+    (:func:`secondbrain.cards.patchable`); any other is written next to it,
+    needs-review (:func:`_repeat_fates`).
+    """
+    if not _merging(packet):
+        return [{**o, 'repeats': {}} for o in routed]
+    if not any(o.get('repeats') for o in routed):
+        return routed
+    snapshot = read_snapshot(root)
+
+    def takes(target):
+        card = snapshot.cards.get(target)
+        return card is not None and cardfmt.patchable(card.body) is None
+    return [{**o, 'repeats': {s: c for s, c in (o.get('repeats') or {}).items() if takes(c['_with'])}} for o in routed]
 
 
 def _unaccepted_topics(root, state, base: str, upto_round: int) -> dict:
@@ -1730,6 +1774,8 @@ def _advance(root: Path, job_id: str, *, producer, reviewer, apply: bool = True)
             state = jobs.update(root, job_id, status='awaiting_submission' if handoffs else 'producing')
             return {**state, 'handoffs': handoffs}
         handoffs = _source_check_stage(root, job_id, packet, settled, reviewer)
+        if not handoffs:
+            handoffs = _split_stage(root, job_id, packet, settled, producer, reviewer)
         if handoffs:
             state = jobs.update(root, job_id, status='awaiting_submission')
             return {**state, 'handoffs': handoffs}
@@ -1747,23 +1793,96 @@ def _advance(root: Path, job_id: str, *, producer, reviewer, apply: bool = True)
 # --------------------------------------------------------------------------
 # Source check (after every chunk settled, before diagrams; see source_check)
 # --------------------------------------------------------------------------
-def _source_check_stage(root: Path, job_id: str, packet: dict, settled: list[dict], executor) -> list:
-    """Run the source check when it is due and not done; returns host hand-offs.
+def _merge_round(state: dict) -> int:
+    """The number of the merge check's latest round that has a slot (-1 before the first)."""
+    chunks = state.get('chunks') or {}
+    n = -1
+    while source_check.round_slot(n + 1) in chunks:
+        n += 1
+    return n
 
-    An answer that fails validation is asked for again while the repair budget
-    lasts; after that the check is recorded as skipped and the cards are
-    written as the chunk reviews left them.
+
+def _rejudge_slot(number: int, slug: str) -> str:
+    """The slot where the chunk reviewer judges ``slug`` again after round ``number - 1`` of the merge check disputed it."""
+    return f'xr{number}-{slug}'
+
+
+def _is_rejudge(name) -> bool:
+    return isinstance(name, str) and re.fullmatch(r'xr[1-9]\d*-[a-z0-9][a-z0-9-]*', name) is not None
+
+
+#: The chunk reviewer's answer when it judges a disputed card again.
+REJUDGE_SCHEMA = {'type': 'object', 'required': ['slug', 'overlap', 'with', 'reason'],
+                  'properties': {'slug': {'type': 'string'}, 'overlap': {'type': 'string', 'enum': list(overlap.LEVELS)},
+                                 'with': {'type': 'array', 'items': {'type': 'string'}}, 'reason': {'type': 'string'}}}
+
+
+def _validate_rejudge(frozen: dict, payload, existing_ids: set) -> dict:
+    if not isinstance(payload, dict) or payload.get('slug') != frozen['card']['slug']:
+        raise IngestError(f'the answer must judge {frozen["card"]["slug"]}')
+    problem = overlap.with_problem(payload.get('overlap'), payload.get('with') or [],
+                                   overlap.KnownIds(existing_ids, 'existing'))
+    if problem:
+        raise IngestError(f'{payload["slug"]}: {problem}')
+    if not isinstance(payload.get('reason'), str) or not payload['reason'].strip():
+        raise IngestError(f'{payload["slug"]}: give a concrete reason')
+    return payload
+
+
+def _disputed(state: dict, slot: str) -> dict:
+    """``{slug: reason}`` of the cards round ``slot`` of the merge check disputed (and nothing superseded since)."""
+    return {s: e['data']['reason'] for s, e in decisions.values(state.get('decisions') or [], 'dispute').items()
+            if e['slot'] == slot}
+
+
+def _source_check_stage(root: Path, job_id: str, packet: dict, settled: list[dict], executor) -> list:
+    """Run the merge check when it is due and not done, round after round; returns host hand-offs.
+
+    A round whose answer disputes cards of the patch set sends each of them
+    back to its chunk reviewer (a run of its own, :func:`_rejudge_slot`), then
+    runs again as a new round (``xc01.r1`` ...) that replaces the whole round
+    before, at most ``max_repair_rounds`` times; cards still disputed then stay
+    pending. An answer that fails validation is asked for again while the
+    repair budget lasts; after that the check is recorded as skipped and the
+    cards are written as the chunk reviews left them.
     """
     from ..runner import AwaitingSubmission, call_executor
-    routed = _routed(jobs.load(root, job_id), settled)
-    if not source_check.needed(routed):
-        return []
-    slot = source_check.SLOT
+    rules = jobs.policy_of(packet)
     while True:
         state = jobs.load(root, job_id)
-        info = (state.get('chunks') or {}).get(slot) or {}
-        if info.get('review') or info.get('skipped'):
+        routed = _for_merge(root, packet, _routed(state, settled))
+        if not source_check.needed(routed):
             return []
+        n = max(0, _merge_round(state))
+        slot = source_check.round_slot(n)
+        info = (state.get('chunks') or {}).get(slot) or {}
+        if info.get('skipped'):
+            return []
+        if info.get('review'):
+            disputed = _disputed(state, slot)
+            if not disputed or n >= rules.max_repair_rounds:
+                return []
+            for slug in sorted(disputed):
+                rj = _rejudge_slot(n + 1, slug)
+                if ((state.get('chunks') or {}).get(rj) or {}).get('review'):
+                    continue
+                if not ((state.get('chunks') or {}).get(rj) or {}).get('candidate'):
+                    jobs.put_program_candidate(root, job_id, rj, _rejudge_input(root, state, packet, routed, slug,
+                                                                                 disputed[slug]))
+                    state = jobs.load(root, job_id)
+                text = _prompt('review_dispute.md', state)
+                try:
+                    call_executor(root, job_id, executor, role='reviewer', step='review', prompt_text=text,
+                                  packet=jobs.artifact(root, state, 'candidate', rj), output_schema=REJUDGE_SCHEMA,
+                                  chunk=rj)
+                except AwaitingSubmission as waiting:
+                    return [{**waiting.handoff, 'chunk': rj, 'step': 'dispute'}]
+                state = jobs.load(root, job_id)
+            slot = source_check.round_slot(n + 1)
+            info = {}
+            routed = _for_merge(root, packet, _routed(state, settled))
+            if not source_check.needed(routed):
+                return []
         if not info.get('candidate'):
             jobs.put_program_candidate(root, job_id, slot, _source_check_input(root, packet, routed))
             state = jobs.load(root, job_id)
@@ -1782,10 +1901,176 @@ def _source_check_stage(root: Path, job_id: str, packet: dict, settled: list[dic
                 raise
             failed = int(info.get('invalid_outputs', 0)) + 1
             fields = {'invalid_outputs': failed, 'last_validation_error': failure.error.get('message', '')[:8000]}
-            if failed > jobs.policy_of(packet).max_repair_rounds:
+            if failed > rules.max_repair_rounds:
                 fields['skipped'] = (f'the answer failed validation {failed} times; the cards were written as '
                                      'the chunk reviews left them')
             _mark_slot(root, job_id, slot, **fields)
+
+
+def _rejudge_input(root: Path, state: dict, packet: dict, routed: list[dict], slug: str, reason: str) -> dict:
+    """What the chunk reviewer judges a disputed card on: the card, its chunk, the dispute, the existing cards."""
+    from ..runner import withhold_reasons
+    chunk, card = next((o['chunk'], c) for o in routed for s, c in (o.get('repeats') or {}).items() if s == slug)
+    snapshot = read_snapshot(root)
+    near, near_cards = _review_candidates(root, snapshot, packet, [card])
+    shown = {k: v for k, v in card.items() if not k.startswith('_')}
+    return {'card': withhold_reasons(shown) if jobs.policy_of(packet).withhold_producer_reasons else shown,
+            'chunk': {'id': chunk, 'text': _chunk_text(packet, chunk)}, 'dispute': reason,
+            'level': {'overlap': 'extends', 'with': [card['_with']]},
+            'candidates': near, 'candidate_cards': near_cards}
+
+
+# --------------------------------------------------------------------------
+# Split slots (see split): an extends card whose existing card cannot take its patch
+# --------------------------------------------------------------------------
+def _split_item(state: dict, slot: str) -> dict:
+    base = _base(slot)
+    return next(i for i in state.get('split_plan') or [] if i['slot'] == base)
+
+
+def _patch_fits(old, patch: dict) -> tuple[str | None, list, list]:
+    """``(why it does not fit or None, propositions to add, review cards to add)`` for a patch to existing card ``old``.
+
+    What the card already says word for word is left out (``same_text``).
+    """
+    from ..textnorm import same_text
+    problem = cardfmt.patchable(old.body)
+    if problem:
+        return problem, [], []
+    props, flashcards = cardfmt.propositions_of(old.body), cardfmt.flashcards_of(old.body)
+    replaced = {int(r['proposition'][1:]): r['by'] for r in patch.get('replace') or []}
+    have = props + list(replaced.values())
+    add = []
+    for text in patch.get('propositions') or []:
+        if not any(same_text(text, x) for x in have + add):
+            add.append(text)
+    asked = [f['q'] for f in flashcards]
+    add_f = []
+    for f in patch.get('flashcards') or []:
+        if not any(same_text(f['q'], q) for q in asked + [x['q'] for x in add_f]):
+            add_f.append(f)
+    if len(props) + len(add) > source_check.MAX_PROPOSITIONS or len(flashcards) + len(add_f) > source_check.MAX_FLASHCARDS:
+        return 'too_large', add, add_f
+    return None, add, add_f
+
+
+def _split_plan(root: Path, job_id: str, packet: dict, settled: list[dict]) -> list[dict]:
+    """The split slots of the job, fixed in its state the first time they are needed.
+
+    One per card of the patch set whose existing card's patch would go past 12
+    propositions or 8 review cards.
+    """
+    state = jobs.load(root, job_id)
+    if state.get('split_plan') is not None:
+        return state['split_plan']
+    checked, report = _checked(root, state, packet, settled)
+    patches = (report or {}).get('patches') or {}
+    disputed = set((report or {}).get('disputes') or {})
+    snapshot = read_snapshot(root)
+    plan = []
+    for o in checked:
+        for slug, card in (o.get('repeats') or {}).items():
+            target = card['_with']
+            old = snapshot.cards.get(target)
+            if slug in disputed or target not in patches or old is None or not _merging(packet):
+                continue
+            problem, _, _ = _patch_fits(old, patches[target])
+            if problem != 'too_large':
+                continue
+            plan.append({'slot': split.slot_name(len(plan) + 1), 'slug': slug, 'chunk': o['chunk'], 'with': target,
+                         'existing_propositions': cardfmt.propositions_of(old.body),
+                         'place': {'domain': old.domain, 'pillar': old.fm.get('pillar'), 'topic': old.fm.get('topic')},
+                         'carry': patches[target],
+                         'card': {k: v for k, v in card.items() if not k.startswith('_')}})
+    jobs._internal_update(root, job_id, split_plan=plan)
+    return plan
+
+
+def _merging(packet: dict) -> bool:
+    """Whether this job adds what an ``extends`` card holds to its existing card (``[ingest] merge_into_existing``)."""
+    return bool(_frozen(packet, 'merge_into_existing'))
+
+
+def split_outcome(root: Path, state: dict, packet: dict, item: dict) -> dict:
+    """``{"settled", "next", "card", "pending"}`` of one split slot, its rounds like a chunk's."""
+    base = item['slot']
+    slots = _slots(state, base)
+    info0 = (state.get('chunks') or {}).get(base) or {}
+    max_rounds = jobs.policy_of(packet).max_repair_rounds
+    used = int(info0.get('invalid_outputs', 0)) + sum(1 for _, i in slots[1:] if i.get('candidate'))
+    if not slots or not slots[0][1].get('candidate'):
+        if used > max_rounds:
+            return {'settled': True, 'next': None, 'card': None,
+                    'pending': f'the split card failed validation in every allowed round: '
+                               f'{str(info0.get("last_validation_error") or "")[:500]}'}
+        return {'settled': False, 'next': ('produce', base), 'card': None, 'pending': None}
+    last = None
+    for slot, info in slots:
+        if not info.get('candidate'):
+            if used < max_rounds:
+                return {'settled': False, 'next': ('repair', slot), 'card': None, 'pending': None}
+            break
+        if not info.get('review'):
+            return {'settled': False, 'next': ('review', slot), 'card': None, 'pending': None}
+        review = jobs.require_independent_review(root, state, slot)
+        last = (slot, review)
+        if review['decision'] == 'accept':
+            card = jobs.artifact(root, state, 'candidate', slot)['card']
+            return {'settled': True, 'next': None, 'card': {**card, '_slot': slot}, 'pending': None}
+    if last and used < max_rounds and len(slots) == sum(1 for _, i in slots if i.get('review')):
+        return {'settled': False, 'next': ('repair', _slot_name(base, len(slots))), 'card': None, 'pending': None}
+    return {'settled': True, 'next': None, 'card': None,
+            'pending': f'the split card was not accepted: {(last[1] if last else {}).get("reason", "")}'}
+
+
+def _split_stage(root: Path, job_id: str, packet: dict, settled: list[dict], producer, reviewer,
+                 only: str | None = None, role: str | None = None) -> list:
+    """Run every split slot's step that can run now; returns host hand-offs."""
+    from ..runner import AwaitingSubmission, call_executor
+    handoffs, handed = [], set()
+    while True:
+        state = jobs.load(root, job_id)
+        todo = [(i, split_outcome(root, state, packet, i)) for i in _split_plan(root, job_id, packet, settled)]
+        todo = [(i, o) for i, o in todo if not o['settled'] and i['slot'] not in handed
+                and (only is None or _base(only) == i['slot'])
+                and (role is None or (o['next'][0] == 'review') == (role == 'reviewer'))]
+        if not todo:
+            return handoffs
+        item, out = todo[0]
+        kind, slot = out['next']
+        snapshot = read_snapshot(root)
+        old = snapshot.cards[item['with']]
+        shown = {'existing_card': cardfmt.view(old, 'body' if kind != 'review' else 'full'),
+                 'chunk': {'id': item['chunk'], 'text': _chunk_text(packet, item['chunk'])},
+                 **_relation_views(packet['catalog'], [item['place']['domain']])}
+        try:
+            if kind == 'review':
+                from ..runner import withhold_reasons
+                cand = jobs.artifact(root, state, 'candidate', slot)
+                call_executor(root, job_id, reviewer, role='reviewer', step='review',
+                              prompt_text=_prompt('review_split.md', state),
+                              packet={**shown, 'card': withhold_reasons(cand['card'])},
+                              output_schema=split.REVIEW_SCHEMA, chunk=slot)
+            else:
+                body = {**shown, 'card': item['card'], 'carry': item['carry']}
+                if kind == 'repair':
+                    prev = _slot_name(item['slot'], _round(slot) - 1)
+                    body.update(previous_candidate=jobs.artifact(root, state, 'candidate', prev),
+                                review_findings=jobs.artifact(root, state, 'review', prev))
+                text = _prompt('split_card.md', state)
+                feedback = ((state.get('chunks') or {}).get(slot) or {}).get('last_validation_error')
+                if feedback:
+                    text += '\n## Your previous answer was rejected by the validator\n\n' + feedback + '\n'
+                try:
+                    call_executor(root, job_id, producer, role='producer', step=kind, prompt_text=text, packet=body,
+                                  output_schema=split.CARD_SCHEMA, chunk=slot)
+                except ExecutorFailure as failure:
+                    if failure.code != INVALID_OUTPUT:
+                        raise
+                    _record_invalid(root, job_id, item['slot'], slot, failure.error.get('message', ''))
+        except AwaitingSubmission as waiting:
+            handoffs.append({**waiting.handoff, 'chunk': slot, 'step': 'split'})
+            handed.add(item['slot'])
 
 
 def _source_check_input(root: Path, packet: dict, settled: list[dict]) -> dict:
@@ -1799,7 +2084,8 @@ def _source_check_input(root: Path, packet: dict, settled: list[dict]) -> dict:
         return [{**cardfmt.view(snapshot.cards[e['id']], 'brief'), 'rank': e['rank'], 'via': e['via']}
                 for e in entries]
     frozen = source_check.frozen_input(settled, packet["source"], candidates=to_link,
-                                       relation_views=_relation_views(packet['catalog'], domains))
+                                       relation_views=_relation_views(packet['catalog'], domains),
+                                       existing=lambda cid: cardfmt.view(snapshot.cards[cid], 'full'))
     return {**frozen, 'placement': packet['placement']} if packet.get('placement') else frozen
 
 
@@ -1826,8 +2112,8 @@ def _skip_source_check(root: Path, job_id: str, *, reason: str) -> dict:
             raise IngestError(f'{job_id} is not an ingest job')
         settled = [chunk_outcome(root, state, packet, c['chunk_id']) for c in effective_chunks(packet, state)]
         info = (state.get('chunks') or {}).get(source_check.SLOT) or {}
-        if not all(o['settled'] for o in settled) or not source_check.needed(_routed(state, settled)) \
-                or not info.get('candidate'):
+        if not all(o['settled'] for o in settled) or not source_check.needed(
+                _for_merge(root, packet, _routed(state, settled))) or not info.get('candidate'):
             raise IngestError(f'{job_id} has no source check waiting; run `sb job advance`')
         if info.get('review') or info.get('skipped'):
             raise IngestError(f'The source check of {job_id} is already done')
@@ -1858,18 +2144,21 @@ def _checked(root: Path, state: dict, packet: dict, settled: list[dict],
     """
     entries = list(state.get('decisions') or []) if entries is None else entries
     routed = _routed(state, settled)
-    if not source_check.needed(routed):
+    judged = _for_merge(root, packet, routed)
+    if not source_check.needed(judged):
         return routed, None
-    info = (state.get('chunks') or {}).get(source_check.SLOT) or {}
+    slot = source_check.round_slot(max(0, _merge_round(state)))
+    info = (state.get('chunks') or {}).get(slot) or {}
     if info.get('skipped'):
         return routed, {'status': 'skipped', 'reason': info['skipped']}
     if not info.get('review'):
         raise Conflict('The source check is not finished; run `sb job advance`')
-    frozen = jobs.artifact(root, state, 'candidate', source_check.SLOT)
+    frozen = jobs.artifact(root, state, 'candidate', slot)
     try:
-        return source_check.apply(routed, frozen, entries)
+        out, report = source_check.apply(judged, frozen, entries)
     except ValueError as exc:
         raise Conflict(str(exc)) from exc
+    return [{**o, 'repeats': r.get('repeats', {})} for o, r in zip(out, routed)], {**report, 'round': slot}
 
 
 # --------------------------------------------------------------------------
@@ -1880,7 +2169,7 @@ def _diagram_cards(root: Path, job_id: str, packet: dict, settled: list[dict]) -
     state = jobs.load(root, job_id)
     if state.get('diagram_cards') is not None:
         return state['diagram_cards']
-    accepted = [(o['chunk'], s, c) for o in settled for s, c in {**o['accepted'], **o.get('repeats', {})}.items()]
+    accepted = [(o['chunk'], s, c) for o in settled for s, c in o['accepted'].items()]
     snapshot = read_snapshot(root)
     titles = {slug: card['title'] for _, slug, card in accepted}
 
@@ -2058,9 +2347,19 @@ def _apply_job(root: Path, job_id: str, settled: list[dict] | None = None) -> di
         raise Conflict('The diagram step is not finished; run `sb job advance`')
     snapshot = read_snapshot(root)
     writable_snapshot(snapshot)
-    accepted = [(o['chunk'], s, _final_card(entries, s, c))
-                for o in settled for s, c in {**o['accepted'], **o.get('repeats', {})}.items()]
+    fates = _repeat_fates(root, state, packet, settled, check, snapshot)
+    accepted = [(o['chunk'], s, _final_card(entries, s, c)) for o in settled for s, c in o['accepted'].items()]
+    accepted += [(o['chunk'], s, {**_final_card(entries, s, c), '_not_merged': fates[s]['reason']})
+                 for o in settled for s, c in o.get('repeats', {}).items() if fates[s]['how'] == 'written']
+    accepted += [(f['chunk'], f['card']['slug'], {**_final_card(entries, f['card']['slug'], f['card']),
+                                                  '_split_of': f['target'], '_from': s})
+                 for s, f in fates.items() if f['how'] == 'split']
     pending = [p for o in settled for p in o['pending']]
+    pending += [{'slug': s, 'title': next(c['title'] for o in settled for x, c in o.get('repeats', {}).items() if x == s),
+                 'chunk': f['chunk'], 'reason': f['reason']} for s, f in fates.items() if f['how'] == 'pending']
+    # a link to a card that went into its existing card goes there; to one rewritten as a split card, to that card
+    into_existing = {s: f['target'] for s, f in fates.items() if f['how'] == 'patched'}
+    alias = {s: f['card']['slug'] for s, f in fates.items() if f['how'] == 'split'}
     if not jobs._bindings(state):
         return jobs.update(root, job_id, status='failed', error={
             'code': 'NO_REVIEWED_CANDIDATE', 'pending': pending,
@@ -2122,9 +2421,15 @@ def _apply_job(root: Path, job_id: str, settled: list[dict] | None = None) -> di
         return 'target card was not written' if slug in open_slugs else \
             'target card was dropped in review; add the link by hand if it still matters'
     for _, slug, card in accepted:
-        linked = {r.get('target') for r in card.get('relations') or []}
+        linked = {alias.get(r.get('target'), r.get('target')) for r in card.get('relations') or []}
         for r in card.get('relations') or []:
-            target = r['target']
+            target = alias.get(r['target'], r['target'])
+            if target in into_existing:
+                if into_existing[target] in linked or into_existing[target] == card.get('_split_of'):
+                    dropped(slug, r, 'its target went into an existing card this card links already')
+                    continue
+                dropped(slug, r, 'its target went into an existing card', op='redirect', to=into_existing[target])
+                target = into_existing[target]
             if target in snapshot.cards:
                 tid = target
             elif target in ids:
@@ -2215,6 +2520,60 @@ def _apply_job(root: Path, job_id: str, settled: list[dict] | None = None) -> di
     updated: dict = {}
     produced = []
     notes = []
+    # existing cards that take the merge check's patch; the cards that extend them are not written, and their
+    # relations move to the existing card (old review cards and old propositions keep their words and numbers)
+    merged_into_existing, patch_edges = [], []
+    by_target: dict = {}
+    for slug, fate in fates.items():
+        if fate['how'] == 'patched':
+            by_target.setdefault(fate['target'], []).append(slug)
+    repeat_cards = {s: _final_card(entries, s, c) for o in settled for s, c in o.get('repeats', {}).items()}
+    for target in sorted(by_target):
+        old, patch, slugs = snapshot.cards[target], check['patches'][target], by_target[target]
+        add, add_f = fates[slugs[0]]['add'], fates[slugs[0]]['add_flashcards']
+        swaps = {int(r['proposition'][1:]): r['by'] for r in patch.get('replace') or []}
+        first = len(cardfmt.propositions_of(old.body)) + 1
+        numbers = [f'P{n}' for n in range(first, first + len(add))] + [f'P{n}' for n in sorted(swaps)]
+        present = {e.get('target') for e in old.fm.get('relations') or [] if isinstance(e, dict)}
+        moved = []
+        for slug in slugs:
+            for r in repeat_cards[slug]['relations']:
+                t = into_existing.get(alias.get(r['target'], r['target']), alias.get(r['target'], r['target']))
+                tid = t if t in snapshot.cards else ids.get(t) or duplicate_of.get(t) or (
+                    _written_slugs(packet).get(t) if _written_slugs(packet).get(t) in snapshot.cards else None)
+                if tid is None:
+                    skipped_relations.append({'from': target, 'type': r['type'], 'target_slug': t, 'reason': unwritten(t)})
+                    continue
+                if tid == target or tid in present or any(m['target'] == tid for m in moved):
+                    continue
+                closed = _closed_relation(packet['catalog'], r['type'], old.domain,
+                                          snapshot.cards[tid].domain if tid in snapshot.cards else new_domains.get(tid))
+                if closed:
+                    skipped_relations.append({'from': target, 'type': r['type'], 'target_slug': t, 'reason': closed})
+                    continue
+                moved.append({k: v for k, v in (('type', r['type']), ('target', tid), ('note', r.get('note')),
+                                                 ('tier', r.get('tier'))) if v})
+        located = repeat_cards[slugs[0]]['source_quotes'][0]
+        source_item = {'path': source_rel, 'sha256': source['sha256'], 'locator': located,
+                       **({'propositions': numbers} if numbers else {})}
+        try:
+            raw2 = cardfmt.patch(old.raw, add_props=add, replace_props=swaps, add_flashcards=add_f,
+                                 add_source=source_item, add_relations=moved, title_of=title_of.get, language=language)
+        except cardfmt.PatchRefused as exc:
+            raise Conflict(f'{target} could not take its patch: {exc}; run `sb job advance` again') from exc
+        fm2, body2 = parse_note(raw2)
+        changes.append(Change(old.path, old.sha256, raw2))
+        updated[target] = replace(old, raw=raw2, fm=fm2, body=body2, sha256=digest(raw2))
+        for m in moved:  # back links: on a new card of this job before it is written, else on the existing card
+            inv = inverse.get(m['type'])
+            if inv and m['target'] in by_id:
+                rels[by_id[m['target']]].append(_inverse_edge(inv, target, m))
+            elif inv:
+                patch_edges.append((m['target'], _inverse_edge(inv, target, m)))
+        merged_into_existing.append({
+            'id': target, 'title': old.title, 'from': slugs, 'chunks': sorted({fates[x]['chunk'] for x in slugs}),
+            'propositions': numbers[:len(add)], 'replaced': [f'P{n}' for n in sorted(swaps)],
+            'flashcards': len(add_f), 'relations': moved})
     for chunk, slug, card in accepted:
         cid, title = ids[slug], titles[slug]
         relations = [cardfmt.Relation(r['type'], r['target'], title_of.get(r['target'], ''), r.get('note'), r.get('tier'))
@@ -2247,7 +2606,7 @@ def _apply_job(root: Path, job_id: str, settled: list[dict] | None = None) -> di
                       'pillar': card['pillar'], 'topic': card['topic'], 'source_hash': source['sha256']})
     # inverse edges into existing cards: frontmatter list and related section; other bytes stay
     to_add: dict = {}
-    for target, edge in extra_edges:
+    for target, edge in extra_edges + patch_edges:
         to_add.setdefault(target, []).append(edge)
     for slug in rels:
         for r in rels[slug]:
@@ -2256,7 +2615,7 @@ def _apply_job(root: Path, job_id: str, settled: list[dict] | None = None) -> di
                 to_add.setdefault(r['target'], []).append(_inverse_edge(inv, ids[slug], r))
     maintenance = []
     for target in sorted(to_add):
-        existing = snapshot.cards[target]
+        existing = updated.get(target) or snapshot.cards[target]  # a patched card takes its back links on top
         cur = existing.fm.get('relations')
         if cur is not None and not (isinstance(cur, list) and all(isinstance(e, dict) for e in cur)):
             maintenance.append({'target': target, 'reason': 'relations is not a list of mappings; inverse edge not added'})
@@ -2278,7 +2637,8 @@ def _apply_job(root: Path, job_id: str, settled: list[dict] | None = None) -> di
         body3 = cardfmt.add_related(body2, shown, language=language, all_relations=whole)
         raw2 = raw2[:len(raw2) - len(body2.encode('utf-8'))] + body3.encode('utf-8')
         fm2, body2 = parse_note(raw2)
-        changes.append(Change(existing.path, existing.sha256, raw2))
+        changes = [c for c in changes if c.relative_path != existing.path]
+        changes.append(Change(existing.path, snapshot.cards[target].sha256, raw2))
         updated[target] = replace(existing, raw=raw2, fm=fm2, body=body2, sha256=digest(raw2))
     # accepted new topics
     new_taxonomies = {}
@@ -2322,14 +2682,17 @@ def _apply_job(root: Path, job_id: str, settled: list[dict] | None = None) -> di
                               'title': titles.get(row['slug'], row['title']), 'with': row['with'],
                               'with_title': other.title, 'detail': row['detail'], 'by': row['by'],
                               'chunk': row['chunk']})
-    if conflicts:
-        changes.append(inbox.appended(root, lay.conflicts, b''.join(inbox.registry_line(
-            {**c, 'job_id': job_id, 'source_sha256': source['sha256'], 'at': now,
-             'with_digest': content_digest(updated.get(c['with']) or snapshot.cards[c['with']])})
-            for c in conflicts)))
+    # a patch changes an existing card's text, which would close the conflicts open on it: they are recorded
+    # again, bound to its new text, in the same write (a merge does not settle a disagreement)
+    rebound = [{**row, 'rebound_by': job_id} for row in open_conflicts(root, snapshot) if row.get('with') in by_target]
+    rows = [{**c, 'job_id': job_id, 'source_sha256': source['sha256'], 'at': now,
+             'with_digest': content_digest(updated.get(c['with']) or snapshot.cards[c['with']])} for c in conflicts]
+    rows += [{**row, 'at': now, 'with_digest': content_digest(updated[row['with']])} for row in rebound]
+    if rows:
+        changes.append(inbox.appended(root, lay.conflicts, b''.join(inbox.registry_line(r) for r in rows)))
     # an extends card whose existing card does not take it is written next to it, for the owner to merge
-    needs_review = [{'id': ids[s], 'title': titles[s], 'with': c['_with'], 'reason': c['_reason']}
-                    for _, s, c in accepted if c.get('_with')]
+    needs_review = [{'id': ids[s], 'title': titles[s], 'with': c['_with'], 'reason': c['_reason'],
+                     'not_merged': c.get('_not_merged')} for _, s, c in accepted if c.get('_with')]
     needs_taxonomy = [x for o in settled for x in o['needs_taxonomy']]
     status = 'partial' if (pending or needs_taxonomy) else 'applied'
     progress = None
@@ -2372,6 +2735,7 @@ def _apply_job(root: Path, job_id: str, settled: list[dict] | None = None) -> di
         written, removed = planned_paths(changes)
         open_now = {_conflict_key(r) for r in open_conflicts(root, projected)}
         open_now |= {_conflict_key({**c, 'source_sha256': source['sha256']}) for c in conflicts}  # this write's
+        open_now |= {_conflict_key(r) for r in rebound}
         changes.extend(projection_changes(root, entry_projection(projected, current_day(), final_paths=written,
                                                                  removed_paths=removed, conflicts=len(open_now))))
     result = {'status': status, 'new_card_count': len(produced), 'produced': produced,
@@ -2387,7 +2751,11 @@ def _apply_job(root: Path, job_id: str, settled: list[dict] | None = None) -> di
               'inbox_moved': move, 'projection_metrics': projection_metrics,
               'diagrams': [row for row in drawn['report'] if row['ref'] in {p['slug'] for p in produced}],
               'same_family': bool(state.get('same_family')),
-              'outcomes': outcomes, 'decision_record': entries}
+              'outcomes': outcomes, 'decision_record': entries,
+              'merged_into_existing': merged_into_existing,
+              'split': [{'slug': f['card']['slug'], 'id': ids.get(f['card']['slug']), 'from': s, 'of': f['target'],
+                         'slot': f['slot']} for s, f in fates.items() if f['how'] == 'split'],
+              'patch_set': {s: f['how'] for s, f in fates.items()}}
     if progress is not None:
         result['retry_progress'] = progress
     if stalled:
@@ -2403,6 +2771,46 @@ def _apply_job(root: Path, job_id: str, settled: list[dict] | None = None) -> di
             jobs.release_intent(root, job_id, reason=f'{exc}; run `sb job advance` to rebuild the write plan')
         raise
     return _maybe_commit(root, job_id, done)
+
+
+def _repeat_fates(root: Path, state: dict, packet: dict, settled: list[dict], check: dict | None,
+                  snapshot) -> dict:
+    """What becomes of each card of the patch set (``repeats``): ``{slug: {"how", "target", ...}}``.
+
+    ``patched``: its existing card takes the merge check's patch (the card is
+    not written). ``split``: the patch would make that card too long; the
+    split slot's accepted card is written instead (``card``). ``written``: the
+    existing card cannot take a patch (not in sb format, gone, or the job does
+    not merge: ``merge_into_existing`` off), so the card is written next to it,
+    needs-review. ``pending``: disputed by the merge check's last round, or its
+    split card was not accepted.
+    """
+    patches = (check or {}).get('patches') or {}
+    disputes = (check or {}).get('disputes') or {}
+    plan = {i['slug']: i for i in state.get('split_plan') or []}
+    out = {}
+    for o in settled:
+        for slug, card in (o.get('repeats') or {}).items():
+            target = card['_with']
+            fate = {'target': target, 'chunk': o['chunk']}
+            old = snapshot.cards.get(target)
+            if slug in disputes:
+                fate.update(how='pending', reason=f'the merge check could not add it to {target}: {disputes[slug]}')
+            elif not _merging(packet) or target not in patches or old is None:
+                why = ('its existing card no longer exists' if old is None else
+                       'this job does not add to existing cards (merge_into_existing is off)' if not _merging(packet)
+                       else f'its existing card cannot take a patch: {cardfmt.patchable(old.body) or "no patch"}')
+                fate.update(how='written', reason=why)
+            elif slug in plan:
+                done = split_outcome(root, state, packet, plan[slug])
+                fate.update(how='split', card=done['card'], slot=plan[slug]['slot']) if done['card'] else \
+                    fate.update(how='pending', reason=done['pending'] or 'its split card is not finished')
+            else:
+                problem, add, add_f = _patch_fits(old, patches[target])
+                fate.update(how='patched', add=add, add_flashcards=add_f) if problem is None else \
+                    fate.update(how='written', reason=f'its existing card cannot take more: {problem}')
+            out[slug] = fate
+    return out
 
 
 def _final_card(entries: list, slug: str, card: dict) -> dict:
@@ -2504,8 +2912,14 @@ def _packet_for(root: Path, job_id: str, *, role: str, chunk: str | None, execut
                                  'reviewer packet); ask for the producer packets of its halves')
             raise ValueError('The executor finished the step directly; use `sb job advance` instead')
         settled = [chunk_outcome(root, state, packet, c['chunk_id']) for c in effective_chunks(packet, state)]
-        if role == 'reviewer' and all(o['settled'] for o in settled) and (not chunk or source_check.is_slot(chunk)):
-            handoffs = _source_check_stage(root, job_id, packet, settled, executor)
+        if role == 'reviewer' and all(o['settled'] for o in settled) and (
+                not chunk or source_check.is_slot(chunk) or _is_rejudge(chunk) or split.is_slot(chunk)):
+            handoffs = _source_check_stage(root, job_id, packet, settled, executor) or \
+                _split_stage(root, job_id, packet, settled, executor, executor, role='reviewer')
+            if handoffs:
+                return handoffs[0]
+        if role == 'producer' and all(o['settled'] for o in settled) and (not chunk or split.is_slot(chunk)):
+            handoffs = _split_stage(root, job_id, packet, settled, executor, executor, role='producer', only=chunk)
             if handoffs:
                 return handoffs[0]
         if role == 'producer' and all(o['settled'] for o in settled) and (not chunk or card_diagrams.is_slot(chunk)):

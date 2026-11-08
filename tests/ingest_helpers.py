@@ -201,20 +201,32 @@ def is_source_check_task(task):
     return is_slot(task.chunk)
 
 
-def keep_all(packet, **decisions):
+def keep_all(packet, _patches=None, _disputes=(), **decisions):
     """A merge-check answer: ``distinct`` for every card and topic unless ``decisions`` (slug -> row) says otherwise.
 
     A card with no relation is said to stand alone unless its row says something else. A row may say
     ``{"overlap": "extends" | "same", "with": "<slug>"}`` (one slug for ``with`` is made a list).
+    Each existing card of the patch set gets a patch of every proposition and review card of the cards that
+    extend it, unless ``_patches`` (target -> patch) says otherwise; ``_disputes`` lists slugs disputed instead.
     """
     def row(card):
         base = {'slug': card['slug'], 'overlap': 'distinct', **({'alone': 'test'} if card.get('isolated') else {})}
         given = _level(decisions.get(card['slug'], {}))
         return {**base, **given} if 'links' not in given and given.get('overlap', 'distinct') == 'distinct' else \
             {k: v for k, v in {**base, **given}.items() if k != 'alone'}
+    patches, disputes = [], [{'slug': s, 'reason': 'it answers another question'} for s in _disputes]
+    for group in packet.get('patch_set') or []:
+        cards = [c for c in group['from'] if c['slug'] not in _disputes]
+        if not cards:
+            continue
+        given = (_patches or {}).get(group['target'])
+        patches.append({'target': group['target'], **(given if given is not None else {
+            'propositions': [p for c in cards for p in c['propositions']],
+            'flashcards': [f for c in cards for f in c['flashcards']]})})
     return {'cards': [row(c) for c in packet['cards']],
             'new_topics': [{'id': t['id'], 'overlap': 'distinct', **_level(decisions.get(t['id'], {}), topic=True)}
-                           for t in packet['new_topics']]}
+                           for t in packet['new_topics']],
+            **({'patches': patches} if patches else {}), **({'disputes': disputes} if disputes else {})}
 
 
 def _level(row: dict, topic: bool = False) -> dict:

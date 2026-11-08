@@ -303,6 +303,110 @@ def view_chars(shown: dict) -> int:
     return len(json.dumps(shown, ensure_ascii=False))
 
 
+class PatchRefused(ValueError):
+    """An existing card that cannot take a patch without changing more than its propositions, review cards,
+    sources and relations."""
+
+
+def patchable(body: str) -> str | None:
+    """Why an existing card cannot take propositions and review cards, or None.
+
+    Its propositions must be numbered ``- P1.`` ... in order and every line of
+    its review-card section must hold ``::``; both sections must be there.
+    """
+    parts = sections(body)
+    if _section(parts, 'propositions') is None:
+        return 'it has no propositions section'
+    if propositions_of(body) is None:
+        return 'its propositions are not numbered - P1., - P2. ... in order'
+    if _section(parts, 'flashcards') is None:
+        return 'it has no review-card section'
+    if flashcards_of(body) is None:
+        return 'a line of its review cards has no ::'
+    return None
+
+
+def patch(raw: bytes, *, add_props=(), replace_props=None, add_flashcards=(), add_source=None,
+          add_relations=(), title_of=None, language: str = 'en') -> bytes:
+    """``raw`` (an existing card) with propositions and review cards added, propositions replaced, a source and
+    relations added; every other byte stays.
+
+    ``replace_props`` maps a proposition number to its new wording; new
+    propositions get the next numbers and new review cards go after the old
+    ones, which are never changed (review history is keyed by the question).
+    ``add_source`` is appended to ``sources``; ``add_relations``
+    (``{type, target, note?, tier?}``) to ``relations`` and to the related
+    section (:func:`add_related`, so lines in an older form stay), with
+    ``title_of(id)`` naming each target. Raises :class:`PatchRefused` when the
+    card is not in sb format (:func:`patchable`) or the result would change
+    anything else.
+    """
+    from .vault import append_list_items, parse_note
+    fm, body = parse_note(raw)
+    problem = patchable(body)
+    if problem:
+        raise PatchRefused(problem)
+    props = propositions_of(body)
+    replace_props = dict(replace_props or {})
+    if any(not isinstance(n, int) or not 1 <= n <= len(props) for n in replace_props):
+        raise PatchRefused(f'a replaced proposition must be one of P1-P{len(props)}')
+    language = next((name for name, h in HEADINGS.items() if f'## {h["propositions"]}' in body), language)
+    h = HEADINGS[language]
+    lines = body.split('\n')
+
+    def section_range(heading):
+        start = next(i for i, line in enumerate(lines) if line.rstrip() == f'## {heading}')
+        end = next((i for i in range(start + 1, len(lines)) if lines[i].startswith('## ')), len(lines))
+        while end > start + 1 and not lines[end - 1].strip():
+            end -= 1
+        return start, end
+    start, end = section_range(h['propositions'])
+    numbered = [i for i in range(start + 1, end) if _PROPOSITION.match(lines[i].strip())]
+    for number, text in replace_props.items():
+        lines[numbered[number - 1]] = f'- P{number}. {_one_line(text)}'
+    fresh = [f'- P{n}. {_one_line(t)}' for n, t in enumerate(add_props, len(props) + 1)]
+    lines[end:end] = fresh
+    if add_flashcards:
+        start, end = section_range(h['flashcards'])
+        lines[end:end] = [f'{_one_line(c["q"])}::{_one_line(c["a"])}' for c in add_flashcards]
+    new_body = '\n'.join(lines)
+    head = raw[:len(raw) - len(body.encode('utf-8'))]
+    out = head + new_body.encode('utf-8')
+    if add_source is not None:
+        out = append_list_items(out, 'sources', [add_source])
+    relations = [r for r in add_relations]
+    if relations:
+        out = append_list_items(out, 'relations', relations)
+        fm2, body2 = parse_note(out)
+        shown = [Relation(r['type'], r['target'], (title_of or (lambda _: ''))(r['target']), r.get('note'),
+                          r.get('tier')) for r in relations]
+        whole = [Relation(e['type'], e['target'], (title_of or (lambda _: ''))(e['target']), e.get('note'),
+                          e.get('tier')) for e in fm2.get('relations') or []
+                 if isinstance(e, dict) and isinstance(e.get('target'), str)]
+        body3 = add_related(body2, shown, language=language, all_relations=whole)
+        out = out[:len(out) - len(body2.encode('utf-8'))] + body3.encode('utf-8')
+    _check_patch(raw, out, fm, body, bool(add_source), bool(relations))
+    return out
+
+
+def _check_patch(raw: bytes, out: bytes, fm: dict, body: str, sourced: bool, linked: bool) -> None:
+    """Refuse a patch that changed anything but propositions, review cards, ``sources`` and relations."""
+    from .vault import parse_note
+    fm2, body2 = parse_note(out)
+    allowed = ({'sources'} if sourced else set()) | ({'relations'} if linked else set())
+    changed = {k for k in set(fm) | set(fm2) if fm.get(k) != fm2.get(k)} - allowed
+    if changed:
+        raise PatchRefused(f'the patch would change {", ".join(sorted(changed))}')
+    keep = {h[k] for h in HEADINGS.values() for k in ('propositions', 'flashcards', 'related')}
+    before = {k: v for k, v in sections(body).items() if k not in keep}
+    after = {k: v for k, v in sections(body2).items() if k not in keep}
+    if before != after:
+        raise PatchRefused('the patch would change another section of the card')
+    old = flashcards_of(body) or []
+    if (flashcards_of(body2) or [])[:len(old)] != old:
+        raise PatchRefused('the patch would change a review card the card has')
+
+
 def render_frontmatter(meta: dict) -> str:
     """YAML frontmatter text; key order follows the card contract."""
     order = ['id', 'title', 'kind', 'domain', 'pillar', 'topic', 'tags', 'aliases', 'sources',

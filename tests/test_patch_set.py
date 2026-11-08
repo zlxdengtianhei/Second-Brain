@@ -1,0 +1,328 @@
+"""A card that extends an existing card goes into it: the merge check's patch, disputes, split slots, conflicts.
+
+The source is the invented two-chunk source of tests/test_invariants.py: in the first chunk the reviewer finds
+lantern-queue extends the existing card and queue-order the same as it; filler-note (first chunk), lit-marker-cost
+and arrival-order (last chunk) are distinct. Here the existing card is in sb format, so it can take a patch.
+"""
+from __future__ import annotations
+
+import pytest
+
+from secondbrain import cards as cardfmt
+from secondbrain import decisions, inbox, jobs
+from secondbrain import layout as layouts
+from secondbrain.executors import FakeExecutor
+from secondbrain.pipelines import ingest, source_check, split
+from secondbrain.pipelines.ingest import content_digest
+from secondbrain.vault import parse_note, read_snapshot
+from tests.helpers import EXISTING
+from tests.ingest_helpers import CARDS, keep_all, with_diagrams
+from tests.test_ingest import settings
+from tests.test_invariants import ARRIVAL, LEVELS, two_chunk_job, two_chunk_producer
+
+LANTERN = CARDS['lantern-queue']
+
+
+def sb_existing(root, n_props=2, n_flashcards=2):
+    """Rewrite the existing card in sb format with ``n_props`` propositions; returns its bytes."""
+    path = next((root / '10_Knowledge').rglob(f'{EXISTING}.md'))
+    fm, _ = parse_note(path.read_bytes())
+    head = path.read_bytes().decode('utf-8').split('\n---\n', 1)[0] + '\n---\n'
+    props = '\n'.join(f'- P{i}. Old proposition {i} about routing readers.' for i in range(1, n_props + 1))
+    cards_ = '\n'.join(f'Old question {i}?::Old answer {i}.' for i in range(1, n_flashcards + 1))
+    body = (f'## 本质\n已有卡正文，保持逐字不动。\n\n## 命题\n{props}\n\n## 直觉与易混对比\n- 直觉：路灯。\n\n'
+            f'## 相关\n暂无。\n\n## 复习卡\n{cards_}\n')
+    path.write_bytes((head + body).encode('utf-8'))
+    return path.read_bytes()
+
+
+def reviewer(checks=None, *, check=None, rejudge=None, split_review=None, levels=LEVELS):
+    """The chunk reviewer of the two-chunk source; the merge check, a dispute's judgement again and a split review
+    answered by the given functions."""
+    def respond(task):
+        if source_check.is_slot(task.chunk):
+            if checks is not None:
+                checks.append(task)
+            return (check or keep_all)(task.packet)
+        if task.chunk.startswith('xr'):
+            card = task.packet['card']
+            return (rejudge or (lambda p: {'slug': card['slug'], 'overlap': 'distinct', 'with': [],
+                                           'reason': 'it answers its own question'}))(task.packet)
+        if split.is_slot(task.chunk.split('.')[0]):
+            return (split_review or (lambda p: {'decision': 'accept', 'restates': False, 'reason': 'faithful'}))(
+                task.packet)
+        cand = task.packet['candidate']
+        return {'cards': [{'slug': c['slug'], 'decision': 'accept', 'reason': 'ok',
+                           **levels.get(c['slug'], {'overlap': 'distinct'})} for c in cand['cards']],
+                'new_topics': [], 'coverage': {'decision': 'accept', 'reason': 'ok'}}
+    return respond
+
+
+SPLIT_CARD = {'slug': 'lantern-skip-ahead', 'title': 'Skipping ahead in a lantern queue', 'kind': 'mechanism',
+              'essence': 'A reader of a lantern queue skips ahead by lit markers.',
+              'propositions': ['Readers skip ahead by following lit markers.'],
+              'intuition': None, 'confusions': [],
+              'flashcards': [{'q': 'How does a reader skip ahead?', 'a': 'By jumping to a lit marker.'},
+                             {'q': 'What does a reader follow to skip?', 'a': 'Lit markers.'}],
+              'source_quotes': [LANTERN['source_quotes'][0]],
+              'relations': [{'type': 'part_of', 'target': EXISTING, 'note': 'one case of routing readers'}]}
+
+
+def producer(split_answer=None, seen=None):
+    def respond(task):
+        if split.is_slot(task.chunk.split('.')[0]):
+            if seen is not None:
+                seen.append(task)
+            return split_answer(task) if split_answer else {'card': SPLIT_CARD}
+        return two_chunk_producer(task)
+    return with_diagrams(respond)
+
+
+def run(root, job_id, review, produce=None):
+    return ingest.advance(root, job_id, producer=FakeExecutor('gpt-test', responder=produce or producer()),
+                          reviewer=FakeExecutor('claude-test', responder=review))
+
+
+def job(tmp_path, n_props=2, **fields):
+    root, job_id = two_chunk_job(tmp_path, **fields)
+    raw = sb_existing(root, n_props)
+    return root, job_id, raw
+
+
+def card_of(root, cid):
+    return read_snapshot(root).cards[cid]
+
+
+def unchanged(root, before: bytes) -> bool:
+    """The existing card took no patch: its body is as it was (back links of new cards only touch its relations)."""
+    now = card_of(root, EXISTING)
+    old_fm, old_body = parse_note(before)
+    rest = {k: v for k, v in old_fm.items() if k != 'relations'}
+    return cardfmt.sections(now.body) == {**cardfmt.sections(old_body), **{
+        k: v for k, v in cardfmt.sections(now.body).items() if k == '相关'}} and \
+        {k: v for k, v in now.fm.items() if k != 'relations'} == rest
+
+
+# --- the patch ----------------------------------------------------------------------------------------------------
+def test_an_extending_card_goes_into_its_existing_card_and_the_old_words_stay(tmp_path):
+    root, job_id, before = job(tmp_path)
+    checks = []
+    done = run(root, job_id, reviewer(checks))
+    assert done['status'] == 'applied', done.get('pending')
+    [check] = checks
+    [group] = check.packet['patch_set']
+    assert group['target'] == EXISTING and [c['slug'] for c in group['from']] == ['lantern-queue']
+    assert 'lantern-queue' not in {c['slug'] for c in check.packet['cards']}  # its level is the reviewer's
+    assert done['outcomes']['lantern-queue'] == 'patch' and done['patch_set'] == {'lantern-queue': 'patched'}
+    assert 'lantern-queue' not in {p['slug'] for p in done['produced']}
+    old = card_of(root, EXISTING)
+    props = cardfmt.propositions_of(old.body)
+    assert props == [f'Old proposition {i} about routing readers.' for i in (1, 2)] + LANTERN['propositions']
+    flash = cardfmt.flashcards_of(old.body)
+    assert flash[:2] == cardfmt.flashcards_of(parse_note(before)[1]) and flash[2:] == LANTERN['flashcards']
+    assert old.fm['sources'][-1]['propositions'] == ['P3', 'P4']
+    assert '## 直觉与易混对比\n- 直觉：路灯。\n' in old.body and 'status' not in old.fm  # nothing else set
+    [merged] = done['merged_into_existing']
+    assert merged['id'] == EXISTING and merged['from'] == ['lantern-queue'] and merged['propositions'] == ['P3', 'P4']
+    # arrival-order linked lantern-queue: the link goes to the card lantern-queue went into, as a program step
+    arrival = next(p['id'] for p in done['produced'] if p['slug'] == 'arrival-order')
+    assert {'type': 'part_of', 'target': EXISTING} == {k: v for k, v in card_of(root, arrival).fm['relations'][0].items()
+                                                        if k in ('type', 'target')}
+    ops = [(e['role'], e['op']) for e in decisions.chain(done['decision_record'], 'relations', 'arrival-order')]
+    assert ('program', 'redirect') in ops
+
+
+def test_a_proposition_the_existing_card_has_is_not_added_twice(tmp_path):
+    root, job_id, _ = job(tmp_path)
+    path = next((root / '10_Knowledge').rglob(f'{EXISTING}.md'))
+    path.write_bytes(path.read_bytes().replace(b'- P2. Old proposition 2 about routing readers.',
+                                               b'- P2. Items stay in arrival order.'))
+    done = run(root, job_id, reviewer())
+    props = cardfmt.propositions_of(card_of(root, EXISTING).body)
+    assert props.count('Items stay in arrival order.') == 1 and props[-1] == LANTERN['propositions'][1]
+    assert done['merged_into_existing'][0]['propositions'] == ['P3']
+
+
+def test_the_merge_check_must_give_each_existing_card_one_patch_from_the_cards_that_extend_it(tmp_path):
+    root, job_id, _ = job(tmp_path)
+    checks = []
+
+    def check(packet):
+        checks.append(packet)
+        if len(checks) == 1:
+            return keep_all(packet, _patches={EXISTING: {'propositions': ['Something no card says.']}})
+        return keep_all(packet)
+    done = run(root, job_id, reviewer(check=check))
+    assert done['status'] == 'applied' and len(checks) == 2 and done['outcomes']['lantern-queue'] == 'patch'
+    assert 'copied exactly from the cards that extend' in jobs.load(root, job_id)['chunks']['xc01']['last_validation_error']
+    with pytest.raises(ValueError, match='give card_exist its patch from lantern-queue, or dispute them'):
+        source_check.validate_answer(checks[0], {**keep_all(checks[0]), 'patches': []})
+
+
+@pytest.mark.parametrize('answer, problem', [
+    ({'patches': [{'target': EXISTING, 'propositions': ['Items stay in arrival order.']}] * 2}, 'gets one patch'),
+    ({'patches': [{'target': 'demo_other', 'propositions': ['x']}]}, 'existing card of the patch set'),
+    ({'patches': [{'target': EXISTING}]}, 'an empty patch'),
+    ({'patches': [{'target': EXISTING, 'replace': [{'proposition': 'P9', 'by': 'Items stay in arrival order.'}]}]},
+     'P1–P2'),
+    ({'patches': [], 'disputes': [{'slug': 'arrival-order', 'reason': 'r'}]}, 'a card of the patch set'),
+    ({'patches': [], 'disputes': [{'slug': 'lantern-queue', 'reason': ' '}]}, 'say why'),
+])
+def test_a_patch_or_dispute_out_of_form_is_refused(tmp_path, answer, problem):
+    root, job_id, _ = job(tmp_path)
+    checks = []
+    run(root, job_id, reviewer(checks, check=lambda p: {**keep_all(p), 'patches': [], 'disputes': []}))
+    frozen = checks[0].packet
+    with pytest.raises(ValueError, match=problem):
+        source_check.validate_answer(frozen, {**keep_all(frozen), **answer})
+
+
+# --- P10: a dispute sends the card back to its reviewer, and the merge check runs again as a whole -------------------
+def test_p10_a_disputed_card_is_judged_again_and_the_whole_merge_check_round_is_replaced(tmp_path):
+    root, job_id, before = job(tmp_path)
+    checks = []
+
+    def check(packet):
+        return keep_all(packet, _disputes=('lantern-queue',)) if not checks[1:] else keep_all(packet)
+    done = run(root, job_id, reviewer(checks, check=check))
+    assert done['status'] == 'applied', done.get('pending')
+    assert [c.chunk for c in checks] == ['xc01', 'xc01.r1']
+    assert 'lantern-queue' in {c['slug'] for c in checks[1].packet['cards']}  # now in the decision set
+    record = done['decision_record']
+    assert decisions.current(record, 'overlap.existing', 'lantern-queue')['reason'] == 'dispute'
+    assert {e['slot'] for e in decisions.values(record, 'overlap.source').values()} == {'xc01.r1'}
+    assert decisions.values(record, 'dispute') == {}  # the whole earlier round, its dispute too, is replaced
+    rounds = [e for e in record if e['kind'] == 'round']
+    assert [(r['slot'], r['supersedes_slot'], r['reason']) for r in rounds] == [('xc01.r1', 'xc01', 'dispute')]
+    assert done['outcomes']['lantern-queue'] == 'write' and unchanged(root, before)
+    # every merge-check value of the first round is gone with it, not only the disputed card's
+    first = [e for e in record if e['kind'] == 'value' and e['slot'] == 'xc01']
+    assert first and all(e['n'] in decisions.superseded(record) for e in first)
+
+
+def test_a_card_still_disputed_after_the_last_round_stays_pending(tmp_path):
+    root, job_id, before = job(tmp_path)
+    again = {'lantern-queue': lambda p: {'slug': 'lantern-queue', 'overlap': 'extends', 'with': [EXISTING],
+                                         'reason': 'it still only adds'}}
+    done = run(root, job_id, reviewer(check=lambda p: keep_all(p, _disputes=('lantern-queue',)),
+                                      rejudge=lambda p: again['lantern-queue'](p)))
+    assert done['status'] == 'partial'
+    assert [p['slug'] for p in done['pending']] == ['lantern-queue']
+    assert 'could not add it to' in done['pending'][0]['reason'] and unchanged(root, before)
+
+
+def test_a_judgement_again_must_name_existing_cards():
+    frozen = {'card': {'slug': 'lantern-queue'}}
+    with pytest.raises(ingest.IngestError, match='may name only existing'):
+        ingest._validate_rejudge(frozen, {'slug': 'lantern-queue', 'overlap': 'extends', 'with': ['arrival-order'],
+                                          'reason': 'r'}, {EXISTING})
+
+
+# --- a merge-check card that repeats a card of the patch set ----------------------------------------------------------
+def test_a_source_card_the_same_as_a_patch_set_card_goes_with_it_into_the_existing_card(tmp_path):
+    root, job_id, _ = job(tmp_path)
+    added = 'Lantern queues keep arrival order.'
+    rows = {'arrival-order': {'overlap': 'extends', 'with': ['lantern-queue'], 'reason': 'both say what order holds',
+                              'carry': {'propositions': [ARRIVAL['propositions'][0]]}}}
+
+    def check(packet):
+        return keep_all(packet, _patches={EXISTING: {'propositions': LANTERN['propositions'][:1]
+                                                     + [ARRIVAL['propositions'][0]]}}, **rows)
+    done = run(root, job_id, reviewer(check=check))
+    assert done['status'] == 'applied', done.get('pending')
+    assert done['outcomes']['arrival-order'] == 'merge_carry'
+    assert 'arrival-order' not in {p['slug'] for p in done['produced']}
+    assert cardfmt.propositions_of(card_of(root, EXISTING).body)[-1] == ARRIVAL['propositions'][0] != added
+
+
+# --- split slots -------------------------------------------------------------------------------------------------------
+def test_an_existing_card_that_would_grow_past_twelve_propositions_is_left_and_a_narrower_card_written(tmp_path):
+    root, job_id, before = job(tmp_path, n_props=11)
+    seen = []
+    done = run(root, job_id, reviewer(), producer(seen=seen))
+    assert done['status'] == 'applied', done.get('pending')
+    [task] = seen
+    assert task.chunk == 'sp01' and task.packet['existing_card']['id'] == EXISTING
+    assert unchanged(root, before)
+    [made] = done['split']
+    assert made['from'] == 'lantern-queue' and made['of'] == EXISTING and made['slot'] == 'sp01'
+    card = card_of(root, made['id'])
+    assert card.title == SPLIT_CARD['title'] and {'type': 'part_of', 'target': EXISTING} == {
+        k: v for k, v in card.fm['relations'][0].items() if k in ('type', 'target')}
+    record = done['decision_record']
+    assert decisions.current(record, 'overlap.split', 'lantern-queue')['data'] == {
+        'overlap': 'distinct', 'with': [EXISTING], 'card': SPLIT_CARD['slug']}
+    assert decisions.current(record, 'split.verdict', 'lantern-queue')['role'] == 'split_reviewer'
+
+
+def test_a_split_card_the_reviewer_rejects_is_rewritten_then_stays_pending(tmp_path):
+    root, job_id, before = job(tmp_path, n_props=11)
+    seen = []
+    done = run(root, job_id, reviewer(split_review=lambda p: {'decision': 'revise', 'restates': True,
+                                                              'reason': 'it says what P2 says'}),
+               producer(seen=seen))
+    assert [t.chunk for t in seen] == ['sp01', 'sp01.r1']
+    assert seen[1].packet['review_findings']['reason'] == 'it says what P2 says'
+    assert done['status'] == 'partial' and [p['slug'] for p in done['pending']] == ['lantern-queue']
+    assert unchanged(root, before)
+
+
+@pytest.mark.parametrize('change, problem', [
+    ({'propositions': ['Old proposition 3 about routing readers!']}, 'restate the propositions'),
+    ({'relations': [{'type': 'similar_to', 'target': EXISTING}]}, 'must link card_exist with part_of'),
+    ({'source_quotes': ['words the chunk does not have']}, 'source_quotes'),
+    ({'slug': 'lantern-queue-x', 'flashcards': [{'q': 'a::b', 'a': 'c'}] * 2}, 'without "::"'),
+])
+def test_a_split_card_that_restates_or_does_not_narrow_is_refused(change, problem):
+    item = {'with': EXISTING, 'existing_propositions': [f'Old proposition {i} about routing readers.' for i in (1, 2, 3)]}
+    payload = {'card': {**SPLIT_CARD, **change}}
+    with pytest.raises(ValueError, match=problem):
+        split.validate_card(item, payload, text=LANTERN['source_quotes'][0] + ' and more', taken={'lantern-queue'},
+                            catalog_types={'part_of', 'similar_to', 'depends_on'})
+
+
+def test_a_split_review_that_accepts_a_restating_card_is_refused():
+    with pytest.raises(ValueError, match='restates'):
+        split.validate_review({'decision': 'accept', 'restates': True, 'reason': 'r'})
+
+
+# --- conflicts and the switch ----------------------------------------------------------------------------------------
+def test_a_conflict_open_on_an_existing_card_stays_open_after_the_card_takes_a_patch(tmp_path):
+    root, job_id, _ = job(tmp_path)
+    lay = layouts.of(root)
+    snapshot = read_snapshot(root)
+    row = {'with': EXISTING, 'with_title': snapshot.cards[EXISTING].title, 'card': 'demo_earlier', 'slug': 'earlier',
+           'title': 'Earlier card', 'detail': 'they disagree on the order', 'by': 'reviewer', 'job_id': 'ingest-0',
+           'at': '2026-01-01T00:00:00Z', 'source_sha256': 'abc', 'with_digest': content_digest(snapshot.cards[EXISTING])}
+    path = root / lay.conflicts
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(inbox.registry_line(row))
+    assert len(ingest.open_conflicts(root, snapshot)) == 1
+    done = run(root, job_id, reviewer())
+    after = read_snapshot(root)
+    assert content_digest(after.cards[EXISTING]) != row['with_digest']  # the patch changed it
+    [still] = ingest.open_conflicts(root, after)
+    assert still['detail'] == row['detail'] and still['card'] == 'demo_earlier'
+    assert done['status'] == 'applied'
+
+
+def test_with_merging_off_an_extending_card_is_written_next_to_its_existing_card(tmp_path):
+    root, job_id = two_chunk_job(tmp_path, merge_into_existing=False)
+    before = sb_existing(root)
+    checks = []
+    done = run(root, job_id, reviewer(checks))
+    assert done['status'] == 'applied', done.get('pending')
+    assert all(not c.packet.get('patch_set') for c in checks)
+    assert unchanged(root, before) and done['patch_set'] == {'lantern-queue': 'written'}
+    [review] = [n for n in done['needs_review'] if n['title'] == LANTERN['title']]
+    assert review['with'] == EXISTING and 'merge_into_existing is off' in review['not_merged']
+    assert jobs.read_input(root, job_id)['settings']['merge_into_existing'] is False
+
+
+def test_an_existing_card_out_of_sb_format_cannot_take_a_patch_and_the_card_is_written_next_to_it(tmp_path):
+    root, job_id = two_chunk_job(tmp_path)  # the test vault's existing card has no propositions section
+    checks = []
+    done = run(root, job_id, reviewer(checks))
+    assert all(not c.packet.get('patch_set') for c in checks)
+    [review] = [n for n in done['needs_review'] if n['title'] == LANTERN['title']]
+    assert 'cannot take a patch: it has no propositions section' in review['not_merged']

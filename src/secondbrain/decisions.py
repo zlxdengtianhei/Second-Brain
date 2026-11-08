@@ -46,9 +46,16 @@ class Final:
 
 @dataclass(frozen=True)
 class Step:
-    role: str
+    role: str | tuple
     ops: tuple
     about: str
+
+    def takes(self, role: str) -> bool:
+        return role in self.role if isinstance(self.role, tuple) else role == self.role
+
+    @property
+    def roles(self) -> str:
+        return ' or '.join(self.role) if isinstance(self.role, tuple) else self.role
 
 
 #: Single values: value -> its final role, the reasons it may be judged again for, what it is.
@@ -84,8 +91,9 @@ STEPS = {
     'classification': (
         Step('owner', ('constrain',), "the owner's placement (--domain, --pillar, --topic) constrains it"),
         Step('producer', ('propose',), 'the producer files the card'),
-        Step('reviewer', ('accept', 'refile'), 'the reviewer accepts the place or refiles the card under an '
-                                               'existing topic (where a card is filed is its decision)'),
+        Step(('reviewer', 'split_reviewer'), ('accept', 'refile'),
+             'the reviewer (of a split card: the split reviewer) accepts the place or refiles the card under an '
+             'existing topic (where a card is filed is its decision)'),
         Step('program', ('topic_merge_refile', 'overflow'),
              'the program files the cards of a new topic the merge check found the same as another under that '
              'one (the placement\'s topic is kept), and turns cards of new topics past the limit pending'),
@@ -239,9 +247,9 @@ def step(entries: list, value: str, obj: str, op: str, *, role: str, slot: str, 
     steps = STEPS.get(value)
     if steps is None:
         raise DecisionError(f'{value!r} is not a composite value of the decision record (decisions.STEPS)')
-    index = next((i for i, s in enumerate(steps) if s.role == role), None)
+    index = next((i for i, s in enumerate(steps) if s.takes(role)), None)
     if index is None or op not in steps[index].ops:
-        allowed = '; '.join(f'{s.role}: {", ".join(s.ops)}' for s in steps)
+        allowed = '; '.join(f'{s.roles}: {", ".join(s.ops)}' for s in steps)
         raise DecisionError(f'{value} of {obj}: the {role} may not {op} (allowed: {allowed})')
     live = chain(entries, value, obj)
     number = max((e['chain'] for e in entries if e['kind'] == 'step' and e['value'] == value and e['object'] == obj),
@@ -264,7 +272,7 @@ def step(entries: list, value: str, obj: str, op: str, *, role: str, slot: str, 
     if live and live[-1]['index'] > index:
         raise DecisionError(f'{value} of {obj}: a {role} step ({op}) cannot come after a {live[-1]["role"]} step '
                             f'({live[-1]["op"]}) in one round; order: '
-                            + ' → '.join(s.role for s in steps))
+                            + ' → '.join(s.roles for s in steps))
     return _append(entries, {**entry, 'chain': max(number, 1)})
 
 
@@ -324,5 +332,5 @@ def table() -> str:
     rows += [f'| `{v}` | {f.role} | {", ".join(f.reasons) or "—"} | {f.about} |' for v, f in FINAL.items()]
     rows += ['', '| Composite value | Step | Role | Operations | What it is |', '|---|---|---|---|---|']
     for value, steps in STEPS.items():
-        rows += [f'| `{value}` | {i} | {s.role} | {", ".join(s.ops)} | {s.about} |' for i, s in enumerate(steps, 1)]
+        rows += [f'| `{value}` | {i} | {s.roles} | {", ".join(s.ops)} | {s.about} |' for i, s in enumerate(steps, 1)]
     return '\n'.join(rows) + '\n'

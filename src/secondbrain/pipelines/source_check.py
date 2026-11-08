@@ -44,6 +44,7 @@ from typing import Any, Callable
 
 from .. import decisions
 from ..overlap import LEVELS, TOPIC_LEVELS, with_problem
+from ..textnorm import plain
 
 SLOT = 'xc01'
 STEP = 'source_check'
@@ -81,11 +82,22 @@ SCHEMA = {
             'type': 'object', 'required': ['id', 'overlap'],
             'properties': {'id': _STR, 'overlap': {'type': 'string', 'enum': list(TOPIC_LEVELS)},
                            'with': _NSTR, 'reason': _NSTR}}},
+        'patches': {'type': 'array', 'items': {
+            'type': 'object', 'required': ['target'],
+            'properties': {'target': _STR,
+                           'propositions': {'type': 'array', 'items': _STR},
+                           'flashcards': {'type': 'array', 'items': _FLASHCARD},
+                           'replace': {'type': 'array', 'items': {
+                               'type': 'object', 'required': ['proposition', 'by'],
+                               'properties': {'proposition': _STR, 'by': _STR}}}}}},
+        'disputes': {'type': 'array', 'items': {
+            'type': 'object', 'required': ['slug', 'reason'], 'properties': {'slug': _STR, 'reason': _STR}}},
     }}
 
 
 def is_slot(name: str | None) -> bool:
-    return name == SLOT
+    """True for the slot of any round of the merge check (``xc01``, after a dispute ``xc01.r1`` ...)."""
+    return isinstance(name, str) and re.fullmatch(re.escape(SLOT) + r'(?:\.r[1-9]\d*)?', name) is not None
 
 
 def topic_key(domain, pillar, name) -> str:
@@ -94,12 +106,20 @@ def topic_key(domain, pillar, name) -> str:
 
 
 def needed(settled: list[dict]) -> bool:
-    """True when cards of the decision set (the ones still accepted) come from two or more chunks."""
-    return sum(1 for o in settled if o['accepted']) >= 2
+    """True when cards of the decision set (the ones still accepted) come from two or more chunks, or a card of the
+    patch set (``repeats``: it extends an existing card that can take a patch) waits for its patch."""
+    return sum(1 for o in settled if o['accepted']) >= 2 or any(o.get('repeats') for o in settled)
+
+
+def round_slot(n: int) -> str:
+    """The slot of the merge check's round ``n`` (0: the first; a later one after a dispute)."""
+    return SLOT if n == 0 else f'{SLOT}.r{n}'
+
 
 
 def frozen_input(settled: list[dict], source: dict, *, relation_views: dict,
-                 candidates: Callable[[dict], list[dict]] = lambda card: []) -> dict:
+                 candidates: Callable[[dict], list[dict]] = lambda card: [],
+                 existing: Callable[[str], dict] | None = None) -> dict:
     """What the reviewer judges: every card of the decision set and every new topic, sorted by where they are filed.
 
     ``candidates(card)`` gives the existing cards (brief view, with ``rank`` and
@@ -133,8 +153,19 @@ def frozen_input(settled: list[dict], source: dict, *, relation_views: dict,
         for key, t in o['topics'].items():
             topics.append({'id': f'T{len(topics) + 1}', 'domain': key[0], 'pillar': key[1], 'name': key[2],
                            'boundary': t.get('boundary'), 'chunk': o['chunk'], 'cards': counts.get(key, 0)})
+    patch_set = {}
+    for o in settled:  # the cards the chunk reviewers found extend an existing card, by that card
+        for slug, c in (o.get('repeats') or {}).items():
+            target = c['_with']
+            group = patch_set.setdefault(target, {'target': target, 'card': existing(target) if existing else None,
+                                                  'from': []})
+            group['from'].append({'slug': slug, 'chunk': o['chunk'], 'title': c['title'], 'essence': c.get('essence'),
+                                  'propositions': list(c.get('propositions') or []),
+                                  'flashcards': [{'q': f.get('q'), 'a': f.get('a')}
+                                                 for f in c.get('flashcards') or [] if isinstance(f, dict)]})
     return {'source': {'filename': source.get('filename'), 'chunks': len(settled)},
-            **relation_views, 'cards': cards, 'new_topics': topics}
+            **relation_views, 'cards': cards, 'new_topics': topics,
+            'patch_set': [patch_set[t] for t in sorted(patch_set)]}
 
 
 def validate_answer(frozen: dict, payload: Any, closed: Callable[[str, str, str], str | None] | None = None) -> dict:
@@ -148,7 +179,8 @@ def validate_answer(frozen: dict, payload: Any, closed: Callable[[str, str, str]
         raise ValueError('the answer must be {"cards": [...], "new_topics": [...]}')
     errors = []
     cards = {c['slug']: c for c in frozen['cards']}
-    rows = _card_rows(payload['cards'], cards, errors)
+    patch_cards = {c['slug']: c for g in frozen.get('patch_set') or [] for c in g['from']}
+    rows = _card_rows(payload['cards'], cards, errors, also=patch_cards)
     missing = [s for s in cards if s not in rows]
     if missing:
         errors.append(f'cards: give a level for every card; missing: {", ".join(missing)}')
@@ -164,7 +196,7 @@ def validate_answer(frozen: dict, payload: Any, closed: Callable[[str, str, str]
                 errors.append(f'cards: {slug} names {other}, which is itself "{rows[other]["overlap"]}"; '
                               f'name the card that stays')
     # what each kept card ends with: its own propositions and flashcards plus what extends cards carry to it
-    totals = {s: [len(c['propositions']), len(c['flashcards'])] for s, c in cards.items()}
+    totals = {s: [len(c['propositions']), len(c['flashcards'])] for s, c in cards.items()}  # patch set: a split
     replaced = set()
     for slug, into in merged.items():
         carry = rows[slug].get('carry') or {}
@@ -173,16 +205,17 @@ def validate_answer(frozen: dict, payload: Any, closed: Callable[[str, str, str]
         if stray:
             errors.append(f'cards: {slug}.carry.propositions must be copied exactly from its propositions; '
                           f'not found: {stray[0]!r}')
-        own = [(f['q'], f['a']) for f in cards[slug]['flashcards']]
+        own = [(f['q'], f['a']) for f in cards[slug]['flashcards']]  # noqa: the card's own review cards
         if any(not isinstance(f, dict) or (f.get('q'), f.get('a')) not in own for f in flashcards):
             errors.append(f'cards: {slug}.carry.flashcards must be copied exactly from its flashcards')
         for i, swap in enumerate(carry.get('replace') or []):
             at = f'cards: {slug}.carry.replace[{i}]'
             ref, by = (swap.get('proposition'), swap.get('by')) if isinstance(swap, dict) else (None, None)
             number = int(ref[1:]) if isinstance(ref, str) and re.fullmatch(r'P[1-9]\d*', ref) else 0
-            if into in cards and not 1 <= number <= len(cards[into]['propositions']):
+            target = cards.get(into) or patch_cards.get(into)
+            if target and not 1 <= number <= len(target['propositions']):
                 errors.append(f'{at}.proposition must name one of the propositions of {into} (P1–P'
-                              f'{len(cards[into]["propositions"])})')
+                              f'{len(target["propositions"])})')
             elif (into, number) in replaced:
                 errors.append(f'{at}: {into} {ref} is replaced twice')
             if by not in cards[slug]['propositions'] or by in props:
@@ -230,9 +263,77 @@ def validate_answer(frozen: dict, payload: Any, closed: Callable[[str, str, str]
                 slug not in targeted and not (isinstance(row.get('alone'), str) and row['alone'].strip()):
             errors.append(f'cards: {slug} has no relation; link it to the cards it belongs with, or say in '
                           '"alone" why it stands alone')
+    _check_patches(frozen, payload, rows, merged, errors)
     if errors:
         raise ValueError('; '.join(errors))
     return payload
+
+
+def _check_patches(frozen: dict, payload: dict, rows: dict, merged: dict, errors: list) -> None:
+    """Each existing card of the patch set gets one patch, from the cards that extend it, or its cards are disputed."""
+    groups = {g['target']: g for g in frozen.get('patch_set') or []}
+    owner = {c['slug']: t for t, g in groups.items() for c in g['from']}
+    disputed = {}
+    for i, row in enumerate(payload.get('disputes') or []):
+        slug = row.get('slug') if isinstance(row, dict) else None
+        if slug not in owner:
+            errors.append(f'disputes[{i}].slug must be a card of the patch set (one that extends an existing card)')
+        elif not isinstance(row.get('reason'), str) or not row['reason'].strip():
+            errors.append(f'disputes[{i}]: say why {slug} cannot go into {owner[slug]}')
+        else:
+            disputed[slug] = row
+    seen = set()
+    for i, row in enumerate(payload.get('patches') or []):
+        at = f'patches[{i}]'
+        target = row.get('target') if isinstance(row, dict) else None
+        if target not in groups:
+            errors.append(f'{at}.target must be an existing card of the patch set')
+            continue
+        if target in seen:
+            errors.append(f'{at}: {target} gets one patch; put everything for it in one')
+            continue
+        seen.add(target)
+        sources = [c for c in groups[target]['from'] if c['slug'] not in disputed]
+        merged_in = [s for s, into in merged.items() if into in {c['slug'] for c in sources}]
+        props = {p for c in sources for p in c['propositions']} | {p for s in merged_in
+                                                                   for p in _row_items(rows, s, 'propositions')}
+        cards_ = {(f['q'], f['a']) for c in sources for f in c['flashcards']} | {
+            (f.get('q'), f.get('a')) for s in merged_in for f in _row_items(rows, s, 'flashcards')}
+        if not sources:
+            errors.append(f'{at}: every card that extends {target} is disputed; give it no patch')
+            continue
+        added, flashcards = row.get('propositions') or [], row.get('flashcards') or []
+        if not (added or flashcards or row.get('replace')):
+            errors.append(f'{at}: an empty patch; when nothing can go into {target}, dispute its cards')
+        stray = [x for x in added if x not in props]
+        if stray:
+            errors.append(f'{at}.propositions must be copied exactly from the cards that extend {target}; not found: '
+                          f'{stray[0]!r}')
+        if any(not isinstance(f, dict) or (f.get('q'), f.get('a')) not in cards_ for f in flashcards):
+            errors.append(f'{at}.flashcards must be copied exactly from the cards that extend {target}')
+        total = len((groups[target]['card'] or {}).get('propositions') or [])
+        swapped = set()
+        for k, swap in enumerate(row.get('replace') or []):
+            ref, by = (swap.get('proposition'), swap.get('by')) if isinstance(swap, dict) else (None, None)
+            number = int(ref[1:]) if isinstance(ref, str) and re.fullmatch(r'P[1-9]\d*', ref) else 0
+            if not 1 <= number <= total:
+                errors.append(f'{at}.replace[{k}].proposition must name one of the propositions of {target} '
+                              f'(P1–P{total})')
+            elif number in swapped:
+                errors.append(f'{at}.replace[{k}]: {target} P{number} is replaced twice')
+            if by not in props or by in added:
+                errors.append(f'{at}.replace[{k}].by must be a proposition of a card that extends {target}, copied '
+                              'exactly, and not also in propositions')
+            swapped.add(number)
+    for target, group in groups.items():
+        left = [c['slug'] for c in group['from'] if c['slug'] not in disputed]
+        if left and target not in seen:
+            errors.append(f'patches: give {target} its patch from {", ".join(left)}, or dispute them')
+
+
+def _row_items(rows: dict, slug: str, key: str) -> list:
+    """What a card judged against the source carries (its ``carry``), for a patch that takes it on."""
+    return list(((rows.get(slug) or {}).get('carry') or {}).get(key) or [])
 
 
 def link_candidates(card: dict) -> list:
@@ -248,8 +349,13 @@ def _final_domains(frozen: dict, topics: dict) -> dict:
     return {c['slug']: moved.get((c['domain'], c['pillar'], c['topic']), c['domain']) for c in frozen['cards']}
 
 
-def _card_rows(items, cards: dict, errors: list) -> dict:
-    """The answer's card rows by slug, each with a level against the source and a fitting ``with``."""
+def _card_rows(items, cards: dict, errors: list, also: dict | None = None) -> dict:
+    """The answer's card rows by slug, each with a level against the source and a fitting ``with``.
+
+    ``also``: the patch set's cards, which ``with`` may name (a card of the source that extends or repeats one of
+    them goes, with it, into its existing card) but which are not judged here.
+    """
+    also = also or {}
     out = {}
     for i, row in enumerate(items):
         at = f'cards[{i}]'
@@ -270,7 +376,7 @@ def _card_rows(items, cards: dict, errors: list) -> dict:
             errors.append(f'{at}: {problem}')
             continue
         if level != 'distinct':
-            stray = [x for x in ids if x not in cards or x == slug]
+            stray = [x for x in ids if (x not in cards and x not in also) or x == slug]
             if stray:
                 errors.append(f'{at}.with must name other cards of this packet (slugs), not {", ".join(stray)}')
                 continue
@@ -321,6 +427,9 @@ def _topic_rows(items, known: set, errors: list) -> dict:
 def record(frozen: dict, answer: dict, entries: list, *, slot: str, run: str | None) -> None:
     """Put the answer's values in the decision record: each card's level against the source, each topic's, the links."""
     topic_of = {t['id']: topic_key(t['domain'], t['pillar'], t['name']) for t in frozen['new_topics']}
+    number = int(slot.rsplit('.r', 1)[1]) if '.r' in slot else 0
+    if number:  # run again after a dispute: this round replaces all of the one before
+        decisions.supersede_round(entries, role=ROLE, slot=slot, earlier_slot=round_slot(number - 1), reason='dispute')
     for row in answer['cards']:
         data = {'overlap': row['overlap'], 'with': list(row.get('with') or []) if row['overlap'] != 'distinct' else [],
                 'reason': row.get('reason')}
@@ -338,6 +447,12 @@ def record(frozen: dict, answer: dict, entries: list, *, slot: str, run: str | N
         decisions.record(entries, 'topic.same', topic_of[row['id']],
                          {'overlap': row['overlap'], 'with': topic_of.get(row.get('with')), 'reason': row.get('reason')},
                          role=ROLE, slot=slot, run=run)
+    for row in answer.get('patches') or []:
+        decisions.record(entries, 'patch', row['target'],
+                         {k: row.get(k) or [] for k in ('propositions', 'flashcards', 'replace')},
+                         role=ROLE, slot=slot, run=run)
+    for row in answer.get('disputes') or []:
+        decisions.record(entries, 'dispute', row['slug'], {'reason': row['reason']}, role=ROLE, slot=slot, run=run)
 
 
 def apply(settled: list[dict], frozen: dict, entries: list) -> tuple[list[dict], dict]:
@@ -360,7 +475,8 @@ def apply(settled: list[dict], frozen: dict, entries: list) -> tuple[list[dict],
     """
     judged = {(c['chunk'], c['slug']) for c in frozen['cards']}
     now = {(o['chunk'], s) for o in settled for s in o['accepted']}
-    if judged != now:
+    patch_set = {(c['chunk'], c['slug']) for g in frozen.get('patch_set') or [] for c in g['from']}
+    if judged != now or patch_set != {(o['chunk'], s) for o in settled for s in o.get('repeats') or {}}:
         raise ValueError('the merge check judged a different set of cards than the chunks now accept')
     levels = decisions.values(entries, 'overlap.source')
     lacking = sorted(s for _, s in judged if s not in levels)
@@ -374,6 +490,7 @@ def apply(settled: list[dict], frozen: dict, entries: list) -> tuple[list[dict],
     refile = {place_of[k]: place_of[e['data']['with']] for k, e in topic_rows.items()
               if k in place_of and e['data']['overlap'] == 'same'}
     original = {s: c for o in settled for s, c in o['accepted'].items()}
+    repeats = {s: c for o in settled for s, c in (o.get('repeats') or {}).items()}  # they go into existing cards
     kept = {s: dict(c) for o in settled for s, c in o['accepted'].items() if s not in merged}
     for slug in kept:  # the cards of a topic merged into another are filed under that one
         key = tuple(decisions.fold(entries, 'classification', slug).get(k) for k in ('domain', 'pillar', 'topic'))
@@ -381,9 +498,12 @@ def apply(settled: list[dict], frozen: dict, entries: list) -> tuple[list[dict],
             target = dict(zip(('domain', 'pillar', 'topic'), refile[key]))
             decisions.step(entries, 'classification', slug, 'topic_merge_refile', role='program', slot=SLOT,
                            data={**target, 'from': list(key)})
-    carried, repeats, replacements = {}, {}, {}
+    carried, skipped_by, replacements = {}, {}, {}
     for slug, into in merged.items():  # what an extends card adds goes to the card it extends
         carry = rows[slug].get('carry') or {}
+        if into not in kept:  # a card of the patch set: what goes into its existing card is that card's patch
+            carried[slug], replacements[slug] = (0, 0), 0
+            continue
         keep = kept[into]
         props, flashcards = list(keep.get('propositions') or []), list(keep.get('flashcards') or [])
         new_p, new_f, skipped = [], [], 0
@@ -391,21 +511,21 @@ def apply(settled: list[dict], frozen: dict, entries: list) -> tuple[list[dict],
             number = int(swap['proposition'][1:])
             props[number - 1] = swap['by']
             new_p.append(number)
-        have_p, have_q = {_plain(x) for x in props}, {_plain(f.get('q')) for f in flashcards}
+        have_p, have_q = {plain(x) for x in props}, {plain(f.get('q')) for f in flashcards}
         for text in carry.get('propositions') or []:
-            if _plain(text) in have_p:  # the kept card says it already, word for word
+            if plain(text) in have_p:  # the kept card says it already, word for word
                 skipped += 1
                 continue
-            have_p.add(_plain(text))
+            have_p.add(plain(text))
             props.append(text)
             new_p.append(len(props))
         for f in original[slug].get('flashcards') or []:
             if {'q': f.get('q'), 'a': f.get('a')} not in (carry.get('flashcards') or []):
                 continue
-            if _plain(f.get('q')) in have_q:
+            if plain(f.get('q')) in have_q:
                 skipped += 1
                 continue
-            have_q.add(_plain(f.get('q')))
+            have_q.add(plain(f.get('q')))
             flashcards.append(f)
             new_f.append(len(flashcards))
         keep['propositions'], keep['flashcards'] = props, flashcards
@@ -417,9 +537,9 @@ def apply(settled: list[dict], frozen: dict, entries: list) -> tuple[list[dict],
             # to the card's `sources`)
             keep['_carried'] = list(keep.get('_carried') or []) + [
                 {'locator': own, 'propositions': new_p, 'flashcards': new_f}]
-        carried[slug], repeats[slug] = (len(new_p), len(new_f)), skipped
+        carried[slug], skipped_by[slug] = (len(new_p), len(new_f)), skipped
         replacements[slug] = len(carry.get('replace') or [])
-    moved = _merge_relations(entries, kept, merged)
+    moved = _merge_relations(entries, kept, merged, repeats)
     added = [{'from': e['object'], 'type': e['data']['relation']['type'], 'target': e['data']['relation']['target']}
              for e in entries if e['kind'] == 'step' and e['value'] == 'relations' and e['role'] == ROLE
              and e['n'] not in decisions.superseded(entries) and e['object'] in kept
@@ -427,7 +547,7 @@ def apply(settled: list[dict], frozen: dict, entries: list) -> tuple[list[dict],
                      for r in decisions.fold(entries, 'relations', e['object']))]
     # [[links]] in the text of the cards that stay go to the card a merged card went to (J4: a contrast line
     # still named a merged card); a link that would point at the card itself becomes plain text
-    retitle = {original[s]['title']: kept[into]['title'] for s, into in merged.items()}
+    retitle = {original[s]['title']: (kept.get(into) or repeats[into])['title'] for s, into in merged.items()}
     rewritten = sum(_retitle_card(card, retitle) for card in kept.values()) if retitle else 0
     for slug in kept if retitle else ():  # and in the notes of their relations
         for r in decisions.fold(entries, 'relations', slug):
@@ -447,7 +567,7 @@ def apply(settled: list[dict], frozen: dict, entries: list) -> tuple[list[dict],
         'merged': [{'slug': s, 'title': original[s]['title'], 'into': into, 'reason': rows[s]['reason'],
                     'carried': {'propositions': carried[s][0], 'flashcards': carried[s][1]},
                     **({'replaced': replacements[s]} if replacements[s] else {}),
-                    **({'repeats_skipped': repeats[s]} if repeats[s] else {})}
+                    **({'repeats_skipped': skipped_by[s]} if skipped_by.get(s) else {})}
                    for s, into in merged.items()],
         'rewritten_links': rewritten,
         'added_links': added,
@@ -458,15 +578,18 @@ def apply(settled: list[dict], frozen: dict, entries: list) -> tuple[list[dict],
                             'reason': topic_rows[topic_key(*k)]['data'].get('reason')}
                            for k, v in refile.items() if k in by_key],
         'moved_relations': moved,
-        'merged_into': dict(merged)}
+        'merged_into': dict(merged),
+        'patches': {t: e['data'] for t, e in decisions.values(entries, 'patch').items()},
+        'disputes': {s: e['data']['reason'] for s, e in decisions.values(entries, 'dispute').items()}}
     return out, report
 
 
-def _merge_relations(entries: list, kept: dict, merged: dict) -> list:
+def _merge_relations(entries: list, kept: dict, merged: dict, repeats: dict | None = None) -> list:
     """Record the program steps that send the relations of merged cards, and the relations to them, to the card they
     went to; returns the moved ones (``from``, ``type``, ``target``, ``was_on``)."""
     def step(slug, op, data):
         decisions.step(entries, 'relations', slug, op, role='program', slot=SLOT, data=data)
+    kept = {**kept, **{s: c for s, c in (repeats or {}).items() if s in set(merged.values())}}
     rels = {s: decisions.fold(entries, 'relations', s) for s in list(kept) + list(merged)}
     for slug in kept:  # links to a merged card go to the card it went to
         own = {r['target'] for r in rels[slug]}
@@ -493,11 +616,6 @@ def _merge_relations(entries: list, kept: dict, merged: dict) -> list:
             now.append(relation)
             moved.append({'from': into, 'type': r['type'], 'target': target, 'was_on': slug})
     return moved
-
-
-def _plain(text) -> str:
-    """Text without spaces and punctuation, case folded: what counts as saying the same words."""
-    return re.sub(r'[\W_]+', '', str(text or '')).casefold()
 
 
 def _retitle(text, mapping: dict, own: str):

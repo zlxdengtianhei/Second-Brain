@@ -33,7 +33,7 @@ PACKAGE = Path(secondbrain.__file__).parent
 
 # --- one scale: the prompts list exactly overlap.LEVELS ----------------------------------------------------------
 INGEST_PROMPTS = ['produce_cards.md', 'review_cards.md', 'repair_cards.md', 'retry_cards.md', 'retry_review_cards.md',
-                  'source_check.md']
+                  'source_check.md', 'review_dispute.md', 'split_card.md', 'review_split.md']
 
 
 def retired_levels(text: str) -> list[str]:
@@ -217,9 +217,9 @@ def two_chunk_reviewer(seen, check=None):
     return respond
 
 
-def two_chunk_job(tmp_path, check=None, name='vault'):
+def two_chunk_job(tmp_path, name='vault', **fields):
     root = build_ingest_vault(tmp_path / name)
-    settings(chunk_chars=1000)
+    settings(chunk_chars=1000, **fields)
     (root / '00_Inbox' / SOURCE_NAME).write_text(SOURCE, encoding='utf-8')
     job = ingest.prepare(root, root / '00_Inbox' / SOURCE_NAME)
     return root, job['job_id']

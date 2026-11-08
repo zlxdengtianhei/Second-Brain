@@ -154,7 +154,7 @@ def frozen_settings(root: Path, packet: dict):
         return None
     ingest = {k: frozen[k] for k in ('chunk_chars', 'new_topics_per_source', 'id_prefix', 'after_ingest',
                                      'candidates_k', 'candidates_chars', 'candidates_hop', 'candidates_shelf',
-                                     'review_named', 'review_words_view') if k in frozen}
+                                     'review_named', 'review_words_view', 'merge_into_existing') if k in frozen}
     return config.Settings(
         vault=Path(root).absolute(),
         layout=layouts.VaultLayout.from_mapping(frozen['layout']) if 'layout' in frozen else layouts.of(root),
