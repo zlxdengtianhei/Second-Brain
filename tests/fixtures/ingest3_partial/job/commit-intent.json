@@ -1,0 +1,200 @@
+{
+  "result": {
+    "status": "partial",
+    "new_card_count": 2,
+    "produced": [
+      {
+        "id": "kc_lantern-queue",
+        "slug": "lantern-queue",
+        "title": "Lantern queue",
+        "domain": "attention",
+        "path": "10_Knowledge/attention/Lantern queue.md",
+        "chunk": "c01"
+      },
+      {
+        "id": "kc_lit-marker-cost",
+        "slug": "lit-marker-cost",
+        "title": "Lit marker memory cost",
+        "domain": "attention",
+        "path": "10_Knowledge/attention/Lit marker memory cost.md",
+        "chunk": "c01"
+      }
+    ],
+    "pending": [
+      {
+        "slug": "marker-dimming",
+        "title": "Marker dimming",
+        "reason": "still wrong",
+        "chunk": "c01"
+      }
+    ],
+    "needs_taxonomy": [],
+    "duplicates": [
+      {
+        "slug": "queue-order",
+        "title": "Arrival order in lantern queues",
+        "duplicate_of": "card_exist",
+        "reason": "already covered by the existing card",
+        "chunk": "c01"
+      }
+    ],
+    "out_of_scope": [
+      {
+        "chunk": "c01",
+        "source_quote": "Thanks for reading, see you next week!",
+        "reason": "PRODUCER-REASON-8 sign-off"
+      }
+    ],
+    "new_topics": [
+      {
+        "domain": "attention",
+        "pillar": "Token routing",
+        "name": "Markers"
+      }
+    ],
+    "skipped_relations": [],
+    "restored_relations": [],
+    "maintenance": [],
+    "needs_review": [],
+    "conflicts": [],
+    "source_record": {
+      "sha256": "cde2d135ac446f374c1ae622a3df4543b657c881cabbe87480b7eae19bcec806",
+      "path": "40_Sources/cde2d135ac446f37/lantern_queues.md"
+    },
+    "inbox_moved": true,
+    "projection_metrics": {
+      "mocs": {
+        "Example Attention Map": {
+          "domains": [
+            "attention",
+            "transformer"
+          ],
+          "page_count": 2,
+          "root": "20_MOCs/Example Attention Map.md",
+          "card_count": 3,
+          "classified": 3,
+          "unclassified": 0,
+          "invalid": 0,
+          "pages": [
+            {
+              "path": "20_MOCs/Example Attention Map.md",
+              "label": "root",
+              "cards": 0,
+              "max_topic_len": 0,
+              "visual_lines": 21
+            },
+            {
+              "path": "20_MOCs/Example Attention Map/01Tokenrouting--01.md",
+              "label": "page 1",
+              "cards": 3,
+              "max_topic_len": 2,
+              "visual_lines": 22
+            }
+          ]
+        }
+      },
+      "total_pages": 2,
+      "covered_count": 3,
+      "card_count": 4,
+      "covered": [
+        "card_exist",
+        "kc_lantern-queue",
+        "kc_lit-marker-cost"
+      ],
+      "unknown_domain_cards": []
+    },
+    "diagrams": [
+      {
+        "ref": "lit-marker-cost",
+        "status": "skip",
+        "attempt": 0,
+        "reason": "fact card: a single fact, definition or field list reads better as text or a list"
+      },
+      {
+        "ref": "lantern-queue",
+        "status": "skip",
+        "attempt": 0,
+        "reason": "the propositions already say it; a picture adds nothing"
+      }
+    ],
+    "same_family": false,
+    "hint": "sb ingest --retry ingest-cde2d135ac446f37"
+  },
+  "checks": {
+    "_data/secondbrain/catalog.json": "c51bf03a0e9cef5cf73aafb1c54239a1ad8a573371fa5a2face501a63f0eb14a",
+    "20_MOCs/_pillars/Example Pebble Map.yaml": "a9a12e97015cb08abf9135694d184281dad4cd9e51afb25223a28f872c239710",
+    "10_Knowledge/pebbles/Pebble sizes.md": "b6cb24511a84084a60e05480ef1de97c8bcdb2df9e6abfa4b5e4ee175cccfb8d"
+  },
+  "changes": [
+    {
+      "path": "10_Knowledge/attention/Lantern queue.md",
+      "before_sha256": null,
+      "after": "LS0tCmlkOiBrY19sYW50ZXJuLXF1ZXVlCnRpdGxlOiBMYW50ZXJuIHF1ZXVlCmtpbmQ6IGNvbmNlcHQKZG9tYWluOiBhdHRlbnRpb24KcGlsbGFyOiBUb2tlbiByb3V0aW5nCnRvcGljOiBPdmVydmlldwp0YWdzOgotIHJldmlldwotIGZsYXNoY2FyZHMvYXR0ZW50aW9uCmFsaWFzZXM6Ci0gbGFudGVybiBsaXN0CnNvdXJjZXM6Ci0gcGF0aDogNDBfU291cmNlcy9jZGUyZDEzNWFjNDQ2ZjM3L2xhbnRlcm5fcXVldWVzLm1kCiAgc2hhMjU2OiBjZGUyZDEzNWFjNDQ2ZjM3NGMxYWU2MjJhM2RmNDU0M2I2NTdjODgxY2FiYmU4NzQ4MGI3ZWFlMTliY2VjODA2CiAgbG9jYXRvcjogQSBsYW50ZXJuIHF1ZXVlIGtlZXBzIGV2ZXJ5IGl0ZW0gaW4gYXJyaXZhbCBvcmRlciBidXQgbGV0cyBhIHJlYWRlciBza2lwIGFoZWFkIGJ5IGxpdCBtYXJrZXJzLgpyZWxhdGlvbnM6Ci0gdHlwZTogc2ltaWxhcl90bwogIHRhcmdldDogY2FyZF9leGlzdAogIG5vdGU6IGJvdGggcm91dGUgcmVhZGVycyBwYXN0IGl0ZW1zCi0gdHlwZTogZGVwZW5kc19vbgogIHRhcmdldDoga2NfbGl0LW1hcmtlci1jb3N0CnN0YXR1czogY29uZmlybWVkCmNyZWF0ZWQ6IDIwMjYtMTEtMDgKLS0tCiMjIEVzc2VuY2UKQSBsYW50ZXJuIHF1ZXVlIGtlZXBzIGFycml2YWwgb3JkZXIgYW5kIGxldHMgcmVhZGVycyBza2lwIGFoZWFkIGJ5IGxpdCBtYXJrZXJzLgoKIyMgUHJvcG9zaXRpb25zCi0gUDEuIEl0ZW1zIHN0YXkgaW4gYXJyaXZhbCBvcmRlci4KLSBQMi4gUmVhZGVycyBza2lwIGFoZWFkIGJ5IGZvbGxvd2luZyBsaXQgbWFya2Vycy4KCiMjIEludHVpdGlvbiBhbmQgY29udHJhc3RzCi0gSW50dWl0aW9uOiBMaWtlIGxhbXAgcG9zdHMgYWxvbmcgYSByb2FkOiB5b3UgY2FuIHdhbGsgdG8gdGhlIG5leHQgbGFtcCB3aXRob3V0IGNvdW50aW5nIHN0b25lcy4KLSBDb250cmFzdDogVW5saWtlIGFuIGluZGV4LCBtYXJrZXJzIGFyZSBwbGFjZWQgYnkgY291bnQsIG5vdCBieSBrZXkuCgojIyBSZWxhdGVkCi0gc2ltaWxhcl90bzo6IFtb5bey5pyJ5Y2hXV0gKGJvdGggcm91dGUgcmVhZGVycyBwYXN0IGl0ZW1zKQotIGRlcGVuZHNfb246OiBbW0xpdCBtYXJrZXIgbWVtb3J5IGNvc3RdXQoKIyMgUmV2aWV3IGNhcmRzCldoYXQgb3JkZXIgZG9lcyBhIGxhbnRlcm4gcXVldWUga2VlcD86OkFycml2YWwgb3JkZXIuCkhvdyBkb2VzIGEgcmVhZGVyIHNraXAgYWhlYWQ/OjpCeSBqdW1waW5nIHRvIGEgbGl0IG1hcmtlci4K"
+    },
+    {
+      "path": "10_Knowledge/attention/Lit marker memory cost.md",
+      "before_sha256": null,
+      "after": "LS0tCmlkOiBrY19saXQtbWFya2VyLWNvc3QKdGl0bGU6IExpdCBtYXJrZXIgbWVtb3J5IGNvc3QKa2luZDogZmFjdApkb21haW46IGF0dGVudGlvbgpwaWxsYXI6IFRva2VuIHJvdXRpbmcKdG9waWM6IE1hcmtlcnMKdGFnczoKLSByZXZpZXcKLSBmbGFzaGNhcmRzL2F0dGVudGlvbgpzb3VyY2VzOgotIHBhdGg6IDQwX1NvdXJjZXMvY2RlMmQxMzVhYzQ0NmYzNy9sYW50ZXJuX3F1ZXVlcy5tZAogIHNoYTI1NjogY2RlMmQxMzVhYzQ0NmYzNzRjMWFlNjIyYTNkZjQ1NDNiNjU3Yzg4MWNhYmJlODc0ODBiN2VhZTE5YmNlYzgwNgogIGxvY2F0b3I6IEEgd3JpdGVyIGxpZ2h0cyBhIG1hcmtlciBldmVyeSBlaWdodCBpdGVtcy4KcmVsYXRpb25zOgotIHR5cGU6IGRlcGVuZHNfb24KICB0YXJnZXQ6IGtjX2xhbnRlcm4tcXVldWUKICBub3RlOiBtYXJrZXJzIGJlbG9uZyB0byB0aGUgcXVldWUKLSB0eXBlOiBwYXJ0X29mCiAgdGFyZ2V0OiBjYXJkX2V4aXN0CiAgbm90ZTogd2VhayBndWVzcwogIHRpZXI6IGV4dGVuc2lvbgpzdGF0dXM6IGNvbmZpcm1lZApjcmVhdGVkOiAyMDI2LTExLTA4Ci0tLQojIyBFc3NlbmNlCkVhY2ggbGl0IG1hcmtlciBjb3N0cyBvbmUgZXh0cmEgd29yZCwgb25lIG1hcmtlciBwZXIgZWlnaHQgaXRlbXMuCgojIyBQcm9wb3NpdGlvbnMKLSBQMS4gQSB3cml0ZXIgbGlnaHRzIGEgbWFya2VyIGV2ZXJ5IGVpZ2h0IGl0ZW1zLgotIFAyLiBFYWNoIG1hcmtlciBjb3N0cyBvbmUgd29yZCBvZiBtZW1vcnk7IDgwMCBpdGVtcyBjYXJyeSAxMDAgbWFya2Vycy4KCiMjIFJlbGF0ZWQKLSBkZXBlbmRzX29uOjogW1tMYW50ZXJuIHF1ZXVlXV0gKG1hcmtlcnMgYmVsb25nIHRvIHRoZSBxdWV1ZSkKCjxkZXRhaWxzPjxzdW1tYXJ5PkV4dGVuc2lvbjogcG9zc2libGUgcmVsYXRpb25zICgxKTwvc3VtbWFyeT4KCi0gW1vlt7LmnInljaFdXSDigJQgcGFydF9vZiAod2VhayBndWVzcykKCjwvZGV0YWlscz4KCiMjIFJldmlldyBjYXJkcwpIb3cgb2Z0ZW4gaXMgYSBtYXJrZXIgbGl0Pzo6RXZlcnkgZWlnaHQgaXRlbXMuCkhvdyBtYW55IG1hcmtlcnMgZG8gODAwIGl0ZW1zIGNhcnJ5Pzo6MTAwLgpXaGF0IGRvZXMgb25lIG1hcmtlciBjb3N0Pzo6T25lIGV4dHJhIHdvcmQgb2YgbWVtb3J5Lgo="
+    },
+    {
+      "path": "10_Knowledge/attention/card_exist.md",
+      "before_sha256": "7d6ab58f499fae29c852ee411b9102de6a58618b472e966700d329b9789cbcdb",
+      "after": "LS0tCmlkOiBjYXJkX2V4aXN0CnRpdGxlOiDlt7LmnInljaEKZG9tYWluOiBhdHRlbnRpb24KcGlsbGFyOiBUb2tlbiByb3V0aW5nCnRvcGljOiBPdmVydmlldwpyZWxhdGlvbnM6Ci0gdHlwZTogc2ltaWxhcl90bwogIHRhcmdldDoga2NfbGFudGVybi1xdWV1ZQotIHR5cGU6IHBhcnRfb2YKICB0YXJnZXQ6IGtjX2xpdC1tYXJrZXItY29zdAogIHRpZXI6IGV4dGVuc2lvbgotLS0KIyMg5pys6LSoCuW3suacieWNoeato+aWh++8jOS/neaMgemAkOWtl+S4jeWKqOOAggoKIyMg55u45YWzCi0gc2ltaWxhcl90bzo6IFtbTGFudGVybiBxdWV1ZV1dCgo8ZGV0YWlscz48c3VtbWFyeT7mi5PlsZXvvJrlj6/og73lrZjlnKjlhbPns7vvvIgxIOadoe+8iTwvc3VtbWFyeT4KCi0gW1tMaXQgbWFya2VyIG1lbW9yeSBjb3N0XV0g4oCUIHBhcnRfb2YKCjwvZGV0YWlscz4K"
+    },
+    {
+      "path": "20_MOCs/_pillars/Example Attention Map.yaml",
+      "before_sha256": "5d799454161aed704bc1b8fd3deccd2cf317c47b34f0704910b037b311f8ab40",
+      "after": "dGl0bGU6IEV4YW1wbGUgQXR0ZW50aW9uIE1hcApuYXJyYXRpdmU6IG4KcGlsbGFyczoKLSBuYW1lOiBUb2tlbiByb3V0aW5nCiAgb3JkZXI6IDEKICB3aHk6IHcKICB0b3BpY3M6CiAgLSBPdmVydmlldwogIC0gTWFya2Vycwo="
+    },
+    {
+      "path": "40_Sources/cde2d135ac446f37/lantern_queues.md",
+      "before_sha256": null,
+      "after": "IyBMYW50ZXJuIHF1ZXVlcwoKQSBsYW50ZXJuIHF1ZXVlIGtlZXBzIGV2ZXJ5IGl0ZW0gaW4gYXJyaXZhbCBvcmRlciBidXQgbGV0cyBhIHJlYWRlciBza2lwIGFoZWFkIGJ5IGxpdCBtYXJrZXJzLgoKIyMgTGl0IG1hcmtlcnMKCkEgd3JpdGVyIGxpZ2h0cyBhIG1hcmtlciBldmVyeSBlaWdodCBpdGVtcy4gQSByZWFkZXIgdGhhdCBob2xkcyBhIG1hcmtlciBjYW4ganVtcCBzdHJhaWdodCB0byBpdCB3aXRob3V0IHNjYW5uaW5nIHRoZSBpdGVtcyBpbiBiZXR3ZWVuLgoKTWFya2VycyBjb3N0IG9uZSBleHRyYSB3b3JkIG9mIG1lbW9yeSBlYWNoLCBzbyBhIHF1ZXVlIG9mIDgwMCBpdGVtcyBjYXJyaWVzIDEwMCBtYXJrZXJzLgoKIyMgRGltbWluZwoKV2hlbiB0aGUgcXVldWUgaXMgY29tcGFjdGVkLCBtYXJrZXJzIGJlZm9yZSB0aGUgY3V0IGFyZSBkaW1tZWQgcmF0aGVyIHRoYW4gZGVsZXRlZDsgZGltbWVkIG1hcmtlcnMgc3RheSByZWFkYWJsZSBidXQgYXJlIG5ldmVyIGZvbGxvd2VkLgoKVGhhbmtzIGZvciByZWFkaW5nLCBzZWUgeW91IG5leHQgd2VlayEK"
+    },
+    {
+      "path": "_data/manifest.jsonl",
+      "before_sha256": null,
+      "after": "eyJvcmlnaW5hbCI6ICJsYW50ZXJuX3F1ZXVlcy5tZCIsICJ2YXVsdF9wYXRoIjogIjQwX1NvdXJjZXMvY2RlMmQxMzVhYzQ0NmYzNy9sYW50ZXJuX3F1ZXVlcy5tZCIsICJzaGEyNTYiOiAiY2RlMmQxMzVhYzQ0NmYzNzRjMWFlNjIyYTNkZjQ1NDNiNjU3Yzg4MWNhYmJlODc0ODBiN2VhZTE5YmNlYzgwNiIsICJjb2xsZWN0ZWRfYXQiOiAiMjAyNi0xMS0wOFQwNTozMTo1MCswMDowMCIsICJqb2JfaWQiOiAiaW5nZXN0LWNkZTJkMTM1YWM0NDZmMzcifQo="
+    },
+    {
+      "path": "_data/secondbrain/inbox_registry.jsonl",
+      "before_sha256": null,
+      "after": "eyJhdCI6ICIyMDI2LTExLTA4VDA1OjMxOjUwKzAwOjAwIiwgImNhcmRzIjogWyJrY19sYW50ZXJuLXF1ZXVlIiwgImtjX2xpdC1tYXJrZXItY29zdCJdLCAiam9iX2lkIjogImluZ2VzdC1jZGUyZDEzNWFjNDQ2ZjM3IiwgInBhdGgiOiAiMDBfSW5ib3gvbGFudGVybl9xdWV1ZXMubWQiLCAicGVuZGluZyI6IDEsICJzaGEyNTYiOiAiY2RlMmQxMzVhYzQ0NmYzNzRjMWFlNjIyYTNkZjQ1NDNiNjU3Yzg4MWNhYmJlODc0ODBiN2VhZTE5YmNlYzgwNiIsICJzdGF0dXMiOiAicGFydGlhbCJ9Cg=="
+    },
+    {
+      "path": "_data/notes_registry.json",
+      "before_sha256": "3f431c1c7455351deed6996de56bbf816bf1e5ec0184693bbdc67665462d28dc",
+      "after": "ewogICJub3RlcyI6IFsKICAgIHsKICAgICAgImlkIjogImNhcmRfZXhpc3QiLAogICAgICAicGF0aCI6ICIxMF9Lbm93bGVkZ2UvYXR0ZW50aW9uL2NhcmRfZXhpc3QubWQiLAogICAgICAidGl0bGUiOiAi5bey5pyJ5Y2hIiwKICAgICAgImRvbWFpbiI6ICJhdHRlbnRpb24iCiAgICB9LAogICAgewogICAgICAiaWQiOiAiY2FyZF9wZWJibGUiLAogICAgICAicGF0aCI6ICIxMF9Lbm93bGVkZ2UvcGViYmxlcy9QZWJibGUgc2l6ZXMubWQiLAogICAgICAidGl0bGUiOiAiUGViYmxlIHNpemVzIiwKICAgICAgImRvbWFpbiI6ICJwZWJibGVzIgogICAgfSwKICAgIHsKICAgICAgImlkIjogImtjX2xhbnRlcm4tcXVldWUiLAogICAgICAicGF0aCI6ICIxMF9Lbm93bGVkZ2UvYXR0ZW50aW9uL0xhbnRlcm4gcXVldWUubWQiLAogICAgICAidGl0bGUiOiAiTGFudGVybiBxdWV1ZSIsCiAgICAgICJkb21haW4iOiAiYXR0ZW50aW9uIiwKICAgICAgInBpbGxhciI6ICJUb2tlbiByb3V0aW5nIiwKICAgICAgInRvcGljIjogIk92ZXJ2aWV3IiwKICAgICAgInNvdXJjZV9oYXNoIjogImNkZTJkMTM1YWM0NDZmMzc0YzFhZTYyMmEzZGY0NTQzYjY1N2M4ODFjYWJiZTg3NDgwYjdlYWUxOWJjZWM4MDYiCiAgICB9LAogICAgewogICAgICAiaWQiOiAia2NfbGl0LW1hcmtlci1jb3N0IiwKICAgICAgInBhdGgiOiAiMTBfS25vd2xlZGdlL2F0dGVudGlvbi9MaXQgbWFya2VyIG1lbW9yeSBjb3N0Lm1kIiwKICAgICAgInRpdGxlIjogIkxpdCBtYXJrZXIgbWVtb3J5IGNvc3QiLAogICAgICAiZG9tYWluIjogImF0dGVudGlvbiIsCiAgICAgICJwaWxsYXIiOiAiVG9rZW4gcm91dGluZyIsCiAgICAgICJ0b3BpYyI6ICJNYXJrZXJzIiwKICAgICAgInNvdXJjZV9oYXNoIjogImNkZTJkMTM1YWM0NDZmMzc0YzFhZTYyMmEzZGY0NTQzYjY1N2M4ODFjYWJiZTg3NDgwYjdlYWUxOWJjZWM4MDYiCiAgICB9CiAgXQp9Cg=="
+    },
+    {
+      "path": "20_MOCs/Example Attention Map.md",
+      "before_sha256": null,
+      "after": "LS0tCkJDLWxpc3Qtbm90ZS1maWVsZDogZG93bgotLS0KIyBFeGFtcGxlIEF0dGVudGlvbiBNYXAKCl9UaGlzIG1hcCBjb3ZlcnM6IGF0dGVudGlvbiwgdHJhbnNmb3JtZXIgfCAyIGdlbmVyYXRlZCBwYWdlcywgdGhpcyBvbmUgaW5jbHVkZWRfCgojIyBOYXJyYXRpdmUKCm4KCiMjIFBpbGxhcnMKCi0gW1syMF9NT0NzL0V4YW1wbGUgQXR0ZW50aW9uIE1hcC8wMVRva2Vucm91dGluZy0tMDEubWR8MDHCt1Rva2VuIHJvdXRpbmddXSAoY2FyZHM6IDMpCgojIyBQYWdlIGluZGV4IChldmVyeSBwYWdlKQoKLSBbWzIwX01PQ3MvRXhhbXBsZSBBdHRlbnRpb24gTWFwLm1kfFRoaXMgcGFnZSDCtyBtYXAgcm9vdF1dCi0gW1syMF9NT0NzL0V4YW1wbGUgQXR0ZW50aW9uIE1hcC8wMVRva2Vucm91dGluZy0tMDEubWR8cGFnZSAxXV0KCg=="
+    },
+    {
+      "path": "20_MOCs/Example Attention Map/01Tokenrouting--01.md",
+      "before_sha256": null,
+      "after": "LS0tCkJDLWxpc3Qtbm90ZS1maWVsZDogZG93bgotLS0KIyBFeGFtcGxlIEF0dGVudGlvbiBNYXAgwrcgVG9rZW4gcm91dGluZwoKdwoKIyMgT3ZlcnZpZXcKCi0gW1sxMF9Lbm93bGVkZ2UvYXR0ZW50aW9uL2NhcmRfZXhpc3QubWR85bey5pyJ5Y2hXV0gwrcgcGFydF9vZuKGkiBbWzEwX0tub3dsZWRnZS9hdHRlbnRpb24vTGl0IG1hcmtlciBtZW1vcnkgY29zdC5tZHxMaXQgbWFya2VyIG1lbW9yeSBjb3N0XV0gwrcgc2ltaWxhcl90b+KGkiBbWzEwX0tub3dsZWRnZS9hdHRlbnRpb24vTGFudGVybiBxdWV1ZS5tZHxMYW50ZXJuIHF1ZXVlXV0KLSBbWzEwX0tub3dsZWRnZS9hdHRlbnRpb24vTGFudGVybiBxdWV1ZS5tZHxMYW50ZXJuIHF1ZXVlXV0gwrcgZGVwZW5kc19vbuKGkiBbWzEwX0tub3dsZWRnZS9hdHRlbnRpb24vTGl0IG1hcmtlciBtZW1vcnkgY29zdC5tZHxMaXQgbWFya2VyIG1lbW9yeSBjb3N0XV0gwrcgc2ltaWxhcl90b+KGkiBbWzEwX0tub3dsZWRnZS9hdHRlbnRpb24vY2FyZF9leGlzdC5tZHzlt7LmnInljaFdXQoKIyMgTWFya2VycwoKLSBbWzEwX0tub3dsZWRnZS9hdHRlbnRpb24vTGl0IG1hcmtlciBtZW1vcnkgY29zdC5tZHxMaXQgbWFya2VyIG1lbW9yeSBjb3N0XV0gwrcgZGVwZW5kc19vbuKGkiBbWzEwX0tub3dsZWRnZS9hdHRlbnRpb24vTGFudGVybiBxdWV1ZS5tZHxMYW50ZXJuIHF1ZXVlXV0gwrcgcGFydF9vZuKGkiBbWzEwX0tub3dsZWRnZS9hdHRlbnRpb24vY2FyZF9leGlzdC5tZHzlt7LmnInljaFdXQoKLS0tCiMjIE5hdmlnYXRpb24KCuKftSBwcmV2aW91cyAobm9uZSkgwrcg4p+2IG5leHQgKGxhc3QgcGFnZSkgwrcgW1syMF9NT0NzL0V4YW1wbGUgQXR0ZW50aW9uIE1hcC5tZHxCYWNrIHRvIHRoZSBtYXBdXQoK"
+    },
+    {
+      "path": "00_Inbox/lantern_queues.md",
+      "before_sha256": "cde2d135ac446f374c1ae622a3df4543b657c881cabbe87480b7eae19bcec806",
+      "after": null
+    },
+    {
+      "path": "HOME.md",
+      "before_sha256": null,
+      "after": "IyBIT01FIOKAlCBTZWNvbmRCcmFpbgoKIyMgVG9kYXkncyByZXZpZXcKCmBgYHNlY29uZGJyYWluLXJldmlldwpgYGAKClRoZSByZXZpZXcgcGFnZSBvZiAyMDI2LTExLTA4IGhhcyBub3QgYmVlbiBtYWRlIHlldDogcnVuIGBzYiBkYWlseSAtLWFwcGx5YDsgaXQgbWFrZXMgdGhlIHBhZ2UgYW5kIGFkZHMgdGhlIGxpbmsgaGVyZSAod29ya3Mgd2l0aG91dCB0aGUgcGx1Z2luKS4KClRoZSBkYXNoYm9hcmQgY29tZXMgZnJvbSB0aGUgU2Vjb25kQnJhaW4gUmV2aWV3IHBsdWdpbjsgd2l0aG91dCB0aGUgcGx1Z2luIHRoZSBibG9jayBhYm92ZSBpcyBlbXB0eSwgYW5kIHRoZSByZXZpZXcgcGFnZSBsaW5rIHdvcmtzIGluc3RlYWQuIEluIGEgdGVybWluYWwgdXNlIGBzYiByZXZpZXcgc3RhdHVzYCBmb3IgcHJvZ3Jlc3MgYW5kIGBzYiByZXZpZXcgcXVldWVgIGZvciB0b2RheSdzIGNhcmRzLgoKIyMgV2hhdCB0byBkbyBub3cKCjEuIFJldmlldzogdXNlIHRoZSBkYXNoYm9hcmQgYWJvdmUsIG9yIGBzYiByZXZpZXcgcXVldWVgIGluIGEgdGVybWluYWwuCjIuIFB1dCBuZXcgbWF0ZXJpYWwgaW50byBgMDBfSW5ib3gvYCwgcnVuIGBzYiBpbmJveCBsaXN0YCwgdGhlbiBgc2IgaW5nZXN0IDxmaWxlPmAuCjMuIFVuZmluaXNoZWQgam9iczogYHNiIGpvYiBsaXN0YDsgc291cmNlcyB3aXRoIHBlbmRpbmcgY2FyZHM6IGBzYiBpbmdlc3QgLS1yZXRyeSA8am9iPmAuCgojIyBNYXBzCgojIyBNTAoKLSBbWzIwX01PQ3MvRXhhbXBsZSBBdHRlbnRpb24gTWFwfEV4YW1wbGUgQXR0ZW50aW9uIE1hcF1dIMK3IGNhcmRzOiAzCgojIyBTdG9uZXMKCi0gW1syMF9NT0NzL0V4YW1wbGUgUGViYmxlIE1hcHxFeGFtcGxlIFBlYmJsZSBNYXBdXSDCtyBjYXJkczogMQoKIyMgSW52ZW50b3J5CgpDb3VudGVkIG9uIDIwMjYtMTEtMDg6ICoqY2FyZHM6IDQqKiDCtyBkb21haW5zOiAzIMK3IHdpdGhvdXQgcGlsbGFyIG9yIHRvcGljOiAwLgoKfCBUcmFjayB8IERvbWFpbnMgKGNhcmRzKSB8CnwtLS18LS0tfAp8IE1MIHwgYXR0ZW50aW9uIDMsIHRyYW5zZm9ybWVyIDAgfAp8IFN0b25lcyB8IHBlYmJsZXMgMSB8CgojIyMgRm9sZGVycyAocGF0aHMgYWZ0ZXIgdGhpcyBydW4pCgp8IEZvbGRlciB8IEZpbGVzIHwKfC0tLXwtLS18CnwgYDAwX0luYm94L2AgfCAwIHwKfCBgMTBfS25vd2xlZGdlL2AgfCA0IHwKfCBgMjBfTU9Dcy9gIHwgNCB8CnwgYDQwX1NvdXJjZXMvYCB8IDEgfAp8IGA1MF9SZXZpZXdzL2AgfCAwIHwKCj4gQ3VycmVudCBudW1iZXJzOiBgc2Igc3RhdHVzYC4gVGhlIGNhcmRzIGFuZCB0aGUgY3VyYXRlZCB0YXhvbm9teSBZQU1MIGFyZSB0aGUgc291cmNlIG9mIHRydXRoLgoKIyMgSW5nZXN0IGFuZCBtYWludGVuYW5jZQoKYHNiIGluZ2VzdCA8ZmlsZT5gOiB3aG9sZSBzb3VyY2Ug4oaSIGNhcmRzIOKGkiBjbGFzc2lmaWNhdGlvbiBhbmQgcmVsYXRpb25zIOKGkiBpbmRlcGVuZGVudCByZXZpZXcg4oaSIG9uZSB0cmFuc2FjdGlvbiDihpIgbWFwcy4KCmBzYiBjbGFzc2lmeSAtLWRvbWFpbiA8ZG9tYWluPmAgZmlsbHMgaW4gbWlzc2luZyBjbGFzc2lmaWNhdGlvbjsgYHNiIHJlZnJlc2hgIHByZXZpZXdzIG1hcCBjaGFuZ2VzIGFuZCBgc2IgcmVmcmVzaCAtLWFwcGx5YCB3cml0ZXMgdGhlbTsgYHNiIHJlY292ZXIgPGpvYj4gLS1yb2xsYmFja2AgdW5kb2VzIGEgd3JpdGU7IGBzYiBkb2NzIC0tYXBwbHlgIHJld3JpdGVzIHRoaXMgcGFnZS4KCk1hdGVyaWFsIHRoYXQgbmVlZHMgYSBuZXcgdG9waWMgb3IgZG9tYWluIHN0YXlzIGxpc3RlZCBhcyBwZW5kaW5nOyBjbGFzc2lmaWNhdGlvbiBhbmQgbWFwcyBuZXZlciBjaGFuZ2UgcmV2aWV3IHJlY29yZHMuCg=="
+    }
+  ],
+  "bindings": {
+    "c01": {
+      "candidate": "5b11690fc4dd0f36ed3469a07d6353a6fa7954673d30a21310f886f51b918ca6",
+      "review": "5e6079b16f6506753e8edba874fc4789d8f075ad11dac44eae37544631a8f22d"
+    },
+    "c01.r1": {
+      "candidate": "1d403b80f4cb99046b4779beba85032a6145506dbecdb4a1939709c6c97f590e",
+      "review": "d15eb973ce43059b4f13bf7f6e60ea98ef6158ce79a5d978084fc752a4c8ed63"
+    }
+  }
+}

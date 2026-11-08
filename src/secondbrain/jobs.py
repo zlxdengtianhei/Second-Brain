@@ -163,11 +163,20 @@ def frozen_settings(root: Path, packet: dict):
         card_diagrams=bool(frozen.get('diagrams', True)))
 
 
+#: The review rules an ingest job frozen before it froze them (``ingest/3``, sb 7e42c7b) ran under: that version's
+#: defaults, one repair round of whole-card review, no mechanical fixes (a value configured then is not known).
+EARLIER_INGEST_REVIEW = {'max_repair_rounds': 1, 'focused_review': False, 'amend': False}
+
+
 def policy_of(packet: dict):
-    """The review rules of a job: the ones it froze, else (jobs frozen before, other kinds) the configured ones."""
+    """The review rules of a job: the ones it froze; for an ingest job frozen before it froze them,
+    :data:`EARLIER_INGEST_REVIEW`; for the other kinds, the configured ones."""
     frozen = (packet or {}).get('settings') if isinstance(packet, dict) else None
     if isinstance(frozen, dict) and isinstance(frozen.get('review'), dict):
         return config.ReviewPolicy(**frozen['review'])
+    if isinstance(packet, dict) and packet.get('kind') == 'ingest':
+        from dataclasses import replace
+        return replace(config.active_review(), **EARLIER_INGEST_REVIEW)
     return config.active_review()
 
 

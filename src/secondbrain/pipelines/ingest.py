@@ -348,7 +348,9 @@ def retry(root: Path, job_id: str, *, settings: config.Settings | None = None) -
     domains = sorted(snapshot.catalog['domains'])
     frozen = {**old['settings'], 'review': asdict(config.review_policy())}
     frozen.setdefault('layout', _layout_record(layouts.of(root)))
-    packet = {**old, 'settings': frozen, 'chunks': chunks, 'catalog': snapshot.catalog,
+    # the child is a job of this version, whatever version froze the parent: it reads the parent's records
+    # (an earlier scale's levels read as this one's, _settled_rows) and judges everything again itself
+    packet = {**old, 'method_version': METHOD, 'settings': frozen, 'chunks': chunks, 'catalog': snapshot.catalog,
               'taxonomy': taxonomy_packet(snapshot, domains), 'taxonomy_sha256': taxonomy_fingerprint(snapshot),
               'topic_counts': _topic_counts(snapshot), 'snapshot_fingerprint': snapshot.fingerprint,
               'retry': {'of': job_id, 'root': first, 'round': number,
@@ -1934,6 +1936,19 @@ def _outcomes(root: Path, job_id: str) -> list[dict]:
     return [chunk_outcome(root, state, packet, c['chunk_id']) for c in effective_chunks(packet, state)]
 
 
+def _earlier_version(job_id: str, packet: dict) -> str:
+    """Why this version does not run a job an earlier one froze, and the way out."""
+    why = (f'{job_id} was frozen by {packet.get("method_version")}, which judged repeats on another scale; this '
+           f'version ({METHOD}) cannot finish it. ')
+    parent = (packet.get('retry') or {}).get('of')
+    if parent:  # a retry child: the parent's records still hold, a new child is made by this version
+        return why + (f'Reset it (sb job reset {job_id} --reason "made by an earlier version"), then retry its '
+                      f'parent again (sb ingest --retry {parent})')
+    source = (packet.get('source') or {}).get('inbox_path') or (packet.get('source') or {}).get('filename')
+    return why + (f'Reset it (sb job reset {job_id} --reason "made by an earlier version"), then ingest the '
+                  f'source again (sb ingest {source})')
+
+
 def advance(root: Path, job_id: str, *, producer, reviewer, apply: bool = True) -> dict:
     """Run every step that can run now; returns the job state plus hand-offs.
 
@@ -1955,9 +1970,7 @@ def _advance(root: Path, job_id: str, *, producer, reviewer, apply: bool = True)
             return state
         packet = jobs.read_input(root, job_id)
         if packet.get('method_version') != METHOD:
-            raise IngestError(f'{job_id} was frozen by {packet.get("method_version")}, which judged repeats on another '
-                              f'scale; this version ({METHOD}) cannot finish it. Reset it (sb job reset {job_id}) '
-                              'and ingest the source again')
+            raise IngestError(_earlier_version(job_id, packet))
         handoffs, visited = [], set()
         while True:
             state = jobs.load(root, job_id)

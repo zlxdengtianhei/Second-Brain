@@ -1,0 +1,14 @@
+{
+  "cards": [
+    {
+      "slug": "marker-dimming",
+      "decision": "revise",
+      "reason": "still wrong"
+    }
+  ],
+  "new_topics": [],
+  "coverage": {
+    "decision": "accept",
+    "reason": "covered with earlier round"
+  }
+}

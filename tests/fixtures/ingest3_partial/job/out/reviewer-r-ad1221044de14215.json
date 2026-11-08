@@ -1,0 +1,40 @@
+{
+  "cards": [
+    {
+      "slug": "lantern-queue",
+      "decision": "accept",
+      "reason": "faithful and atomic",
+      "overlap": "distinct"
+    },
+    {
+      "slug": "lit-marker-cost",
+      "decision": "accept",
+      "reason": "numbers match the text",
+      "overlap": "distinct"
+    },
+    {
+      "slug": "marker-dimming",
+      "decision": "revise",
+      "reason": "the text says dimmed rather than deleted; the card says deleted"
+    },
+    {
+      "slug": "queue-order",
+      "decision": "duplicate",
+      "duplicate_of": "card_exist",
+      "reason": "already covered by the existing card"
+    }
+  ],
+  "new_topics": [
+    {
+      "domain": "attention",
+      "pillar": "Token routing",
+      "name": "Markers",
+      "decision": "accept",
+      "reason": "markers deserve their own topic"
+    }
+  ],
+  "coverage": {
+    "decision": "accept",
+    "reason": "every paragraph is handled"
+  }
+}

@@ -1,0 +1,42 @@
+{
+  "schema": "secondbrain-run/1",
+  "run_id": "r-099bd22470ca4476",
+  "job_id": "ingest-cde2d135ac446f37",
+  "role": "reviewer",
+  "step": "review",
+  "chunk": "c01.r1",
+  "executor": "fake",
+  "endpoint_host": null,
+  "model_requested": "claude-test",
+  "model_reported": "claude-test",
+  "attestation": "test",
+  "packet_sha256": "58378dba71733b2fbcd10c8b37581a4cc4f7c38befc7187b3e66b35eced5ce4a",
+  "prompt_sha256": "c6ffe84961c41985f42e86bf25e949ef5bbe07a065976f6f375e4fd37fcb016e",
+  "task_sha256": "d89a436b6e97f07074687b784e4995382013f73b207448114cf128d727ddc7f8",
+  "output_sha256": "d15eb973ce43059b4f13bf7f6e60ea98ef6158ce79a5d978084fc752a4c8ed63",
+  "candidate_sha256": "1d403b80f4cb99046b4779beba85032a6145506dbecdb4a1939709c6c97f590e",
+  "base_candidate_sha256": null,
+  "usage": {
+    "input_tokens": 0,
+    "output_tokens": 0
+  },
+  "started_at": "2026-11-08T05:31:50.265427+00:00",
+  "ended_at": "2026-11-08T05:31:50.269763+00:00",
+  "status": "submitted",
+  "error": null,
+  "same_family": false,
+  "submit_result": {
+    "job_id": "ingest-cde2d135ac446f37",
+    "run_id": "r-099bd22470ca4476",
+    "chunk": "c01.r1",
+    "status": "review_submitted",
+    "artifact": {
+      "path": "jobs/ingest-cde2d135ac446f37/out/reviewer-r-099bd22470ca4476.json",
+      "sha256": "d15eb973ce43059b4f13bf7f6e60ea98ef6158ce79a5d978084fc752a4c8ed63",
+      "run_id": "r-099bd22470ca4476",
+      "input_sha256": "58378dba71733b2fbcd10c8b37581a4cc4f7c38befc7187b3e66b35eced5ce4a",
+      "candidate_sha256": "1d403b80f4cb99046b4779beba85032a6145506dbecdb4a1939709c6c97f590e"
+    },
+    "written_to_knowledge": false
+  }
+}

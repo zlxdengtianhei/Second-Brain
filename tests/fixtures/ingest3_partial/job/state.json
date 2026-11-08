@@ -1,0 +1,229 @@
+{
+  "schema": "secondbrain-job/3",
+  "job_id": "ingest-cde2d135ac446f37",
+  "kind": "ingest",
+  "status": "partial",
+  "created_at": "2026-11-08T05:31:50.210127+00:00",
+  "updated_at": "2026-11-08T05:31:50.339342+00:00",
+  "input_sha256": "58378dba71733b2fbcd10c8b37581a4cc4f7c38befc7187b3e66b35eced5ce4a",
+  "runs": [
+    "r-88d8af92cfea4c3a",
+    "r-ad1221044de14215",
+    "r-9da2818907534748",
+    "r-099bd22470ca4476",
+    "r-736fe7bafddf491d"
+  ],
+  "candidate": null,
+  "review": null,
+  "pending": [
+    {
+      "slug": "marker-dimming",
+      "title": "Marker dimming",
+      "reason": "still wrong",
+      "chunk": "c01"
+    }
+  ],
+  "chunks": {
+    "c01": {
+      "candidate": {
+        "path": "jobs/ingest-cde2d135ac446f37/out/producer-r-88d8af92cfea4c3a.json",
+        "sha256": "5b11690fc4dd0f36ed3469a07d6353a6fa7954673d30a21310f886f51b918ca6",
+        "run_id": "r-88d8af92cfea4c3a",
+        "input_sha256": "58378dba71733b2fbcd10c8b37581a4cc4f7c38befc7187b3e66b35eced5ce4a"
+      },
+      "review": {
+        "path": "jobs/ingest-cde2d135ac446f37/out/reviewer-r-ad1221044de14215.json",
+        "sha256": "5e6079b16f6506753e8edba874fc4789d8f075ad11dac44eae37544631a8f22d",
+        "run_id": "r-ad1221044de14215",
+        "input_sha256": "58378dba71733b2fbcd10c8b37581a4cc4f7c38befc7187b3e66b35eced5ce4a",
+        "candidate_sha256": "5b11690fc4dd0f36ed3469a07d6353a6fa7954673d30a21310f886f51b918ca6"
+      },
+      "status": "review_submitted",
+      "round": 0
+    },
+    "c01.r1": {
+      "candidate": {
+        "path": "jobs/ingest-cde2d135ac446f37/out/producer-r-9da2818907534748.json",
+        "sha256": "1d403b80f4cb99046b4779beba85032a6145506dbecdb4a1939709c6c97f590e",
+        "run_id": "r-9da2818907534748",
+        "input_sha256": "58378dba71733b2fbcd10c8b37581a4cc4f7c38befc7187b3e66b35eced5ce4a"
+      },
+      "review": {
+        "path": "jobs/ingest-cde2d135ac446f37/out/reviewer-r-099bd22470ca4476.json",
+        "sha256": "d15eb973ce43059b4f13bf7f6e60ea98ef6158ce79a5d978084fc752a4c8ed63",
+        "run_id": "r-099bd22470ca4476",
+        "input_sha256": "58378dba71733b2fbcd10c8b37581a4cc4f7c38befc7187b3e66b35eced5ce4a",
+        "candidate_sha256": "1d403b80f4cb99046b4779beba85032a6145506dbecdb4a1939709c6c97f590e"
+      },
+      "status": "review_submitted",
+      "round": 0
+    },
+    "dg01": {
+      "candidate": {
+        "path": "jobs/ingest-cde2d135ac446f37/out/producer-r-736fe7bafddf491d.json",
+        "sha256": "40a30662e3d0367b6985688dff985ad6f87a9a2ff63d377892a7de318c947632",
+        "run_id": "r-736fe7bafddf491d",
+        "input_sha256": "58378dba71733b2fbcd10c8b37581a4cc4f7c38befc7187b3e66b35eced5ce4a"
+      },
+      "review": null,
+      "status": "proposed",
+      "round": 0
+    }
+  },
+  "diagram_cards": [
+    {
+      "ref": "lantern-queue",
+      "title": "Lantern queue",
+      "kind": "concept",
+      "domain": "attention",
+      "essence": "A lantern queue keeps arrival order and lets readers skip ahead by lit markers.",
+      "propositions": [
+        "Items stay in arrival order.",
+        "Readers skip ahead by following lit markers."
+      ],
+      "related_titles": [
+        "已有卡"
+      ]
+    },
+    {
+      "ref": "lit-marker-cost",
+      "title": "Lit marker memory cost",
+      "kind": "fact",
+      "domain": "attention",
+      "essence": "Each lit marker costs one extra word, one marker per eight items.",
+      "propositions": [
+        "A writer lights a marker every eight items.",
+        "Each marker costs one word of memory; 800 items carry 100 markers."
+      ],
+      "related_titles": [
+        "Lantern queue",
+        "已有卡"
+      ]
+    }
+  ],
+  "commit_intent": "318eda82a69bfd4583739ffac79eda7fbb1230df62a3275914a59f01458fc947",
+  "new_card_count": 2,
+  "produced": [
+    {
+      "id": "kc_lantern-queue",
+      "slug": "lantern-queue",
+      "title": "Lantern queue",
+      "domain": "attention",
+      "path": "10_Knowledge/attention/Lantern queue.md",
+      "chunk": "c01"
+    },
+    {
+      "id": "kc_lit-marker-cost",
+      "slug": "lit-marker-cost",
+      "title": "Lit marker memory cost",
+      "domain": "attention",
+      "path": "10_Knowledge/attention/Lit marker memory cost.md",
+      "chunk": "c01"
+    }
+  ],
+  "needs_taxonomy": [],
+  "duplicates": [
+    {
+      "slug": "queue-order",
+      "title": "Arrival order in lantern queues",
+      "duplicate_of": "card_exist",
+      "reason": "already covered by the existing card",
+      "chunk": "c01"
+    }
+  ],
+  "out_of_scope": [
+    {
+      "chunk": "c01",
+      "source_quote": "Thanks for reading, see you next week!",
+      "reason": "PRODUCER-REASON-8 sign-off"
+    }
+  ],
+  "new_topics": [
+    {
+      "domain": "attention",
+      "pillar": "Token routing",
+      "name": "Markers"
+    }
+  ],
+  "skipped_relations": [],
+  "restored_relations": [],
+  "maintenance": [],
+  "needs_review": [],
+  "conflicts": [],
+  "source_record": {
+    "sha256": "cde2d135ac446f374c1ae622a3df4543b657c881cabbe87480b7eae19bcec806",
+    "path": "40_Sources/cde2d135ac446f37/lantern_queues.md"
+  },
+  "inbox_moved": true,
+  "projection_metrics": {
+    "mocs": {
+      "Example Attention Map": {
+        "domains": [
+          "attention",
+          "transformer"
+        ],
+        "page_count": 2,
+        "root": "20_MOCs/Example Attention Map.md",
+        "card_count": 3,
+        "classified": 3,
+        "unclassified": 0,
+        "invalid": 0,
+        "pages": [
+          {
+            "path": "20_MOCs/Example Attention Map.md",
+            "label": "root",
+            "cards": 0,
+            "max_topic_len": 0,
+            "visual_lines": 21
+          },
+          {
+            "path": "20_MOCs/Example Attention Map/01Tokenrouting--01.md",
+            "label": "page 1",
+            "cards": 3,
+            "max_topic_len": 2,
+            "visual_lines": 22
+          }
+        ]
+      }
+    },
+    "total_pages": 2,
+    "covered_count": 3,
+    "card_count": 4,
+    "covered": [
+      "card_exist",
+      "kc_lantern-queue",
+      "kc_lit-marker-cost"
+    ],
+    "unknown_domain_cards": []
+  },
+  "diagrams": [
+    {
+      "ref": "lit-marker-cost",
+      "status": "skip",
+      "attempt": 0,
+      "reason": "fact card: a single fact, definition or field list reads better as text or a list"
+    },
+    {
+      "ref": "lantern-queue",
+      "status": "skip",
+      "attempt": 0,
+      "reason": "the propositions already say it; a picture adds nothing"
+    }
+  ],
+  "same_family": false,
+  "hint": "sb ingest --retry ingest-cde2d135ac446f37",
+  "applied_paths": [
+    "10_Knowledge/attention/Lantern queue.md",
+    "10_Knowledge/attention/Lit marker memory cost.md",
+    "10_Knowledge/attention/card_exist.md",
+    "20_MOCs/_pillars/Example Attention Map.yaml",
+    "40_Sources/cde2d135ac446f37/lantern_queues.md",
+    "_data/manifest.jsonl",
+    "_data/secondbrain/inbox_registry.jsonl",
+    "_data/notes_registry.json",
+    "20_MOCs/Example Attention Map.md",
+    "20_MOCs/Example Attention Map/01Tokenrouting--01.md",
+    "00_Inbox/lantern_queues.md",
+    "HOME.md"
+  ]
+}

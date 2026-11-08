@@ -1,0 +1,52 @@
+{
+  "cards": [
+    {
+      "slug": "marker-dimming",
+      "title": "Marker dimming",
+      "kind": "mechanism",
+      "domain": "attention",
+      "pillar": "Token routing",
+      "topic": "Markers",
+      "essence": "Compaction dims markers before the cut instead of deleting them.",
+      "propositions": [
+        "Markers before the cut are dimmed, not deleted.",
+        "Dimmed markers stay readable but are never followed."
+      ],
+      "intuition": null,
+      "confusions": [],
+      "flashcards": [
+        {
+          "q": "What happens to markers before a compaction cut?",
+          "a": "They are dimmed, not deleted."
+        },
+        {
+          "q": "Are dimmed markers followed?",
+          "a": "No, they stay readable only."
+        }
+      ],
+      "relations": [
+        {
+          "type": "depends_on",
+          "target": "lit-marker-cost",
+          "note": "dimming acts on markers"
+        }
+      ],
+      "source_quotes": [
+        "markers before the cut are dimmed rather than deleted; dimmed markers stay readable but are never followed"
+      ],
+      "status": "confirmed",
+      "reason": "PRODUCER-REASON-5 fixed after review"
+    }
+  ],
+  "new_topics": [],
+  "coverage": [
+    {
+      "source_quote": "markers before the cut are dimmed rather than deleted; dimmed markers stay readable but are never followed",
+      "disposition": "card",
+      "cards": [
+        "marker-dimming"
+      ],
+      "reason": "PRODUCER-REASON-7 covered"
+    }
+  ]
+}

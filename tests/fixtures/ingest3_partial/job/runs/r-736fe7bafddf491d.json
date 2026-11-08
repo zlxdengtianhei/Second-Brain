@@ -1,0 +1,40 @@
+{
+  "schema": "secondbrain-run/1",
+  "run_id": "r-736fe7bafddf491d",
+  "job_id": "ingest-cde2d135ac446f37",
+  "role": "producer",
+  "step": "produce",
+  "chunk": "dg01",
+  "executor": "fake",
+  "endpoint_host": null,
+  "model_requested": "gpt-test",
+  "model_reported": "gpt-test",
+  "attestation": "test",
+  "packet_sha256": "58378dba71733b2fbcd10c8b37581a4cc4f7c38befc7187b3e66b35eced5ce4a",
+  "prompt_sha256": "3e7e307c1c57680187cc8915913a79c0d050cdbeb3bdf9b8f3771bf04c950d3f",
+  "task_sha256": "09a140b463462657b9e8703699e05ecfbf163134290447a99803532a0a885d08",
+  "output_sha256": "40a30662e3d0367b6985688dff985ad6f87a9a2ff63d377892a7de318c947632",
+  "candidate_sha256": null,
+  "base_candidate_sha256": null,
+  "usage": {
+    "input_tokens": 0,
+    "output_tokens": 0
+  },
+  "started_at": "2026-11-08T05:31:50.285046+00:00",
+  "ended_at": "2026-11-08T05:31:50.289061+00:00",
+  "status": "submitted",
+  "error": null,
+  "submit_result": {
+    "job_id": "ingest-cde2d135ac446f37",
+    "run_id": "r-736fe7bafddf491d",
+    "chunk": "dg01",
+    "status": "proposed",
+    "artifact": {
+      "path": "jobs/ingest-cde2d135ac446f37/out/producer-r-736fe7bafddf491d.json",
+      "sha256": "40a30662e3d0367b6985688dff985ad6f87a9a2ff63d377892a7de318c947632",
+      "run_id": "r-736fe7bafddf491d",
+      "input_sha256": "58378dba71733b2fbcd10c8b37581a4cc4f7c38befc7187b3e66b35eced5ce4a"
+    },
+    "written_to_knowledge": false
+  }
+}

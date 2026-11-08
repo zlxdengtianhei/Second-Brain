@@ -1,0 +1,11 @@
+{
+  "results": [
+    {
+      "ref": "lantern-queue",
+      "ir": {
+        "decision": "skip",
+        "reason": "the propositions already say it; a picture adds nothing"
+      }
+    }
+  ]
+}

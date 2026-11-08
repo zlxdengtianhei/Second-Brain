@@ -1,0 +1,34 @@
+{
+  "notes": [
+    {
+      "id": "card_exist",
+      "path": "10_Knowledge/attention/card_exist.md",
+      "title": "已有卡",
+      "domain": "attention"
+    },
+    {
+      "id": "card_pebble",
+      "path": "10_Knowledge/pebbles/Pebble sizes.md",
+      "title": "Pebble sizes",
+      "domain": "pebbles"
+    },
+    {
+      "id": "kc_lantern-queue",
+      "path": "10_Knowledge/attention/Lantern queue.md",
+      "title": "Lantern queue",
+      "domain": "attention",
+      "pillar": "Token routing",
+      "topic": "Overview",
+      "source_hash": "cde2d135ac446f374c1ae622a3df4543b657c881cabbe87480b7eae19bcec806"
+    },
+    {
+      "id": "kc_lit-marker-cost",
+      "path": "10_Knowledge/attention/Lit marker memory cost.md",
+      "title": "Lit marker memory cost",
+      "domain": "attention",
+      "pillar": "Token routing",
+      "topic": "Markers",
+      "source_hash": "cde2d135ac446f374c1ae622a3df4543b657c881cabbe87480b7eae19bcec806"
+    }
+  ]
+}

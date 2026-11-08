@@ -1,0 +1,148 @@
+{
+  "kind": "ingest",
+  "method_version": "ingest/3",
+  "source": {
+    "filename": "lantern_queues.md",
+    "inbox_path": "00_Inbox/lantern_queues.md",
+    "sha256": "cde2d135ac446f374c1ae622a3df4543b657c881cabbe87480b7eae19bcec806",
+    "size": 546,
+    "text": "# Lantern queues\n\nA lantern queue keeps every item in arrival order but lets a reader skip ahead by lit markers.\n\n## Lit markers\n\nA writer lights a marker every eight items. A reader that holds a marker can jump straight to it without scanning the items in between.\n\nMarkers cost one extra word of memory each, so a queue of 800 items carries 100 markers.\n\n## Dimming\n\nWhen the queue is compacted, markers before the cut are dimmed rather than deleted; dimmed markers stay readable but are never followed.\n\nThanks for reading, see you next week!\n",
+    "raw_b64": "IyBMYW50ZXJuIHF1ZXVlcwoKQSBsYW50ZXJuIHF1ZXVlIGtlZXBzIGV2ZXJ5IGl0ZW0gaW4gYXJyaXZhbCBvcmRlciBidXQgbGV0cyBhIHJlYWRlciBza2lwIGFoZWFkIGJ5IGxpdCBtYXJrZXJzLgoKIyMgTGl0IG1hcmtlcnMKCkEgd3JpdGVyIGxpZ2h0cyBhIG1hcmtlciBldmVyeSBlaWdodCBpdGVtcy4gQSByZWFkZXIgdGhhdCBob2xkcyBhIG1hcmtlciBjYW4ganVtcCBzdHJhaWdodCB0byBpdCB3aXRob3V0IHNjYW5uaW5nIHRoZSBpdGVtcyBpbiBiZXR3ZWVuLgoKTWFya2VycyBjb3N0IG9uZSBleHRyYSB3b3JkIG9mIG1lbW9yeSBlYWNoLCBzbyBhIHF1ZXVlIG9mIDgwMCBpdGVtcyBjYXJyaWVzIDEwMCBtYXJrZXJzLgoKIyMgRGltbWluZwoKV2hlbiB0aGUgcXVldWUgaXMgY29tcGFjdGVkLCBtYXJrZXJzIGJlZm9yZSB0aGUgY3V0IGFyZSBkaW1tZWQgcmF0aGVyIHRoYW4gZGVsZXRlZDsgZGltbWVkIG1hcmtlcnMgc3RheSByZWFkYWJsZSBidXQgYXJlIG5ldmVyIGZvbGxvd2VkLgoKVGhhbmtzIGZvciByZWFkaW5nLCBzZWUgeW91IG5leHQgd2VlayEK"
+  },
+  "chunks": [
+    {
+      "chunk_id": "c01",
+      "start": 0,
+      "end": 546,
+      "split_reason": "whole",
+      "candidate_domains": [
+        "pebbles",
+        "transformer",
+        "attention"
+      ],
+      "neighbors": [
+        {
+          "id": "card_pebble",
+          "title": "Pebble sizes",
+          "domain": "pebbles",
+          "essence": "Pebbles come in sizes."
+        }
+      ],
+      "routing": {
+        "votes": {
+          "pebbles": 1.0
+        },
+        "filled": [
+          "transformer",
+          "attention"
+        ],
+        "passages": 5
+      }
+    }
+  ],
+  "catalog": {
+    "schema": "secondbrain-catalog/1",
+    "tracks": [
+      {
+        "id": "ml",
+        "title": "ML",
+        "domains": [
+          "attention",
+          "transformer"
+        ]
+      },
+      {
+        "id": "stones",
+        "title": "Stones",
+        "domains": [
+          "pebbles"
+        ]
+      }
+    ],
+    "domains": {
+      "attention": {
+        "moc": "Example Attention Map",
+        "question": "?"
+      },
+      "transformer": {
+        "moc": "Example Attention Map",
+        "question": "?"
+      },
+      "pebbles": {
+        "moc": "Example Pebble Map",
+        "question": "How big are pebbles?"
+      }
+    },
+    "relation_types": [
+      "similar_to",
+      "part_of",
+      "depends_on"
+    ],
+    "inverse_relations": {
+      "similar_to": "similar_to",
+      "part_of": "part_of",
+      "depends_on": "depends_on"
+    },
+    "domain_relations": {}
+  },
+  "taxonomy": {
+    "domains": [
+      "attention",
+      "pebbles",
+      "transformer"
+    ],
+    "domain_mocs": {
+      "attention": "Example Attention Map",
+      "pebbles": "Example Pebble Map",
+      "transformer": "Example Attention Map"
+    },
+    "taxonomies": {
+      "Example Attention Map": {
+        "title": "Example Attention Map",
+        "narrative": "n",
+        "pillars": [
+          {
+            "name": "Token routing",
+            "order": 1,
+            "why": "w",
+            "topics": [
+              "Overview"
+            ]
+          }
+        ]
+      },
+      "Example Pebble Map": {
+        "title": "Example Pebble Map",
+        "narrative": "n",
+        "pillars": [
+          {
+            "name": "Pebble basics",
+            "order": 1,
+            "why": "w",
+            "topics": [
+              "Sizes"
+            ]
+          }
+        ]
+      }
+    }
+  },
+  "taxonomy_sha256": "76d908e27925529805a59da44b82d7d77c424aa6b941252ebdb6a86be70b050b",
+  "topic_counts": {
+    "attention": {
+      "Token routing\u001fOverview": 1
+    },
+    "pebbles": {
+      "Pebble basics\u001fSizes": 1
+    }
+  },
+  "settings": {
+    "chunk_chars": 12000,
+    "new_topics_per_source": 2,
+    "id_prefix": "kc_",
+    "language": "en",
+    "diagrams": true,
+    "after_ingest": "move"
+  },
+  "snapshot_fingerprint": "89c8a29e9466a8f0fdd7955857ea26a52cfc6105085c8ed7d82a446f5a173328"
+}

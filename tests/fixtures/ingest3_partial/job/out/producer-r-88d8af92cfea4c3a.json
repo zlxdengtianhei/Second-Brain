@@ -1,0 +1,213 @@
+{
+  "cards": [
+    {
+      "slug": "lantern-queue",
+      "title": "Lantern queue",
+      "kind": "concept",
+      "domain": "attention",
+      "pillar": "Token routing",
+      "topic": "Overview",
+      "essence": "A lantern queue keeps arrival order and lets readers skip ahead by lit markers.",
+      "propositions": [
+        "Items stay in arrival order.",
+        "Readers skip ahead by following lit markers."
+      ],
+      "intuition": "Like lamp posts along a road: you can walk to the next lamp without counting stones.",
+      "confusions": [
+        "Unlike an index, markers are placed by count, not by key."
+      ],
+      "flashcards": [
+        {
+          "q": "What order does a lantern queue keep?",
+          "a": "Arrival order."
+        },
+        {
+          "q": "How does a reader skip ahead?",
+          "a": "By jumping to a lit marker."
+        }
+      ],
+      "relations": [
+        {
+          "type": "similar_to",
+          "target": "card_exist",
+          "note": "both route readers past items"
+        },
+        {
+          "type": "similar_to",
+          "target": "card_exist",
+          "note": "listed twice on purpose"
+        }
+      ],
+      "aliases": [
+        "lantern list"
+      ],
+      "source_quotes": [
+        "A lantern queue keeps every item in arrival order but lets a reader skip ahead by lit markers."
+      ],
+      "status": "confirmed",
+      "reason": "PRODUCER-REASON-1 one structure, one question"
+    },
+    {
+      "slug": "lit-marker-cost",
+      "title": "Lit marker memory cost",
+      "kind": "fact",
+      "domain": "attention",
+      "pillar": "Token routing",
+      "topic": "Markers",
+      "essence": "Each lit marker costs one extra word, one marker per eight items.",
+      "propositions": [
+        "A writer lights a marker every eight items.",
+        "Each marker costs one word of memory; 800 items carry 100 markers."
+      ],
+      "intuition": null,
+      "confusions": [],
+      "flashcards": [
+        {
+          "q": "How often is a marker lit?",
+          "a": "Every eight items."
+        },
+        {
+          "q": "How many markers do 800 items carry?",
+          "a": "100."
+        },
+        {
+          "q": "What does one marker cost?",
+          "a": "One extra word of memory."
+        }
+      ],
+      "relations": [
+        {
+          "type": "depends_on",
+          "target": "lantern-queue",
+          "note": "markers belong to the queue"
+        },
+        {
+          "type": "part_of",
+          "target": "card_exist",
+          "note": "weak guess",
+          "tier": "extension"
+        }
+      ],
+      "source_quotes": [
+        "A writer lights a marker every eight items.",
+        "so a queue of 800 items carries 100 markers"
+      ],
+      "status": "confirmed",
+      "reason": "PRODUCER-REASON-2 cost is recalled on its own"
+    },
+    {
+      "slug": "marker-dimming",
+      "title": "Marker dimming",
+      "kind": "mechanism",
+      "domain": "attention",
+      "pillar": "Token routing",
+      "topic": "Markers",
+      "essence": "Compaction deletes old markers.",
+      "propositions": [
+        "Markers before the cut are deleted."
+      ],
+      "intuition": null,
+      "confusions": [],
+      "flashcards": [
+        {
+          "q": "What happens to markers before a cut?",
+          "a": "They are deleted."
+        },
+        {
+          "q": "Are dimmed markers followed?",
+          "a": "No."
+        }
+      ],
+      "relations": [
+        {
+          "type": "depends_on",
+          "target": "lit-marker-cost",
+          "note": "dimming acts on markers"
+        }
+      ],
+      "source_quotes": [
+        "markers before the cut are dimmed rather than deleted"
+      ],
+      "status": "confirmed",
+      "reason": "PRODUCER-REASON-3 compaction behaviour"
+    },
+    {
+      "slug": "queue-order",
+      "title": "Arrival order in lantern queues",
+      "kind": "fact",
+      "domain": "attention",
+      "pillar": "Token routing",
+      "topic": "Overview",
+      "essence": "Items keep arrival order.",
+      "propositions": [
+        "A lantern queue keeps every item in arrival order."
+      ],
+      "intuition": null,
+      "confusions": [],
+      "flashcards": [
+        {
+          "q": "Which order is kept?",
+          "a": "Arrival order."
+        },
+        {
+          "q": "Does a lantern queue reorder items?",
+          "a": "No."
+        }
+      ],
+      "relations": [],
+      "source_quotes": [
+        "A lantern queue keeps every item in arrival order"
+      ],
+      "status": "confirmed",
+      "reason": "PRODUCER-REASON-4 order fact"
+    }
+  ],
+  "new_topics": [
+    {
+      "domain": "attention",
+      "pillar": "Token routing",
+      "name": "Markers",
+      "boundary": "How markers are placed, paid for and retired.",
+      "reason": "PRODUCER-REASON-6 no topic covers markers"
+    }
+  ],
+  "coverage": [
+    {
+      "source_quote": "A lantern queue keeps every item in arrival order but lets a reader skip ahead by lit markers.",
+      "disposition": "card",
+      "cards": [
+        "lantern-queue"
+      ],
+      "reason": "PRODUCER-REASON-7 covered"
+    },
+    {
+      "source_quote": "A writer lights a marker every eight items.",
+      "disposition": "card",
+      "cards": [
+        "lit-marker-cost"
+      ],
+      "reason": "PRODUCER-REASON-7 covered"
+    },
+    {
+      "source_quote": "markers before the cut are dimmed rather than deleted",
+      "disposition": "card",
+      "cards": [
+        "marker-dimming"
+      ],
+      "reason": "PRODUCER-REASON-7 covered"
+    },
+    {
+      "source_quote": "A lantern queue keeps every item in arrival order",
+      "disposition": "card",
+      "cards": [
+        "queue-order"
+      ],
+      "reason": "PRODUCER-REASON-7 covered"
+    },
+    {
+      "source_quote": "Thanks for reading, see you next week!",
+      "disposition": "out_of_scope",
+      "reason": "PRODUCER-REASON-8 sign-off"
+    }
+  ]
+}
