@@ -119,10 +119,16 @@ def test_a_near_match_that_is_another_point_stays_when_the_answer_says_why_an_ex
     with pytest.raises(ValueError, match='differs\\[0\\].from must name'):
         check(frozen, **patch, differs=[{'text': question, 'from': 'Q9', 'reason': 'r'}])
     exact = '王车易位时王走几格？'
-    frozen = frozen_with('新的一点。', from_flashcards=[(exact, '答。')])
-    with pytest.raises(ValueError, match='asks what kc_old Q1 asks'):
-        check(frozen, propositions=['新的一点。'], flashcards=[{'q': exact, 'a': '答。'}],
+    frozen = frozen_with('新的一点。', from_flashcards=[(exact, '两格。')])  # Q1, answer and all: never
+    with pytest.raises(ValueError, match='is kc_old Q1, answer and all: leave it out'):
+        check(frozen, propositions=['新的一点。'], flashcards=[{'q': exact, 'a': '两格。'}],
               differs=[{'text': exact, 'from': 'Q1', 'reason': 'r'}])
+    # D-25: Q1's words with another answer go back naming both answers, and stay when differs says why
+    frozen = frozen_with('新的一点。', from_flashcards=[(exact, '答。')])
+    with pytest.raises(ValueError, match="asks what kc_old Q1 asks, but their answers differ \\('两格。' and '答。'\\)"):
+        check(frozen, propositions=['新的一点。'], flashcards=[{'q': exact, 'a': '答。'}])
+    assert check(frozen, propositions=['新的一点。'], flashcards=[{'q': exact, 'a': '答。'}],
+                 differs=[{'text': exact, 'from': 'Q1', 'reason': 'both answers are needed'}])
     # D-21: one the comparison finds the same, but not word for word, stays when differs says why
     marks = '王车易位时，王走几格?'
     frozen = frozen_with('新的一点。', from_flashcards=[(marks, '答。')])

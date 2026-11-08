@@ -2215,10 +2215,10 @@ def _split_item(state: dict, slot: str) -> dict:
 def _patch_fits(old, patch: dict) -> tuple[str | None, list, list]:
     """``(why it does not fit or None, propositions to add, review cards to add)`` for a patch to existing card ``old``.
 
-    Only what the card (or the patch) already says in the same words once spaces are put right is left out; what
-    the comparison only finds the same went back to the merge check at validation (decision D-21).
+    Only a repeat of what the card (or the patch) holds is left out (:func:`source_check.repeat`: a proposition in
+    the same words once spaces are put right, a review card whose question and answer both are); what the
+    comparison only finds the same went back to the merge check at validation (decision D-21).
     """
-    from .source_check import exact as same_text
     problem = cardfmt.patchable(old.body)
     if problem:
         return problem, [], []
@@ -2227,12 +2227,11 @@ def _patch_fits(old, patch: dict) -> tuple[str | None, list, list]:
     have = props + list(replaced.values())
     add = []
     for text in patch.get('propositions') or []:
-        if not any(same_text(text, x) for x in have + add):
+        if not any(source_check.repeat(text, x) for x in have + add):
             add.append(text)
-    asked = [f['q'] for f in flashcards]
     add_f = []
     for f in patch.get('flashcards') or []:
-        if not any(same_text(f['q'], q) for q in asked + [x['q'] for x in add_f]):
+        if not any(source_check.repeat(f, x) for x in flashcards + add_f):
             add_f.append(f)
     if len(props) + len(add) > source_check.MAX_PROPOSITIONS or len(flashcards) + len(add_f) > source_check.MAX_FLASHCARDS:
         return 'too_large', add, add_f
@@ -2944,6 +2943,10 @@ def _apply_job(root: Path, job_id: str, settled: list[dict] | None = None) -> di
         except cardfmt.PatchRefused as exc:
             raise Conflict(f'{target} could not take its patch: {exc}; run `sb job advance` again') from exc
         fm2, body2 = parse_note(raw2)
+        missing = source_check.lost(cardfmt.propositions_of(body2) or [], cardfmt.flashcards_of(body2) or [], patch)
+        if missing:  # before anything is written: no item of the patch may go missing on the way (decision D-25)
+            raise IngestError(f'{target} would not hold what the merge check\'s patch gives it: {"; ".join(missing)}. '
+                              'Nothing was written; this is a fault of the program, not of the answer')
         changes.append(Change(old.path, old.sha256, raw2))
         updated[target] = replace(old, raw=raw2, fm=fm2, body=body2, sha256=digest(raw2))
         for m in moved:  # back links: on a new card of this job before it is written, else on the existing card

@@ -396,8 +396,47 @@ def _incomplete(at: str, wanted: list, carried: list, replace: list, already, to
 
 
 def exact(a, b) -> bool:
-    """The same words once spaces are put right: the only repeat the program leaves out by itself (decision D-21)."""
-    return ' '.join(str(a).split()) == ' '.join(str(b).split())
+    """The same words once spaces are put right. A reason to send an item back (a question asked again, a
+    proposition the card has); what the program leaves out by itself is decided by :func:`repeat` alone."""
+    return _spaced(a) == _spaced(b)
+
+
+def _key(item):
+    """What :func:`repeat` compares: a proposition's words, spaces put right; a review card's question and answer."""
+    if isinstance(item, dict):
+        return 'flashcard', _spaced(item.get('q')), _spaced(item.get('a'))
+    return 'proposition', _spaced(item)
+
+
+def repeat(a, b) -> bool:
+    """The one test of a repeat the program leaves out by itself (decision D-21): two propositions that are the same
+    words once spaces are put right, or two review cards (``{"q", "a"}``) whose question and answer both are.
+
+    Every place that leaves an item out without asking (a patch into an existing card, a carry into a card of the
+    source, an item a patch or carry holds twice) asks this, and nothing else. Anything else the comparison finds
+    the same goes back to the merge check (:func:`_said_twice`), never out; and :func:`lost` checks before a card
+    is written that nothing else was left out.
+    """
+    return _key(a) == _key(b)
+
+
+def lost(propositions: list, flashcards: list, patch: dict) -> list[str]:
+    """What of ``patch`` (``propositions``, ``flashcards``, the ``by`` of each ``replace``) a card that took it does
+    not hold, by the rule of :func:`repeat`; each as a message naming it. Empty when every item is there.
+
+    The check the program runs before it writes a card that took a patch or a carry: an item is in the card, or
+    the same as one of its items. It does not call :func:`repeat`, so a fault there cannot pass it.
+    """
+    have = {_key(p) for p in propositions or []} | {_key(f) for f in flashcards or [] if isinstance(f, dict)}
+    out = []
+    for text in list(patch.get('propositions') or []) + [r.get('by') for r in patch.get('replace') or []
+                                                         if isinstance(r, dict)]:
+        if _key(text) not in have:
+            out.append(f'proposition {text!r}')
+    for card in patch.get('flashcards') or []:
+        if isinstance(card, dict) and _key(card) not in have:
+            out.append(f'review card {card.get("q")!r} ({card.get("a")!r})')
+    return out
 
 
 def _said_twice(at: str, target: str, old: dict, added: list, replace: list, flashcards: list, differs,
@@ -410,15 +449,19 @@ def _said_twice(at: str, target: str, old: dict, added: list, replace: list, fla
     once spaces are put right (:func:`exact`) always go back. Words the comparison finds the same once marks, case
     and width are set aside (:func:`same_text`), and close wordings (:func:`near_same`), go back unless ``differs``
     names the pair and says why it is another point; ``from`` names a proposition (``P3``) or review card (``Q2``)
-    of ``target``, or another item this one carries, copied exactly. With ``exact_ok`` (a carry into a card of the
-    source) the same words are not sent back: the program leaves them out when it merges.
+    of ``target``, or another item this one carries, copied exactly. A review card that asks a question of
+    ``target`` (or another one it carries) in the same words with another answer goes back too, both answers named,
+    and ``differs`` may keep it (for two of its own, ``from`` is the question itself). Only a :func:`repeat` is left
+    out by the program: two of the same items it carries become one, and with ``exact_ok`` (a carry into a card of
+    the source) an item ``target`` has is not sent back but left out when the program merges.
     """
     props = [str(p) for p in old.get('propositions') or []]
     old_flashcards = [f for f in old.get('flashcards') or [] if isinstance(f, dict)]
     questions = [str(f.get('q')) for f in old_flashcards]
     errors, allowed = [], set()
     bys = [r.get('by') for r in replace if isinstance(r, dict) and isinstance(r.get('by'), str)]
-    asked = [f.get('q') for f in flashcards if isinstance(f, dict) and isinstance(f.get('q'), str)]
+    own_cards = [f for f in flashcards if isinstance(f, dict) and isinstance(f.get('q'), str)]
+    asked = [f['q'] for f in own_cards]
     carried = set(added) | set(bys) | set(asked)
     for k, row in enumerate(differs or []):
         text, ref, why = (row.get('text'), row.get('from'), row.get('reason')) if isinstance(row, dict) else (None,) * 3
@@ -427,7 +470,7 @@ def _said_twice(at: str, target: str, old: dict, added: list, replace: list, fla
             errors.append(f'{at}.differs[{k}].text must be a proposition, replacement or question of this patch, '
                           'copied exactly')
         elif not (1 <= number <= len(props if kind == 'P' else questions if kind == 'Q' else [])
-                  or (ref in carried and ref != text)):
+                  or (ref in carried and (ref != text or asked.count(text) > 1))):
             errors.append(f'{at}.differs[{k}].from must name a proposition (P1–P{len(props)}) or review card '
                           f'(Q1–Q{len(questions)}) of {target}, or another item of this patch copied exactly')
         elif not isinstance(why, str) or not why.strip():
@@ -445,9 +488,9 @@ def _said_twice(at: str, target: str, old: dict, added: list, replace: list, fla
     def looks(how, n):
         return f'looks the same as {target} P{n}' if how == 'same' else f'may say again what {target} P{n} says'
     for text in added:
+        if exact_ok and any(repeat(text, p) for p in props):
+            continue  # the card says it already: the program leaves it out when it merges
         n, how = against(text, props)
-        if how == 'exact' and exact_ok:
-            continue
         if how == 'exact':
             errors.append(f'{at}.propositions: {text!r} says what {target} P{n} says word for word ({props[n - 1]!r}): '
                           f'name it in already as P{n}')
@@ -466,33 +509,43 @@ def _said_twice(at: str, target: str, old: dict, added: list, replace: list, fla
             errors.append(f'{at}.replace[{k}].by {"says" if how == "exact" else "may say"} again what {target} P{n} '
                           f'says ({props[n - 1]!r}): replace P{n} instead, or leave that part out'
                           + ('' if how == 'exact' else ', or list it in differs with "from": "P' + str(n) + '"'))
-    for carried_card in flashcards:
-        if not isinstance(carried_card, dict) or not isinstance(carried_card.get('q'), str):
-            continue
+    for carried_card in own_cards:
         question, answer = carried_card['q'], carried_card.get('a')
+        if exact_ok and any(repeat(carried_card, f) for f in old_flashcards):
+            continue  # the same question and answer: the program leaves it out when it merges
         n, how = against(question, questions)
-        if how == 'exact' and exact_ok and exact(answer, old_flashcards[n - 1].get('a')):
-            continue  # only the same question and answer, spaces put right, are left out by the program
-        if how == 'exact' and exact_ok:
-            if (question, f'Q{n}') not in allowed:
-                errors.append(f'{at}.flashcards: {question!r} asks what {target} Q{n} asks, but their answers differ '
-                              f'({old_flashcards[n - 1].get("a")!r} and {answer!r}): carry one complete pair, or '
-                              f'list it in differs with "from": "Q{n}" and why both answers are needed')
-        elif how == 'exact':
-            errors.append(f'{at}.flashcards: {question!r} asks what {target} Q{n} asks ({questions[n - 1]!r}): '
-                          'leave it out')
-        elif how and (question, f'Q{n}') not in allowed:
+        if how == 'exact' and exact(answer, old_flashcards[n - 1].get('a')):
+            errors.append(f'{at}.flashcards: {question!r} is {target} Q{n}, answer and all: leave it out')
+        elif how == 'exact' and (question, f'Q{n}') not in allowed:
+            errors.append(f'{at}.flashcards: {question!r} asks what {target} Q{n} asks, but their answers differ '
+                          f'({old_flashcards[n - 1].get("a")!r} and {answer!r}): '
+                          + ('carry one complete pair' if exact_ok else f'leave it out when Q{n} answers it')
+                          + f', or list it in differs with "from": "Q{n}" and why both answers are needed')
+        elif how in ('same', 'near') and (question, f'Q{n}') not in allowed:
             errors.append(f'{at}.flashcards: {question!r} {"looks the same as" if how == "same" else "may ask again what"}'
                           f' {target} Q{n}{"" if how == "same" else " asks"} ({questions[n - 1]!r}): leave it out, or '
                           f'list it in differs with "from": "Q{n}" and why it asks something else')
-    # within what it carries: the same words twice are carried once (the program does that); two that only look
-    # the same go back, as against the card (they used to be left out silently, K4'')
-    for group, what in ((list(added) + bys, 'propositions'), (asked, 'flashcards')):
-        for i, a in enumerate(group):
-            for b in group[:i]:
-                if not exact(a, b) and same_text(a, b) and (a, b) not in allowed:
-                    errors.append(f'{at}.{what}: {a!r} looks the same as {b!r}, which it carries too: carry one of '
-                                  f'them, or list it in differs ({{"text": {a!r}, "from": {b!r}, "reason": ...}})')
+    # within what it carries: an item twice (a repeat) is carried once, by the program; two that only look the same
+    # go back, as against the card (they used to be left out silently, K4''), and so does a question asked twice
+    # with two answers (it was left out silently on the patch path, K4''')
+    group = list(added) + bys
+    for i, a in enumerate(group):
+        for b in group[:i]:
+            if not repeat(a, b) and same_text(a, b) and (a, b) not in allowed:
+                errors.append(f'{at}.propositions: {a!r} looks the same as {b!r}, which it carries too: carry one of '
+                              f'them, or list it in differs ({{"text": {a!r}, "from": {b!r}, "reason": ...}})')
+    for i, card in enumerate(own_cards):
+        for other in own_cards[:i]:
+            a, b = card['q'], other['q']
+            if repeat(card, other) or (a, b) in allowed:
+                continue
+            if exact(a, b):
+                errors.append(f'{at}.flashcards: {a!r} is asked twice, with two answers ({other.get("a")!r} and '
+                              f'{card.get("a")!r}): carry one complete pair, or list it in differs ({{"text": {a!r}, '
+                              f'"from": {b!r}, "reason": ...}}) and why both answers are needed')
+            elif same_text(a, b):
+                errors.append(f'{at}.flashcards: {a!r} looks the same as {b!r}, which it carries too: carry one of '
+                              f'them, or list it in differs ({{"text": {a!r}, "from": {b!r}, "reason": ...}})')
     return errors
 
 
@@ -732,27 +785,26 @@ def apply(settled: list[dict], frozen: dict, entries: list) -> tuple[list[dict],
             number = int(swap['proposition'][1:])
             props[number - 1] = swap['by']
             new_p.append(number)
-        # only the same words once spaces are put right are left out here; anything the comparison only finds the
-        # same went back to the merge check at validation (decision D-21)
-        have_p = {_spaced(x) for x in props}
-        have_flashcards = {(_spaced(f.get('q')), _spaced(f.get('a'))) for f in flashcards}
+        # only a repeat (:func:`repeat`) is left out here; anything the comparison only finds the same went back to
+        # the merge check at validation (decision D-21)
         for text in carry.get('propositions') or []:
-            if _spaced(text) in have_p:  # the kept card says it already, word for word
+            if any(repeat(text, x) for x in props):  # the kept card says it already, word for word
                 skipped += 1
                 continue
-            have_p.add(_spaced(text))
             props.append(text)
             new_p.append(len(props))
         for f in original[slug].get('flashcards') or []:
             if {'q': f.get('q'), 'a': f.get('a')} not in (carry.get('flashcards') or []):
                 continue
-            pair = (_spaced(f.get('q')), _spaced(f.get('a')))
-            if pair in have_flashcards:
+            if any(repeat(f, x) for x in flashcards):
                 skipped += 1
                 continue
-            have_flashcards.add(pair)
             flashcards.append(f)
             new_f.append(len(flashcards))
+        missing = lost(props, flashcards, carry)
+        if missing:  # before the card is written: nothing a carry holds may go missing on the way (decision D-25)
+            raise ValueError(f'{slug} carries into {into} what {into} would not hold once merged: '
+                             f'{"; ".join(missing)}; nothing was written')
         keep['propositions'], keep['flashcards'] = props, flashcards
         own = (original[slug].get('source_quotes') or [None])[0]
         keep['source_quotes'] = list(dict.fromkeys(list(keep.get('source_quotes') or [])
