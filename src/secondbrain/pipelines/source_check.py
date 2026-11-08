@@ -621,7 +621,12 @@ def salvage(frozen: dict, payload: Any, closed: Callable[[str, str, str], str | 
     held = [{'target': patches[i]['target'], 'cards': [c['slug'] for c in groups[patches[i]['target']]['from']],
              'problems': [line for line in lines if line.startswith(f'patches[{i}]')]} for i in sorted(bad)]
     gone = {h['target'] for h in held}
-    kept = {**payload, 'patches': [p for i, p in enumerate(patches) if i not in bad]}
+    held_cards = {c['slug'] for target in gone for c in groups[target]['from']}
+    # A dispute names a patch-set card, not its existing target. Once that card's patch is held back, its dispute
+    # must go too: the card is already waiting for the owner, and the reduced answer no longer has that patch set.
+    kept = {**payload, 'patches': [p for i, p in enumerate(patches) if i not in bad],
+            'disputes': [row for row in payload.get('disputes') or []
+                         if not isinstance(row, dict) or row.get('slug') not in held_cards]}
     try:
         validate_answer({**frozen, 'patch_set': [g for g in frozen.get('patch_set') or [] if g['target'] not in gone]},
                         kept, closed)

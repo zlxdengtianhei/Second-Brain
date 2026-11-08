@@ -91,6 +91,28 @@ def test_three_patches_one_always_collides_two_go_in_and_one_waits_for_the_owner
     assert 'asks what card_c Q1 asks' in items[0]['detail']
 
 
+def test_salvage_removes_disputes_of_a_held_patch_so_the_other_two_still_go_in(tmp_path):
+    root, job_id, before, produce, levels = three_patches(tmp_path)
+    checks = []
+
+    def check(packet):
+        answer = keep_all(packet)
+        answer['disputes'] = [{'slug': 'lit-marker-cost', 'reason': 'its patch collides with the existing card'}]
+        return answer
+
+    done = run(root, job_id, reviewer(checks, check=check, levels=levels), producer_with(produce))
+    assert done['status'] == 'applied', done.get('pending')
+    assert len(checks) == 3
+    assert done['patch_set'] == {'lantern-queue': 'patched', 'filler-note': 'patched', 'lit-marker-cost': 'written'}
+    [held] = done['patches_held']
+    assert held['target'] == 'card_c' and held['cards'] == ['lit-marker-cost']
+    assert LANTERN_PROPS <= set(cardfmt.propositions_of(card_of(root, EXISTING).body))
+    assert set(FILLER_NOTE['propositions']) <= set(cardfmt.propositions_of(card_of(root, 'card_b').body))
+    assert cardfmt.propositions_of(card_of(root, 'card_c').body) == ['An old point that nothing repeats.']
+    written = next(x for x in read_cards(root) if x.title == LIT['title'])
+    assert written.fm['status'] == 'needs-review' and 'possible_repeat' in written.fm['review_reason']
+
+
 def test_a_problem_outside_the_patches_still_refuses_the_whole_answer():
     group = {'target': 'kc_old', 'card': {'propositions': ['An old point.'], 'flashcards': []},
              'from': [{'slug': 'new-card', 'propositions': ['A new point.'], 'flashcards': []}]}
