@@ -2318,7 +2318,10 @@ def _split_plan(root: Path, job_id: str, packet: dict, settled: list[dict]) -> l
     """The split slots of the job, fixed in its state the first time they are needed.
 
     One per card of the patch set whose existing card's patch would go past 12
-    propositions or 8 review cards.
+    propositions or 8 review cards. A card whose propositions the existing card all
+    says (``already``) opens none: when it carries nothing more it is covered, and when
+    it carries only review cards they go into the existing card as a patch of their
+    own (``split_qa_only``, by existing card), held when they would take it past 8.
     """
     state = jobs.load(root, job_id)
     if state.get('split_plan') is not None:
@@ -2327,7 +2330,7 @@ def _split_plan(root: Path, job_id: str, packet: dict, settled: list[dict]) -> l
     patches = (report or {}).get('patches') or {}
     disputed = set((report or {}).get('disputes') or {})
     snapshot = read_snapshot(root)
-    plan, covered = [], []
+    plan, covered, qa_only = [], [], {}
     frozen = jobs.artifact(root, state, 'candidate', report['round']) if (report or {}).get('round') else {}
     source_cards = {c['slug']: c for c in frozen.get('cards') or []}
     merged_into = (report or {}).get('merged_into') or {}
@@ -2347,6 +2350,12 @@ def _split_plan(root: Path, job_id: str, packet: dict, settled: list[dict]) -> l
             if not any(own.get(k) for k in ('propositions', 'flashcards', 'replace')):
                 covered.append(slug)
                 continue
+            if not own.get('propositions') and not own.get('replace'):  # only review cards left (D-24): no slot
+                row = qa_only.setdefault(target, {'cards': [], 'flashcards': [], 'already': []})
+                row['cards'].append(slug)
+                row['flashcards'] += own.get('flashcards') or []
+                row['already'] += own.get('already') or []
+                continue
             plan.append({'slot': split.slot_name(len(plan) + 1), 'slug': slug, 'chunk': o['chunk'], 'with': target,
                          'existing_propositions': cardfmt.propositions_of(old.body),
                          'place': {'domain': old.domain, 'pillar': old.fm.get('pillar'), 'topic': old.fm.get('topic')},
@@ -2364,7 +2373,7 @@ def _split_plan(root: Path, job_id: str, packet: dict, settled: list[dict]) -> l
                          'existing_propositions': shown['propositions'],
                          'place': {'domain': into['domain'], 'pillar': into['pillar'], 'topic': into['topic']},
                          'carry': card['_carry'], 'card': {k: v for k, v in card.items() if not k.startswith('_')}})
-    jobs._internal_update(root, job_id, split_plan=plan, split_covered=covered)
+    jobs._internal_update(root, job_id, split_plan=plan, split_covered=covered, split_qa_only=qa_only)
     return plan
 
 
@@ -3001,7 +3010,9 @@ def _apply_job(root: Path, job_id: str, settled: list[dict] | None = None) -> di
             by_target.setdefault(fate['target'], []).append(slug)
     repeat_cards = {s: _final_card(entries, s, c) for o in settled for s, c in o.get('repeats', {}).items()}
     for target in sorted(by_target):
-        old, patch, slugs = snapshot.cards[target], check['patches'][target], by_target[target]
+        # the merge check's patch; or, beside split cards, the review cards of the cards it says all of (D-24)
+        old, slugs = snapshot.cards[target], by_target[target]
+        patch = fates[slugs[0]].get('patch') or check['patches'][target]
         add, add_f = fates[slugs[0]]['add'], fates[slugs[0]]['add_flashcards']
         swaps = {int(r['proposition'][1:]): r['by'] for r in patch.get('replace') or []}
         first = len(cardfmt.propositions_of(old.body)) + 1
@@ -3251,7 +3262,11 @@ def _apply_job(root: Path, job_id: str, settled: list[dict] | None = None) -> di
                                for t, h in sorted(((check or {}).get('held') or {}).items())]
               + [{'target': ids.get(h['into'], into_existing.get(h['into'], h['into'])), 'cards': [s],
                   'problems': h['problems'], 'carry': True}
-                 for s, h in sorted(((check or {}).get('held_carries') or {}).items())]}
+                 for s, h in sorted(((check or {}).get('held_carries') or {}).items())]
+              + [{'target': t, 'cards': row['cards'], 'problems': [fates[row['cards'][0]]['reason']],
+                  'review_cards_only': True}
+                 for t, row in sorted((state.get('split_qa_only') or {}).items())
+                 if fates.get(row['cards'][0], {}).get('held')]}
     if progress is not None:
         result['retry_progress'] = progress
     if stalled:
@@ -3286,6 +3301,7 @@ def _repeat_fates(root: Path, state: dict, packet: dict, settled: list[dict], ch
     held = (check or {}).get('held') or {}
     plan = {i['slug']: i for i in state.get('split_plan') or []}
     covered = set(state.get('split_covered') or [])
+    qa_only = {s: (t, row) for t, row in (state.get('split_qa_only') or {}).items() for s in row['cards']}
     out = {}
     for o in settled:
         for slug, card in (o.get('repeats') or {}).items():
@@ -3310,6 +3326,14 @@ def _repeat_fates(root: Path, state: dict, packet: dict, settled: list[dict], ch
                 fate.update(how='written', reason=why)
             elif slug in covered:  # D-22: its existing card says all it would add (already); nothing to write
                 fate.update(how='covered', reason=f'{target} already says each of its propositions')
+            elif slug in qa_only:  # D-24: only review cards left: they go in as a patch of their own, or are held
+                partial = {'flashcards': qa_only[slug][1]['flashcards'], 'already': qa_only[slug][1]['already']}
+                problem, add, add_f = _patch_fits(old, partial)
+                fate.update(how='patched', add=add, add_flashcards=add_f, patch=partial) if problem is None else \
+                    fate.update(how='written', held=True,
+                                reason=f'{target} says each of its propositions, but its review cards would take '
+                                       f'{target} past {source_check.MAX_FLASHCARDS} review cards'
+                                       if problem == 'too_large' else f'its existing card cannot take a patch: {problem}')
             elif slug in plan:
                 done = split_outcome(root, state, packet, plan[slug])
                 fate.update(how='split', card=done['card'], slot=plan[slug]['slot']) if done['card'] else \
