@@ -182,7 +182,8 @@ def prepare(root: Path, source: Path, *, settings: config.Settings | None = None
         routed = route(root, snapshot, text[chunk['start']:chunk['end']], domains=settings.ingest.candidate_domains,
                        k=settings.ingest.candidates_k)
         chunks.append({**chunk, 'candidate_domains': _with_placement(routed['domains'], place),
-                       **_producer_candidates(snapshot, routed, settings.ingest.candidates_chars),
+                       **_producer_candidates(snapshot, routed, settings.ingest.candidates_chars,
+                                              settings.ingest.candidates_shelf),
                        'routing': {'votes': routed['votes'], 'filled': routed['filled'],
                                    'passages': routed['passages']}})
     domains = sorted(snapshot.catalog['domains'])
@@ -243,15 +244,40 @@ def _frozen(packet: dict, key: str):
     return settings[key] if key in settings else _FROZEN_DEFAULTS[key]
 
 
-#: The view each route's candidates get in a producer packet: enough to link and to see what exists.
-PRODUCER_LEVELS = {'words': 'brief'}
+#: The view each route's candidates get in a producer packet: enough to link and to see what exists; a shelf
+#: by title (design section 2.3).
+PRODUCER_LEVELS = {'words': 'brief', 'shelf': 'title'}
+#: The key of a producer packet's ``candidates`` that lists one shelf: ``shelf <domain>/<pillar>/<topic>``.
+SHELF_KEY = 'shelf '
 
 
-def _producer_candidates(snapshot, routed: dict, budget: int) -> dict:
-    """``{candidates, candidate_cards}`` of a chunk: its routed cards at the views that fit ``budget``."""
-    entries = retrieval.merge(routed['candidates'].values())
-    table, _ = retrieval.fit(snapshot, entries, budget, PRODUCER_LEVELS)
-    return {'candidates': {key: retrieval.keep(rows, table) for key, rows in routed['candidates'].items()},
+def _producer_shelves(snapshot, routed: dict) -> dict:
+    """The shelves of the topics the chunk's first-route cards are filed under, ``{key: [{id, rank, via}]}``.
+
+    A topic comes in the order of its best-ranked hit; each lists at most :data:`retrieval.SHELF_MAX` cards,
+    those the search ranked first leading.
+    """
+    order: dict = {}
+    for rows in routed['candidates'].values():
+        for e in rows:
+            order[e['id']] = min(order.get(e['id'], e['rank']), e['rank'])
+    topics: dict = {}
+    for cid in sorted(order, key=lambda c: (order[c], c)):
+        card = snapshot.cards.get(cid)
+        if card is not None and card.fm.get('pillar') and card.fm.get('topic'):
+            topics.setdefault((card.domain, card.fm['pillar'], card.fm['topic']), None)
+    return {f'{SHELF_KEY}{d}/{p}/{t}': [{'id': cid, 'rank': n, 'via': ['shelf']}
+                                        for n, cid in enumerate(retrieval.shelf(snapshot, d, p, t, rank=order), 1)]
+            for d, p, t in topics}
+
+
+def _producer_candidates(snapshot, routed: dict, budget: int, shelf: bool = False) -> dict:
+    """``{candidates, candidate_cards}`` of a chunk: its routed cards, and with ``shelf`` the shelves of the topics
+    they are filed under (packed last), at the views that fit ``budget``."""
+    lists = {**routed['candidates'], **(_producer_shelves(snapshot, routed) if shelf else {})}
+    table, _ = retrieval.fit(snapshot, retrieval.merge(lists.values()), budget, PRODUCER_LEVELS)
+    return {'candidates': {key: rows for key, rows in ((k, retrieval.keep(r, table)) for k, r in lists.items())
+                           if rows or not key.startswith(SHELF_KEY)},
             'candidate_cards': table}
 
 
@@ -335,7 +361,8 @@ def retry(root: Path, job_id: str, *, settings: config.Settings | None = None) -
         named = [d for d in _reviewed_domains(root, parent, old, cid, open_items[cid])
                  if d in snapshot.catalog['domains'] and d not in routed['domains']]
         chunks.append({**chunk, 'candidate_domains': _with_placement(routed['domains'] + named, old),
-                       **_producer_candidates(snapshot, routed, _frozen(old, 'candidates_chars')),
+                       **_producer_candidates(snapshot, routed, _frozen(old, 'candidates_chars'),
+                                              _frozen(old, 'candidates_shelf')),
                        'routing': {'votes': routed['votes'], 'filled': routed['filled'],
                                    'passages': routed['passages'], 'named_by_review': named}})
     for card_list in written.values():

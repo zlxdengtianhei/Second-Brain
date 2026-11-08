@@ -118,3 +118,73 @@ def test_named_cards_past_twice_the_budget_split_the_chunk(tmp_path, monkeypatch
     assert calls[:2] == ['c01', 'c01-1']  # the halves are produced again
     parts = [c['chunk_id'] for c in ingest.effective_chunks(jobs.read_input(root, prepared['job_id']), state)]
     assert parts[0] == 'c01-1' and len(parts) >= 2 and all(p.startswith('c01-') for p in parts)
+
+
+# --- defaults of decisions D-10, D-16, D-17 and D-18 (commit 7) ------------------------------------------------------
+def test_a_new_job_freezes_the_decided_defaults():
+    ingest_, review = config.IngestConfig(), config.ReviewPolicy()
+    assert (ingest_.candidates_k, ingest_.candidates_hop, ingest_.candidates_chars) == (15, 0, 40000)   # D-10, D-17
+    assert (ingest_.candidates_shelf, ingest_.review_named, ingest_.review_words_view) == (True, True, 'brief')
+    assert (ingest_.context_note, ingest_.context_note_chars) == ('program', 2000)                     # D-16
+    assert (review.max_repair_rounds, review.max_invalid_retries, review.focused_review, review.amend) == \
+        (2, 2, True, True)                                                                             # D-18
+    assert 'candidates_shelf = true' in config.EXAMPLE and 'review_words_view = "brief"' in config.EXAMPLE
+    assert 'Flash reviewer' in config.EXAMPLE
+    assert config.parse({}).ingest == ingest_ and config.parse({}).review == review   # the example says the same
+
+
+def test_by_default_the_reviewer_sees_the_search_hits_brief_and_named_cards_whole(tmp_path):
+    root = lantern_vault(tmp_path)
+    write_card(root, 'demo_shelf', 'Unrelated title on the shelf', 'Nothing in common.', ['Nothing.'], topic=TOPIC)
+    packet, job_id = review_packet_for(root, naming())
+    frozen = jobs.read_input(root, job_id)['settings']
+    assert (frozen['candidates_shelf'], frozen['review_words_view']) == (True, 'brief')
+    assert 'propositions' in packet['candidate_cards']['demo_far']                 # named: full
+    assert 'propositions' not in packet['candidate_cards']['demo_lantern']         # found by search: brief
+    rows = {e['id']: e for e in packet['candidates']['lantern-queue']}
+    assert 'shelf' in rows['demo_shelf']['via']
+
+
+def test_the_producer_packet_holds_the_shelves_of_the_topics_its_hits_are_in(tmp_path):
+    root = lantern_vault(tmp_path)
+    write_card(root, 'demo_shelf', 'Unrelated title on the shelf', 'Nothing in common.', ['Nothing.'], topic=TOPIC)
+    prepared = ingest.prepare(root, root / '00_Inbox' / SOURCE_NAME)
+    chunk = jobs.read_input(root, prepared['job_id'])['chunks'][0]
+    shelves = {k: v for k, v in chunk['candidates'].items() if k.startswith(ingest.SHELF_KEY)}
+    assert f'{ingest.SHELF_KEY}{DOMAIN}/{PILLAR}/{TOPIC}' in shelves
+    [shelf] = [v for k, v in shelves.items() if k.endswith(f'/{TOPIC}')]
+    assert 'demo_shelf' in [e['id'] for e in shelf] and len(shelf) <= 25
+    assert all(e['via'] == ['shelf'] for e in shelf)
+    hits = {e['id'] for k, rows in chunk['candidates'].items() if not k.startswith(ingest.SHELF_KEY) for e in rows}
+    only = [e['id'] for e in shelf if e['id'] not in hits]
+    assert only and all(set(chunk['candidate_cards'][i]) == {'id', 'title'} for i in only)  # by title
+    snapshot = read_snapshot(root)  # each shelf is the topic of a search hit
+    topics = {f"{ingest.SHELF_KEY}{c.domain}/{c.fm['pillar']}/{c.fm['topic']}" for i, c in snapshot.cards.items()
+              if i in hits}
+    assert set(shelves) == topics
+    routed = {'candidates': {k: v for k, v in chunk['candidates'].items() if not k.startswith(ingest.SHELF_KEY)}}
+    off = ingest._producer_candidates(snapshot, routed, 40000, shelf=False)  # candidates_shelf = false
+    assert not [k for k in off['candidates'] if k.startswith(ingest.SHELF_KEY)]
+
+
+def test_a_shelf_is_packed_last_its_titles_left_out_before_any_search_hit(tmp_path):
+    from secondbrain import retrieval
+    root = lantern_vault(tmp_path)
+    for i in range(20):
+        write_card(root, f'demo_s{i:02d}', f'Shelf card number {i:02d} with a long title', 'x', ['x'], topic=TOPIC)
+    snapshot = read_snapshot(root)
+    routed = {'candidates': {'p1': [{'id': EXISTING, 'rank': 1, 'via': ['words']},
+                                    {'id': 'demo_lantern', 'rank': 2, 'via': ['words']}]}}
+    whole = ingest._producer_candidates(snapshot, routed, 400000, shelf=True)
+    hits = {EXISTING, 'demo_lantern'}
+    budget = sum(cardfmt_chars(v) for cid, v in whole['candidate_cards'].items() if cid in hits) + 300
+    packed = ingest._producer_candidates(snapshot, routed, budget, shelf=True)
+    assert hits <= set(packed['candidate_cards'])                                   # search hits kept
+    left = set(whole['candidate_cards']) - set(packed['candidate_cards'])
+    assert left and all(cid.startswith('demo_s') or cid == 'demo_shelf' for cid in left)
+    assert retrieval.VIAS[-1] == 'shelf'
+
+
+def cardfmt_chars(view):
+    from secondbrain import cards as cardfmt
+    return cardfmt.view_chars(view)

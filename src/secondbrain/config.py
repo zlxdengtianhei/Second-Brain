@@ -132,12 +132,15 @@ class IngestConfig:
     candidates_k: object = 15
     candidates_chars: int = 40000
     candidates_hop: int = 0
-    #: The shelf (every card of a topic, by title) of each proposed card's topic in the reviewer packet.
-    candidates_shelf: bool = False
+    #: Shelves (every card of a topic, by title, at most 25; packed last): in the producer packet, those of the
+    #: topics its search hits are filed under; in the reviewer packet, that of each proposed card's topic.
+    candidates_shelf: bool = True
     #: The reviewer packet holds every existing card the producer named (relations, coverage rows, conflicts,
-    #: overlap hints), whole; and the view of the cards the search found: "full" or "brief".
+    #: overlap hints), whole; and the view of the cards the search found: "brief" (decision D-17: an Opus
+    #: reviewer found as much as with "full", reading less) or "full". Set "full" when a Flash model reviews:
+    #: in H4 a DeepSeek reviewer found about 6 points fewer injected errors with "brief".
     review_named: bool = True
-    review_words_view: str = 'full'
+    review_words_view: str = 'brief'
     #: A card that extends an existing card goes into it (its propositions, review cards, source and relations),
     #: or is rewritten as a narrower card when that card would grow too long. Off: it is written next to the
     #: existing card, needs-review, as before.
@@ -472,10 +475,10 @@ api_key_env = "SB_REVIEWER_API_KEY"
 require_different_family = true
 allow_same_family_in_host_mode = true
 withhold_producer_reasons = true
-max_repair_rounds = 2              # content repair rounds per chunk
+max_repair_rounds = 2              # content repair rounds per chunk (D-18: every chunk of H8 settled in 1)
 max_invalid_retries = 2            # an answer that failed the program's checks, asked for again (per slot)
 focused_review = true              # a repair round's reviewer checks the earlier findings; other problems block only if serious
-amend = true                       # the reviewer may fix relations, the topic or a review card itself
+amend = true                       # the reviewer may fix relations, the topic or a review card itself (D-18)
 
 [model_families]    # substring -> family, merged over the built-in table
 # my-local-model = "local"
@@ -486,14 +489,16 @@ after_ingest = "move"        # move | keep
 new_topics_per_source = 2
 converter = "none"           # none | markitdown
 id_prefix = "kc_"
-candidates_k = 15            # existing cards per query, every role (or "auto": each role's count before 15)
-candidates_chars = 40000     # characters of retrieved card views per packet (named cards do not count)
-candidates_hop = 0           # second route: the cards the first N hits link (0: off)
-candidates_shelf = false     # the reviewer also sees the titles of every card in each card's topic
+candidates_k = 15            # existing cards per query, every role, any vault size (D-10; "auto": the old counts)
+candidates_chars = 40000     # characters of retrieved card views per packet (named cards do not count; D-17)
+candidates_hop = 0           # second route: the cards the first N hits link (0: off; D-10)
+                             # the search covers the whole vault, not only related domains (D-10)
+candidates_shelf = true      # shelves by title: the producer's hits' topics, the reviewer's card's topic
 review_named = true          # the reviewer sees, whole, every existing card the producer named
-review_words_view = "full"   # full | brief: how the reviewer sees the cards the search found
+review_words_view = "brief"  # brief | full: the cards the search found, to the reviewer (full with a Flash reviewer:
+                             # in H4 a DeepSeek reviewer found about 6 points fewer errors with brief)
 merge_into_existing = true   # a card that only adds to an existing card goes into it (false: written next to it)
-context_note = "program"     # off | program | summary | concepts: the note on where a chunk sits in its source
+context_note = "program"     # off | program | summary | concepts: the note on where a chunk sits in its source (D-16)
 context_note_chars = 2000    # the note's length
 
 [cards]

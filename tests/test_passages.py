@@ -95,7 +95,7 @@ def test_a_new_job_freezes_fifteen_and_the_producer_reads_fifteen_per_passage(tm
     from secondbrain import jobs
     packet = jobs.read_input(root, job['job_id'])
     assert packet['settings']['candidates_k'] == 15
-    rows = packet['chunks'][0]['candidates']
+    rows = {k: r for k, r in packet['chunks'][0]['candidates'].items() if not k.startswith(ingest.SHELF_KEY)}
     assert max(len(r) for r in rows.values()) == 15 and 'chunk' not in rows
 
 
