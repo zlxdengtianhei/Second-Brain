@@ -786,9 +786,7 @@ def _note_step(root: Path, job_id: str, state: dict, packet: dict, slot: str, pr
         call_executor(root, job_id, producer, role='producer', step='produce', prompt_text=prompt_text, packet=shown,
                       output_schema=schema, chunk=slot)
     except ExecutorFailure as failure:
-        if failure.code != INVALID_OUTPUT:
-            raise
-        _refused_answer(root, job_id, slot, 'producer', failure.error.get('message', ''))
+        _failed_answer(root, job_id, slot, 'producer', failure)
 
 
 def producer_packet(root: Path, state: dict, packet: dict, slot: str) -> dict:
@@ -1485,35 +1483,61 @@ def _retries_left(info: dict, rules, spec: AnswerRole | None = None) -> bool:
     return _refusals(info, spec) <= spec.retries(rules)
 
 
-def _refused_answer(root: Path, job_id: str, slot: str, role: str, message: str) -> int:
-    """The one entry for an answer of any role that failed the program's checks (``INVALID_OUTPUT``); returns the
-    count so far.
+def _count_refusal(state: dict, packet: dict, slot: str, spec: AnswerRole, message: str) -> int:
+    """Count, in ``state``, one answer of ``spec``'s role in ``slot`` that failed the program's checks; returns the
+    count so far. Past the role's budget the slot records why it was given up (``given_up``; and ``skipped`` for a
+    role the job goes on without)."""
+    chunks = state.setdefault('chunks', {})
+    fresh = {'candidate': None, 'review': None, 'status': 'prepared', 'round': 0}
+    info = chunks.setdefault(slot, dict(fresh))
+    info[spec.count] = failed = int(info.get(spec.count, 0)) + 1
+    info[spec.error] = message[:8000]
+    if spec.rounds and slot != _base(slot):  # the chunk shows its latest error too
+        chunks.setdefault(_base(slot), dict(fresh))[spec.error] = message[:8000]
+    if failed > spec.retries(jobs.policy_of(packet)):
+        info['given_up'] = f"the {spec.name}'s answer failed validation {failed} times: {message[:500]}"
+        if spec.used_up == 'without':
+            info['skipped'] = f"the {spec.name}'s answer failed validation {failed} times; {spec.skip}"
+    return failed
 
-    The count is kept in the job state under the slot, by role, so a job run again goes on counting from there:
-    one ``advance`` asks at most ``max_invalid_retries`` + 1 times (the role's ``retries`` + 1), and a resumed job no
-    more. Past that the slot
-    records why it was given up (``given_up``; and ``skipped`` for a role the job goes on without); what was asked
-    for then waits for the owner or is done without, as its role says (:data:`ANSWER_ROLES`).
+
+def _refused_answer(root: Path, job_id: str, slot: str, role: str, message: str) -> int:
+    """The one count of the answers of any role that failed the program's checks; returns the count so far.
+
+    An answer refused at the gate (``jobs.submit``, from an API run or a host sub-agent alike) is counted there, by
+    :func:`record_refusal`; an API answer that never reached the gate (no JSON object) is counted here, from
+    :func:`_failed_answer`. Both go through :func:`_count_refusal`. The count is kept in the job state under the
+    slot, by role, so a job run again goes on counting from there: one ``advance`` asks at most
+    ``max_invalid_retries`` + 1 times (the role's ``retries`` + 1), and a resumed job no more. What was asked for
+    then waits for the owner or is done without, as its role says (:data:`ANSWER_ROLES`).
     """
     from ..store import vault_lock, write_json
     spec = answer_role(slot, role)
     with vault_lock(root):
         state = jobs.load(root, job_id)
-        packet = jobs.read_input(root, job_id)
-        chunks = state.setdefault('chunks', {})
-        fresh = {'candidate': None, 'review': None, 'status': 'prepared', 'round': 0}
-        info = chunks.setdefault(slot, dict(fresh))
-        info[spec.count] = failed = int(info.get(spec.count, 0)) + 1
-        info[spec.error] = message[:8000]
-        if spec.rounds and slot != _base(slot):  # the chunk shows its latest error too
-            chunks.setdefault(_base(slot), dict(fresh))[spec.error] = message[:8000]
-        if failed > spec.retries(jobs.policy_of(packet)):
-            info['given_up'] = f"the {spec.name}'s answer failed validation {failed} times: {message[:500]}"
-            if spec.used_up == 'without':
-                info['skipped'] = f"the {spec.name}'s answer failed validation {failed} times; {spec.skip}"
+        failed = _count_refusal(state, jobs.read_input(root, job_id), slot, spec, message)
         state['updated_at'] = jobs.now()
         write_json(root, jobs.location(job_id), state)
     return failed
+
+
+def record_refusal(packet: dict, *, role: str, root, chunk, state: dict, run: dict, message: str) -> bool:
+    """jobs.submit hook: an answer the validator refused, in either mode, counted against its slot's budget
+    (:func:`_count_refusal`); True when the slot is now given up."""
+    try:
+        spec = answer_role(chunk, role)
+    except IngestError:
+        return False
+    return _count_refusal(state, packet, chunk, spec, message) > spec.retries(jobs.policy_of(packet))
+
+
+def _failed_answer(root: Path, job_id: str, slot: str, role: str, failure: ExecutorFailure) -> None:
+    """An executor failure of a model call: an answer that failed the program's checks is counted (unless the gate
+    counted it already, ``counted``); any other failure is raised again."""
+    if failure.code != INVALID_OUTPUT:
+        raise failure
+    if not failure.error.get('counted'):
+        _refused_answer(root, job_id, slot, role, failure.error.get('message', ''))
 
 
 def _answer_schema(chunk: str, role: str) -> dict:
@@ -1577,16 +1601,15 @@ def validate_submission(packet: dict, payload: dict, *, role: str, candidate=Non
 
 
 def _merge_check_failures(root: Path, state: dict, slot: str) -> int:
-    """The answers of merge-check slot ``slot`` refused so far, and its runs given up without one (both modes).
+    """The answers of merge-check slot ``slot`` that failed the checks (the one count of every role, both modes:
+    :func:`_count_refusal`), and its runs given up without an answer (abandoned).
 
     A run that ended without an answer for another reason (a transport or gateway error, a timeout, a key that
     could not be read) is not counted: it is no answer (decision D-23)."""
+    info = (state.get('chunks') or {}).get(slot) or {}
     runs = [jobs.load_run(root, state['job_id'], r) for r in state.get('runs') or []]
-    runs = [r for r in runs if r.get('chunk') == slot]
-    return sum(int(r.get('rejected_submits', 0)) for r in runs) + sum(
-        1 for r in runs if not int(r.get('rejected_submits', 0)) and (
-            r['status'] == 'abandoned' or (r['status'] == 'failed'
-                                           and (r.get('error') or {}).get('code') == INVALID_OUTPUT)))
+    return _refusals(info, answer_role(slot, 'reviewer')) + sum(
+        1 for r in runs if r.get('chunk') == slot and r['status'] == 'abandoned')
 
 
 def _last_merge_answer(root: Path, state: dict, packet: dict, slot: str) -> bool:
@@ -2015,9 +2038,7 @@ def _step(root: Path, job_id: str, action: tuple, producer, reviewer) -> None:
             call_executor(root, job_id, reviewer, role='reviewer', step='review', prompt_text=text,
                           packet=shown, output_schema=schemas.REVIEW_CARDS, chunk=slot)
         except ExecutorFailure as failure:
-            if failure.code != INVALID_OUTPUT:
-                raise
-            _refused_answer(root, job_id, slot, 'reviewer', failure.error.get('message', ''))
+            _failed_answer(root, job_id, slot, 'reviewer', failure)
         return
     text = _prompt('produce_cards.md', state)
     if packet.get('retry'):
@@ -2038,9 +2059,7 @@ def _step(root: Path, job_id: str, action: tuple, producer, reviewer) -> None:
                 and len(_chunk_text(packet, base)) >= 2 * MIN_SPLIT_CHARS:
             _record_split(root, job_id, base, failure.error.get('message', ''))
             return
-        if failure.code != INVALID_OUTPUT:
-            raise
-        _refused_answer(root, job_id, slot, 'producer', failure.error.get('message', ''))
+        _failed_answer(root, job_id, slot, 'producer', failure)
 
 
 def _prompt_only(name: str) -> str:
@@ -2250,9 +2269,7 @@ def _source_check_stage(root: Path, job_id: str, packet: dict, settled: list[dic
                     except AwaitingSubmission as waiting:
                         return [{**waiting.handoff, 'chunk': rj, 'step': 'dispute'}]
                     except ExecutorFailure as failure:
-                        if failure.code != INVALID_OUTPUT:
-                            raise
-                        _refused_answer(root, job_id, rj, 'reviewer', failure.error.get('message', ''))
+                        _failed_answer(root, job_id, rj, 'reviewer', failure)
                     state = jobs.load(root, job_id)
             slot = source_check.round_slot(n + 1)
             info = {}
@@ -2273,9 +2290,7 @@ def _source_check_stage(root: Path, job_id: str, packet: dict, settled: list[dic
         except AwaitingSubmission as waiting:
             return [{**waiting.handoff, 'chunk': slot, 'step': source_check.STEP}]
         except ExecutorFailure as failure:
-            if failure.code != INVALID_OUTPUT:
-                raise
-            _refused_answer(root, job_id, slot, 'reviewer', failure.error.get('message', ''))
+            _failed_answer(root, job_id, slot, 'reviewer', failure)
 
 
 def _rejudge_input(root: Path, state: dict, packet: dict, routed: list[dict], slug: str, reason: str) -> dict:
@@ -2507,9 +2522,7 @@ def _split_stage(root: Path, job_id: str, packet: dict, settled: list[dict], pro
                                   packet={**shown, 'card': withhold_reasons(cand['card'])},
                                   output_schema=split.REVIEW_SCHEMA, chunk=slot)
                 except ExecutorFailure as failure:
-                    if failure.code != INVALID_OUTPUT:
-                        raise
-                    _refused_answer(root, job_id, slot, 'reviewer', failure.error.get('message', ''))
+                    _failed_answer(root, job_id, slot, 'reviewer', failure)
             else:
                 body = {**shown, 'card': item['card'], 'carry': item['carry']}
                 if kind == 'repair':
@@ -2524,9 +2537,7 @@ def _split_stage(root: Path, job_id: str, packet: dict, settled: list[dict], pro
                     call_executor(root, job_id, producer, role='producer', step=kind, prompt_text=text, packet=body,
                                   output_schema=split.CARD_SCHEMA, chunk=slot)
                 except ExecutorFailure as failure:
-                    if failure.code != INVALID_OUTPUT:
-                        raise
-                    _refused_answer(root, job_id, slot, 'producer', failure.error.get('message', ''))
+                    _failed_answer(root, job_id, slot, 'producer', failure)
         except AwaitingSubmission as waiting:
             handoffs.append({**waiting.handoff, 'chunk': slot, 'step': 'split'})
             handed.add(item['slot'])
@@ -2600,8 +2611,7 @@ def _skip_source_check(root: Path, job_id: str, *, reason: str) -> dict:
             raise IngestError(f'The source check of {job_id} is already done')
         runs = [jobs.load_run(root, job_id, r) for r in state.get('runs') or []]
         runs = [r for r in runs if r.get('chunk') == source_check.SLOT]
-        failed = int(info.get('invalid_outputs', 0)) + sum(int(r.get('rejected_submits', 0)) for r in runs) + \
-            sum(1 for r in runs if r['status'] in {'abandoned', 'failed'})
+        failed = _merge_check_failures(root, state, source_check.SLOT)
         needed = jobs.policy_of(packet).max_invalid_retries + 1
         if failed < needed:
             raise IngestError(f'The source check can be skipped after {needed} rejected answers or given-up runs; '
@@ -2699,9 +2709,7 @@ def _diagram_stage(root: Path, job_id: str, packet: dict, settled: list[dict], e
             handoffs.append({**waiting.handoff, 'chunk': slot, 'step': 'diagram'})
             handed.add(slot)
         except ExecutorFailure as failure:
-            if failure.code != INVALID_OUTPUT:
-                raise
-            _refused_answer(root, job_id, slot, 'producer', failure.error.get('message', ''))
+            _failed_answer(root, job_id, slot, 'producer', failure)
 
 
 def _mark_slot(root: Path, job_id: str, slot: str, **fields) -> None:

@@ -374,18 +374,31 @@ def _last_refusal(slot: dict, kind: str) -> str | None:
     return (slot.get('refused') or {}).get(_step_key(slot, kind), {}).get('message')
 
 
+def _count_refused(state: dict, chunk: str, kind: str, message: str) -> int:
+    """Count, in ``state``, an answer of step ``kind`` of ``chunk`` that failed the program's checks (an export run
+    again goes on counting); returns the count so far. :func:`_given_up` reads it."""
+    slot = state.setdefault('chunks', {}).setdefault(chunk, {})
+    row = slot.setdefault('refused', {}).setdefault(_step_key(slot, kind), {'count': 0})
+    row.update(count=int(row['count']) + 1, message=str(message)[:2000])
+    return row['count']
+
+
 def _refused(root, job_id, chunk: str, kind: str, message: str) -> int:
-    """Count an answer of step ``kind`` of ``chunk`` that failed the program's checks, in the job state (an export
-    run again goes on counting); returns the count so far. :func:`_given_up` reads it."""
+    """:func:`_count_refused` for an API answer that never reached the gate (no JSON object)."""
     with vault_lock(root):
         state = jobs.load(root, job_id)
-        slot = state.setdefault('chunks', {}).setdefault(chunk, {})
-        rows = slot.setdefault('refused', {})
-        row = rows.setdefault(_step_key(slot, kind), {'count': 0})
-        row.update(count=int(row['count']) + 1, message=str(message)[:2000])
+        count = _count_refused(state, chunk, kind, message)
         state['updated_at'] = jobs.now()
         write_json(root, jobs.location(job_id), state)
-        return row['count']
+        return count
+
+
+def record_refusal(packet, *, role, root, chunk, state, run, message) -> bool:
+    """jobs.submit hook: an answer the validator refused, from an API run or a host sub-agent alike, counted against
+    its step's budget (:func:`_count_refused`); True when the step is now given up."""
+    if chunk is None or run.get('step') not in {'produce', 'review', 'repair'}:
+        return False
+    return _count_refused(state, chunk, run['step'], message) > config.review_policy().max_invalid_retries
 
 
 def _given_up(root, job_id, chunk: str, slot: dict, kind: str, paragraph_ids=(), unresolved=None) -> bool:
@@ -542,7 +555,8 @@ def advance(root: Path, job_id: str, *, producer, reviewer, checker=None, worker
             for chunk, kind, error in failed:
                 key = (chunk, kind)
                 if error.get('code') == 'INVALID_OUTPUT':  # counted in the job state; planning gives it up
-                    _refused(root, job_id, chunk, kind, str(error.get('message', '')))
+                    if not error.get('counted'):  # an answer refused at the gate is counted there
+                        _refused(root, job_id, chunk, kind, str(error.get('message', '')))
                     continue
                 failures[key] = failures.get(key, 0) + 1
                 if failures[key] >= MAX_FAILURES or not error.get('retryable', False):

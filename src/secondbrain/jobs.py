@@ -143,6 +143,15 @@ DECISION_RECORDERS = {
     'ingest': 'secondbrain.pipelines.ingest:record_decisions',
 }
 
+#: Kind -> "module:function" counting a submission the validator refused, from any executor (an API run or a host
+#: sub-agent), where the kind counts the answers of a slot that failed its checks. Signature: ``fn(packet, *, role,
+#: root, chunk, state, run, message) -> bool``, True when the slot is now given up; runs under the vault lock with
+#: the job's frozen settings and updates ``state`` in place, which is then written.
+REFUSAL_RECORDERS = {
+    'ingest': 'secondbrain.pipelines.ingest:record_refusal',
+    'export': 'secondbrain.export.pipeline:record_refusal',
+}
+
 
 def frozen_settings(root: Path, packet: dict):
     """The settings a job step reads (``config.job_settings``), made from what the job froze, or None.
@@ -312,6 +321,14 @@ def _recorder(kind: str):
     return getattr(importlib.import_module(module), name)
 
 
+def _refusal_recorder(kind: str):
+    target = REFUSAL_RECORDERS.get(kind)
+    if not target:
+        return None
+    module, name = target.split(':')
+    return getattr(importlib.import_module(module), name)
+
+
 def _validator(kind: str):
     target = SUBMISSION_VALIDATORS.get(kind)
     if not target:
@@ -359,11 +376,23 @@ def submit(root: Path, job_id: str, payload: dict, *, role: str, run_id: str,
                     checked = validate(packet, payload, role=role, candidate=candidate,
                                        root=root, chunk=chunk, state=state)
             except ValueError as exc:
-                # a host sub-agent's refused answers never reach the executor's failure count; the run keeps the
-                # count, so a step that keeps failing can be given up within bounds (the ingest source check),
-                # and each reason, for the job result. The job state stays as it was.
+                # the run keeps each reason, for the job result; the kind counts the refusal against its slot's
+                # budget, the same count for a host sub-agent and an API run (``exc.counted`` tells the caller it
+                # is counted). A host run whose slot is given up is closed: the sub-agent cannot submit again.
                 run['rejected_submits'] = int(run.get('rejected_submits', 0)) + 1
                 run['rejected'] = list(run.get('rejected') or []) + [str(exc)[:4000]]
+                count = _refusal_recorder(state['kind'])
+                if count is not None:
+                    with config.job_settings(frozen):
+                        given_up = count(packet, role=role, root=root, chunk=chunk, state=state, run=run,
+                                         message=str(exc))
+                    exc.counted = True
+                    if given_up and run['executor'] == 'host' and run['status'] == 'started':
+                        run.update(status='failed', ended_at=now(), error={
+                            'code': 'INVALID_OUTPUT', 'message': str(exc)[:4000], 'retryable': False,
+                            'given_up': True})
+                    state['updated_at'] = now()
+                    write_json(root, location(job_id), state)
                 write_json(root, run_location(job_id, run_id), run)
                 raise
             payload = checked if isinstance(checked, dict) else payload

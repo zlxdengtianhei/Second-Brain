@@ -6,6 +6,10 @@ reached the owner. Now every role that asks a model goes through one entry (``in
 per slot in the job state, and the roles are one table (``ingest.ANSWER_ROLES``), the one an answer's schema is read
 from. This test takes every role from that table: a role added later without a scenario here fails it.
 
+Host mode is the same column again: a sub-agent that keeps submitting answers that fail the checks is refused at most
+``max_invalid_retries`` + 1 times in a slot, the same count as an API run's (``ingest.record_refusal`` at the gate),
+then its run is closed and the slot is settled as its role says.
+
 For each role, an answer that always fails the checks is asked for at most ``max_invalid_retries`` + 1 times in one
 ``advance`` (a diagram once per slot: its step asks again in a rewrite slot of its own); then what it was for waits for the owner with the reason (``pending`` roles: the job ends ``partial``) or
 the job goes on without it (``without`` roles: the merge check, a model note, a diagram), and the slot says why.
@@ -13,14 +17,17 @@ the job goes on without it (``without`` roles: the merge check, a model note, a 
 from __future__ import annotations
 
 from collections import Counter
+from types import SimpleNamespace
 
 import pytest
 
 from secondbrain import config, jobs
 from secondbrain.executors import FakeExecutor
 from secondbrain.executors.base import ExecutorFailure
+from secondbrain.executors.host import HostExecutor
 from secondbrain.pipelines import ingest, split
-from tests.ingest_helpers import keep_all
+from secondbrain.store import Conflict
+from tests.ingest_helpers import keep_all, packet_in
 from tests.test_invariants import LEVELS
 from tests.test_patch_set import job, producer, reviewer
 
@@ -102,6 +109,66 @@ def test_an_answer_that_keeps_failing_the_checks_is_asked_for_within_the_budget_
     ingest.advance(root, job_id, producer=FakeExecutor('gpt-test', responder=broken(name, only, produce, again)),
                    reviewer=FakeExecutor('claude-test', responder=broken(name, only, review, again)))
     assert again == []
+
+
+# --- host mode: the sub-agents submit through `sb job submit`, the same gate and the same count ----------------------
+def host_drive(root, job_id, name, only, produce, review, refused):
+    """Run the job in host mode as a coordinator would: hand each step to a sub-agent and submit its answer; the
+    role ``name`` answers badly and submits again until its run is closed. Returns the job's last state."""
+    host = HostExecutor()
+    for _ in range(40):
+        out = ingest.advance(root, job_id, producer=host, reviewer=host)
+        if not out.get('handoffs'):
+            return out
+        for handoff in out['handoffs']:
+            spec = ingest.answer_role(handoff['chunk'], handoff['role'])
+            text = open(handoff['packet_path'], encoding='utf-8').read()
+            task = SimpleNamespace(packet=packet_in(text), chunk=handoff['chunk'], role=handoff['role'], prompt=text,
+                                   step=handoff['step'])
+            model = 'gpt-test' if handoff['role'] == 'producer' else 'claude-test'
+            if spec.name == name and (only is None or only(handoff['chunk'])):
+                for _ in range(10):  # a sub-agent that keeps answering in the wrong shape
+                    try:
+                        jobs.submit(root, job_id, bad_answer(spec, handoff['chunk']), role=handoff['role'],
+                                    run_id=handoff['run_id'], model_reported=model)
+                    except Conflict as closed:  # the run is closed: its slot was given up
+                        assert 'TERMINAL_RUN' in str(closed)
+                        break
+                    except ValueError:
+                        refused.append(handoff['chunk'])
+                continue
+            answer = (produce if handoff['role'] == 'producer' else review)(task)
+            try:  # another role's answer may be refused too (a chunk that links a card the broken one never wrote)
+                jobs.submit(root, job_id, answer, role=handoff['role'], run_id=handoff['run_id'], model_reported=model)
+            except ValueError:
+                pass  # handed out again at the next advance, until its own budget is used up
+    raise AssertionError('the job did not settle')
+
+
+@pytest.mark.parametrize('name', sorted(SCENARIOS))
+def test_in_host_mode_answers_that_keep_failing_are_refused_within_the_budget_then_the_slot_is_settled(tmp_path,
+                                                                                                         name):
+    spec = next(r for r in ingest.ANSWER_ROLES if r.name == name)
+    fields, levels, check, only = SCENARIOS[name]
+    fields = dict(fields)
+    root, job_id, _ = job(tmp_path, n_props=fields.pop('n_props', 2), **fields)
+    refused = []
+    done = host_drive(root, job_id, name, only, producer(), reviewer(check=check, levels=levels), refused)
+    per_slot, asks = Counter(refused), spec.retries(config.ReviewPolicy()) + 1
+    assert per_slot and set(per_slot.values()) == {asks}, per_slot
+    state = jobs.load(root, job_id)
+    for slot in per_slot:
+        info = state['chunks'][slot]
+        assert info[spec.count] == asks and f'failed validation {asks} times' in info['given_up']
+        runs = [jobs.load_run(root, job_id, r) for r in state['runs']]
+        assert [r['status'] for r in runs if r.get('chunk') == slot and r['role'] == spec.role
+                and r.get('rejected_submits')] == ['failed']  # closed once given up
+    if spec.used_up == 'pending':
+        assert done['status'] == 'partial', done.get('error')
+        assert any(f'failed validation {asks} times' in (p.get('reason') or '') for p in done['pending'])
+    else:
+        assert done['status'] == 'applied', done.get('pending')
+        assert all(spec.skip in state['chunks'][slot]['skipped'] for slot in per_slot)
 
 
 # --- P-6c: the two roles that had no budget, driven as `sb job advance` would be, again and again ------------------

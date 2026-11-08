@@ -8,9 +8,15 @@ is marked "not reviewed", a unit its writer never wrote is left out and named, a
 """
 from __future__ import annotations
 
+import json
+from types import SimpleNamespace
+
 import pytest
 
+from secondbrain import jobs
 from secondbrain.config import ReviewPolicy
+from secondbrain.executors.host import HostExecutor
+from secondbrain.store import Conflict
 from secondbrain.executors.base import ExecutorFailure, Result
 from secondbrain.executors.fake import FakeExecutor
 from secondbrain.export import pipeline
@@ -82,3 +88,39 @@ def test_a_unit_its_writer_never_writes_is_left_out_and_named_for_the_owner(vaul
     assert report['coverage'] < 1.0 and report['units']['u03']['status'] == 'accepted'  # the next unit is written
     items = [i for i in Service(vault_root).owner_items() if i.get('kind') == 'export_paragraph']
     assert 'u02' in {i['paragraph'] for i in items}
+
+
+def test_in_host_mode_a_review_refused_three_times_closes_its_run_and_the_unit_is_marked(vault_root):
+    """A host sub-agent's refused answers are counted at the gate as an API run's are: after the budget its run is
+    closed, and the unit is settled as one whose review never passed."""
+    job_id = pipeline.prepare(vault_root, domain=DOMAIN)['job_id']
+    host, produce, review, refused = HostExecutor(command=['sb']), writer(), reviewer(), []
+    for _ in range(30):
+        out = pipeline.advance(vault_root, job_id, producer=host, reviewer=host, checker=FakeMathJax())
+        if out['status'] != 'awaiting_submission':
+            break
+        for handoff in out['handoffs']:
+            run = jobs.load_run(vault_root, job_id, handoff['run_id'])
+            text = open(handoff['packet_path'], encoding='utf-8').read()
+            start = text.index('<task_packet>\n') + len('<task_packet>\n')
+            task = SimpleNamespace(packet=json.loads(text[start:text.index('\n</task_packet>', start)]),
+                                   chunk=run['chunk'], step=run['step'])
+            model = 'gpt-writer' if run['role'] == 'producer' else 'claude-reviewer'
+            if run['chunk'] == 'u01' and run['step'] == 'review':
+                for _ in range(10):
+                    try:
+                        jobs.submit(vault_root, job_id, {'items': 5}, role='reviewer', run_id=run['run_id'],
+                                    model_reported=model)
+                    except Conflict as closed:
+                        assert 'TERMINAL_RUN' in str(closed)
+                        break
+                    except ValueError:
+                        refused.append(run['run_id'])
+                continue
+            answer = (produce if run['role'] == 'producer' else review)(task)
+            jobs.submit(vault_root, job_id, answer, role=run['role'], run_id=run['run_id'], model_reported=model)
+    assert out['status'] == 'complete' and len(refused) == LIMIT and len(set(refused)) == 1
+    assert jobs.load_run(vault_root, job_id, refused[0])['error']['given_up'] is True
+    assert out['report']['escalated_units'] == ['u01']
+    assert any(f'failed validation {LIMIT} times, so it was not reviewed' in f['reason']
+               for f in out['report']['flagged'])

@@ -162,8 +162,9 @@ def finish_call(root: Path, task: Task, result: Result) -> Result:
         jobs.submit(root, job_id, result.output, role=task.role, run_id=task.run_id,
                     model_reported=result.model_reported, attestation=result.attestation,
                     usage=result.usage)
-    except ValueError as exc:
-        error = {'code': INVALID_OUTPUT, 'message': str(exc), 'retryable': True}
+    except ValueError as exc:  # refused at the gate; ``counted``: already counted against the slot's budget there
+        error = {'code': INVALID_OUTPUT, 'message': str(exc), 'retryable': True,
+                 **({'counted': True} if getattr(exc, 'counted', False) else {})}
         jobs.fail_run(root, job_id, task.run_id, error=error)
         raise ExecutorFailure(error) from exc
     return result
