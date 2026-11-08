@@ -1577,11 +1577,16 @@ def validate_submission(packet: dict, payload: dict, *, role: str, candidate=Non
 
 
 def _merge_check_failures(root: Path, state: dict, slot: str) -> int:
-    """The answers of merge-check slot ``slot`` refused so far, and its runs given up without one (both modes)."""
+    """The answers of merge-check slot ``slot`` refused so far, and its runs given up without one (both modes).
+
+    A run that ended without an answer for another reason (a transport or gateway error, a timeout, a key that
+    could not be read) is not counted: it is no answer (decision D-23)."""
     runs = [jobs.load_run(root, state['job_id'], r) for r in state.get('runs') or []]
     runs = [r for r in runs if r.get('chunk') == slot]
     return sum(int(r.get('rejected_submits', 0)) for r in runs) + sum(
-        1 for r in runs if r['status'] in {'abandoned', 'failed'} and not int(r.get('rejected_submits', 0)))
+        1 for r in runs if not int(r.get('rejected_submits', 0)) and (
+            r['status'] == 'abandoned' or (r['status'] == 'failed'
+                                           and (r.get('error') or {}).get('code') == INVALID_OUTPUT)))
 
 
 def _last_merge_answer(root: Path, state: dict, packet: dict, slot: str) -> bool:
@@ -2810,6 +2815,10 @@ def _apply_job(root: Path, job_id: str, settled: list[dict] | None = None) -> di
     # the job does not merge, or the card cannot take a patch) is a written card: the outcome says so, as patch_set
     outcomes = {**outcomes, **{s: 'write' for s, f in fates.items() if f['how'] == 'written'}}
     outcomes = {**outcomes, **{s: 'drop' for s, f in fates.items() if f['how'] == 'covered'}}  # its card holds it
+    for s, f in sorted(fates.items()):  # and the record says so, so the two never differ
+        if f['how'] in ('written', 'covered'):
+            decisions.record(entries, 'outcome.program', s, {'outcome': outcomes[s], 'reason': f['reason']},
+                             role='program', slot='write')
     accepted = [(o['chunk'], s, _final_card(entries, s, c)) for o in settled for s, c in o['accepted'].items()]
     accepted += [(o['chunk'], s, {**_final_card(entries, s, c), '_not_merged': fates[s]['reason']})
                  for o in settled for s, c in o.get('repeats', {}).items() if fates[s]['how'] == 'written']
@@ -3161,7 +3170,9 @@ def _apply_job(root: Path, job_id: str, settled: list[dict] | None = None) -> di
     if rows:
         changes.append(inbox.appended(root, lay.conflicts, b''.join(inbox.registry_line(r) for r in rows)))
     # an extends card whose existing card does not take it is written next to it, for the owner to merge
-    needs_review = [{'id': ids[s], 'title': titles[s], 'with': c['_with'], 'reason': c['_reason'],
+    needs_review = [{'id': ids[s], 'title': titles[s], 'with': ids.get(c['_with'], into_existing.get(c['_with'],
+                                                                                                     c['_with'])),
+                     'reason': c['_reason'],
                      'not_merged': c.get('_not_merged')} for _, s, c in accepted if c.get('_with')]
     needs_taxonomy = [x for o in settled for x in o['needs_taxonomy']]
     status = 'partial' if (pending or needs_taxonomy) else 'applied'
@@ -3237,7 +3248,10 @@ def _apply_job(root: Path, job_id: str, settled: list[dict] | None = None) -> di
               'merge_set': {s: f['how'] for s, f in fates.items() if f.get('of_source')},
               # D-20: the merge check's last answer, kept patch by patch: the cards that took it, the ones held
               'patches_held': [{'target': t, 'cards': h['cards'], 'problems': h['problems']}
-                               for t, h in sorted(((check or {}).get('held') or {}).items())]}
+                               for t, h in sorted(((check or {}).get('held') or {}).items())]
+              + [{'target': ids.get(h['into'], into_existing.get(h['into'], h['into'])), 'cards': [s],
+                  'problems': h['problems'], 'carry': True}
+                 for s, h in sorted(((check or {}).get('held_carries') or {}).items())]}
     if progress is not None:
         result['retry_progress'] = progress
     if stalled:
@@ -3287,8 +3301,11 @@ def _repeat_fates(root: Path, state: dict, packet: dict, settled: list[dict], ch
                             reason=f'the merge check\'s patch for {target} did not pass the program checks in its '
                                    f'last answer: {"; ".join(held[target]["problems"])}')
             elif not _merging(packet) or target not in patches or old is None:
+                skipped = (check or {}).get('status') == 'skipped'
                 why = ('its existing card no longer exists' if old is None else
                        'this job does not add to existing cards (merge_into_existing is off)' if not _merging(packet)
+                       else f'the merge check was given up, so nothing went into {target}: {check.get("reason")}'
+                       if skipped and cardfmt.patchable(old.body) is None
                        else f'its existing card cannot take a patch: {cardfmt.patchable(old.body) or "no patch"}')
                 fate.update(how='written', reason=why)
             elif slug in covered:  # D-22: its existing card says all it would add (already); nothing to write

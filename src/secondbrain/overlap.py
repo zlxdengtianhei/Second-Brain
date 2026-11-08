@@ -120,6 +120,9 @@ def outcome(entries: list, slug: str, *, checked: bool) -> dict:
     """
     existing = decisions.current(entries, 'overlap.existing', slug)
     source = decisions.current(entries, 'overlap.source', slug)
+    program = decisions.current(entries, 'outcome.program', slug)
+    if program is not None:  # the program sent it elsewhere than its levels would (a card of the patch set written)
+        return {'outcome': program['data']['outcome'], 'with': [], 'by': 'program'}
     if existing is None:
         raise OutcomeError(f'{slug}: no final level against the vault cards (the chunk reviewer gives it)')
     level = existing['data']['overlap']

@@ -649,43 +649,59 @@ def salvage(frozen: dict, payload: Any, closed: Callable[[str, str, str], str | 
             ) -> dict | None:
     """The last answer the merge check may give, kept patch by patch (decision D-20), or None.
 
-    When the answer fails the program checks only in some of its patches, those patches are held back: the answer
-    without them is checked again with their existing cards taken out of the patch set, and when it passes it is
-    the answer, with ``held`` naming each held existing card, its cards and the problems found in its patch (the
-    lines of the refusal that name it). Nothing of a held patch is written into its card; its cards are written
-    next to it for the owner. Any problem outside the patches, or one the answer without them still has, gives
-    None: the answer is refused as before.
+    When the answer fails the program checks only in some of its patches, or in the carry of some cards into a card
+    of the source, those are held back and the rest is checked again, until it passes: a held patch's existing card
+    is taken out of the patch set (``held`` names it, its cards and the problems found in its patch: the lines of
+    the refusal that name it), and a card whose carry is held is not merged but kept as a card of its own
+    (``held_carries``: the card, the card it was to go into, the problems). Nothing of a held patch or carry is
+    written into its card; its cards are written for the owner, marked as possible repeats. Any other problem, or
+    one the answer without them still has, gives None: the answer is refused as before.
     """
     try:
         validate_answer(frozen, payload, closed)
         return payload
-    except Refused as exc:
-        lines = exc.problems
+    except Refused:
+        pass
     except ValueError:  # the shape, or the answer's frame
         return None
-    if not isinstance(payload.get('patches'), list):
-        return None
-    patches = payload['patches']
-    bad = {int(n) for line in lines for n in re.findall(r'^patches\[(\d+)\]', line)}
     groups = {g['target']: g for g in frozen.get('patch_set') or []}
-    if not bad or any(i >= len(patches) or not isinstance(patches[i], dict)
-                      or patches[i].get('target') not in groups for i in bad):
-        return None
-    held = [{'target': patches[i]['target'], 'cards': [c['slug'] for c in groups[patches[i]['target']]['from']],
-             'problems': [line for line in lines if line.startswith(f'patches[{i}]')]} for i in sorted(bad)]
-    gone = {h['target'] for h in held}
-    held_cards = {c['slug'] for target in gone for c in groups[target]['from']}
-    # A dispute names a patch-set card, not its existing target. Once that card's patch is held back, its dispute
-    # must go too: the card is already waiting for the owner, and the reduced answer no longer has that patch set.
-    kept = {**payload, 'patches': [p for i, p in enumerate(patches) if i not in bad],
-            'disputes': [row for row in payload.get('disputes') or []
-                         if not isinstance(row, dict) or row.get('slug') not in held_cards]}
-    try:
-        validate_answer({**frozen, 'patch_set': [g for g in frozen.get('patch_set') or [] if g['target'] not in gone]},
-                        kept, closed)
-    except ValueError:
-        return None
-    return {**kept, 'held': held}
+    kept, held, held_carries = payload, [], []
+    for _ in range(len(groups) + len(payload.get('cards') or []) + 1):  # each pass holds at least one more
+        reduced = {**frozen, 'patch_set': [g for t, g in groups.items() if t not in {h['target'] for h in held}]}
+        try:
+            validate_answer(reduced, kept, closed)
+            return {**kept, 'held': held, **({'held_carries': held_carries} if held_carries else {})}
+        except Refused as exc:
+            lines = exc.problems
+        except ValueError:
+            return None
+        patches = kept.get('patches') if isinstance(kept.get('patches'), list) else []
+        bad = {int(n) for line in lines for n in re.findall(r'^patches\[(\d+)\]', line)}
+        carries: dict = {}
+        for line in lines:
+            m = re.match(r'^cards: ([a-z0-9][a-z0-9-]*)\.carry\b', line)
+            if m:
+                carries.setdefault(m.group(1), []).append(line)
+        rows = {r.get('slug'): r for r in kept.get('cards') or [] if isinstance(r, dict)}
+        if not (bad or carries) or any(i >= len(patches) or not isinstance(patches[i], dict)
+                                       or patches[i].get('target') not in groups for i in bad) \
+                or any(not (rows.get(slug) or {}).get('with') for slug in carries):
+            return None
+        now = [{'target': patches[i]['target'], 'cards': [c['slug'] for c in groups[patches[i]['target']]['from']],
+                'problems': [line for line in lines if line.startswith(f'patches[{i}]')]} for i in sorted(bad)]
+        held += now
+        held_cards = {c['slug'] for h in now for c in groups[h['target']]['from']}
+        held_carries += [{'slug': slug, 'into': rows[slug]['with'][0], 'problems': problems}
+                         for slug, problems in sorted(carries.items())]
+        alone = 'its carry was held back (the merge check\'s last answer did not pass the program checks)'
+        # A dispute names a patch-set card, not its existing target. Once that card's patch is held back, its dispute
+        # must go too: the card is already waiting for the owner, and the reduced answer no longer has that patch set.
+        kept = {**kept, 'patches': [p for i, p in enumerate(patches) if i not in bad],
+                'disputes': [row for row in kept.get('disputes') or []
+                             if not isinstance(row, dict) or row.get('slug') not in held_cards],
+                'cards': [{'slug': r['slug'], 'overlap': 'distinct', 'alone': alone} if r.get('slug') in carries
+                          else r for r in kept.get('cards') or []]}
+    return None
 
 
 def record(frozen: dict, answer: dict, entries: list, *, slot: str, run: str | None) -> None:
@@ -720,6 +736,9 @@ def record(frozen: dict, answer: dict, entries: list, *, slot: str, run: str | N
         decisions.record(entries, 'dispute', row['slug'], {'reason': row['reason']}, role=ROLE, slot=slot, run=run)
     for row in answer.get('held') or []:  # D-20: the last answer, kept patch by patch
         decisions.record(entries, 'patch.held', row['target'], {'cards': row['cards'], 'problems': row['problems']},
+                         role=ROLE, slot=slot, run=run)
+    for row in answer.get('held_carries') or []:  # and card by card for a carry into a card of the source
+        decisions.record(entries, 'carry.held', row['slug'], {'into': row['into'], 'problems': row['problems']},
                          role=ROLE, slot=slot, run=run)
 
 
@@ -760,6 +779,12 @@ def apply(settled: list[dict], frozen: dict, entries: list) -> tuple[list[dict],
     original = {s: c for o in settled for s, c in o['accepted'].items()}
     repeats = {s: c for o in settled for s, c in (o.get('repeats') or {}).items()}  # they go into existing cards
     kept = {s: dict(c) for o in settled for s, c in o['accepted'].items() if s not in merged}
+    held_carries = {s: e['data'] for s, e in decisions.values(entries, 'carry.held').items()}
+    for slug, row in held_carries.items():  # its carry did not pass the program checks: written as it is, for review
+        if slug in kept:
+            kept[slug].update(_with=row['into'], _reason='it extends a card of its source',
+                              _not_merged=f'the merge check\'s carry of it into {row["into"]} did not pass the '
+                                          f'program checks in its last answer: {"; ".join(row["problems"])}')
     for slug in kept:  # the cards of a topic merged into another are filed under that one
         key = tuple(decisions.fold(entries, 'classification', slug).get(k) for k in ('domain', 'pillar', 'topic'))
         if key in refile:
@@ -863,7 +888,8 @@ def apply(settled: list[dict], frozen: dict, entries: list) -> tuple[list[dict],
         'merged_into': dict(merged),
         'patches': {t: e['data'] for t, e in decisions.values(entries, 'patch').items()},
         'disputes': {s: e['data']['reason'] for s, e in decisions.values(entries, 'dispute').items()},
-        'held': {t: e['data'] for t, e in decisions.values(entries, 'patch.held').items()}}
+        'held': {t: e['data'] for t, e in decisions.values(entries, 'patch.held').items()},
+        'held_carries': held_carries}
     return out, report
 
 

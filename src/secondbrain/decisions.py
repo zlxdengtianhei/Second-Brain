@@ -76,6 +76,15 @@ FINAL = {
     'patch.held': Final('merge_check', ('dispute',),
                         'an existing card whose patch still failed the program checks in the last answer the merge '
                         'check may give (decision D-20): its cards are written next to it, and the problems'),
+    'carry.held': Final('merge_check', ('dispute',),
+                        'a card of the source whose carry into another card of the source still failed the program '
+                        'checks in the last answer the merge check may give: it is written as a card of its own, '
+                        'marked as a possible repeat, and the problems'),
+    'outcome.program': Final('program', (),
+                             'where the program sends a card its levels would put elsewhere: a card of the patch set '
+                             'written next to its existing card (the job does not merge, the card cannot take a '
+                             'patch, the merge check was given up, its patch was held), or left out because the '
+                             'existing card says all of it; the reason'),
     'overlap.split': Final('split_reviewer', ('repair_round',), 'a split card against its existing card'),
     'split.verdict': Final('split_reviewer', ('repair_round',), 'a split card: accept or revise'),
 }

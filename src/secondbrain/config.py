@@ -96,6 +96,9 @@ class EndpointConfig:
             raise ValueError(f'executor kind must be "openai" or "anthropic", got {self.kind!r}')
         if self.structured_output not in {'auto', 'json_schema', 'json_object'}:
             raise ValueError('structured_output must be auto, json_schema or json_object')
+        if not isinstance(self.max_retries, int) or isinstance(self.max_retries, bool) or \
+                not 0 <= self.max_retries <= 10:
+            raise ValueError('executor max_retries must be a whole number from 0 to 10')
 
     def api_key(self) -> str:
         """Resolve the key from the environment or a command; never cached or logged."""
