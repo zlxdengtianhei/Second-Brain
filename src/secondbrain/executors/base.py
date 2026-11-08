@@ -37,6 +37,10 @@ class Task:
     chunk: str | None = None
     #: Absolute path of the rendered task file (same text the executor sends).
     packet_path: str | None = None
+    #: Read raw TeX backslashes in a JSON text answer (``\mid`` copied into a string unescaped). Only `sb export`
+    #: asks for it: its answers are prose full of formulas, checked against the cards afterwards. Every other step
+    #: reads answers strictly, so an answer that is not JSON is refused and asked again.
+    tex_backslashes: bool = False
 
 
 @dataclass

@@ -24,10 +24,11 @@ def answer_text(data: dict) -> str:
     return ((data.get('choices') or [{}])[0].get('message') or {}).get('content') or ''
 
 
-def parse(data: dict):
+def parse(data: dict, *, tex_backslashes: bool = False):
     choice = (data.get('choices') or [{}])[0]
     message = choice.get('message') or {}
     usage = data.get('usage') or {}
     usage = {'input_tokens': usage.get('prompt_tokens'), 'output_tokens': usage.get('completion_tokens')}
     truncated = choice.get('finish_reason') == 'length'
-    return parse_json_text(message.get('content') or ''), data.get('model'), usage, truncated
+    return (parse_json_text(message.get('content') or '', tex_backslashes=tex_backslashes), data.get('model'),
+            usage, truncated)

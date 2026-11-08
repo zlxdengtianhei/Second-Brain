@@ -24,7 +24,7 @@ def unsupported_format(status: int, detail: str) -> bool:
     return status == 400 and 'tool' in detail and 'not supported' in detail
 
 
-def parse(data: dict):
+def parse(data: dict, *, tex_backslashes: bool = False):
     usage = data.get('usage') or {}
     usage = {'input_tokens': usage.get('input_tokens'), 'output_tokens': usage.get('output_tokens')}
     truncated = data.get('stop_reason') == 'max_tokens'
@@ -35,5 +35,5 @@ def parse(data: dict):
             break
     if output is None:
         text = ''.join(b.get('text', '') for b in data.get('content') or [] if b.get('type') == 'text')
-        output = parse_json_text(text)
+        output = parse_json_text(text, tex_backslashes=tex_backslashes)
     return output, data.get('model'), usage, truncated

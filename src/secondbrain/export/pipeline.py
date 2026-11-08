@@ -328,7 +328,7 @@ def _run_steps(root, job_id, steps, producer, reviewer, workers) -> tuple[list, 
         executor = producer if role == 'producer' else reviewer
         try:
             call_executor(root, job_id, executor, role=role, step=kind, prompt_text=text,
-                          packet=model_packet, output_schema=schema, chunk=chunk)
+                          packet=model_packet, output_schema=schema, chunk=chunk, tex_backslashes=True)
             return None, None
         except AwaitingSubmission as waiting:
             return waiting.handoff, None

@@ -73,17 +73,19 @@ def escape_tex(text: str) -> str:
     return ''.join(out)
 
 
-def parse_json_text(text: str) -> dict | None:
-    """The JSON object in a model's text answer (code fences tolerated).
+def parse_json_text(text: str, *, tex_backslashes: bool = False) -> dict | None:
+    """The JSON object in a model's text answer (code fences tolerated); None when there is none.
 
-    When strict parsing fails, the answer is read once more with the backslashes of TeX
-    commands doubled (:func:`escape_tex`): models often copy ``\\mid`` or ``\\ge`` into a JSON
-    string unescaped. A strict parse that succeeds is never re-read.
+    With ``tex_backslashes`` (`sb export` only, :attr:`Task.tex_backslashes`), when strict parsing
+    fails the answer is read once more with the backslashes of TeX commands doubled
+    (:func:`escape_tex`): models often copy ``\\mid`` or ``\\ge`` into a JSON string unescaped. That
+    reading is lossy (``\\n`` before a letter becomes a backslash and an ``n``), so the other steps
+    never use it. A strict parse that succeeds is never re-read.
     """
     if not isinstance(text, str):
         return None
     for candidate in _candidates(text):
-        for attempt in (candidate, escape_tex(candidate)):
+        for attempt in (candidate, escape_tex(candidate)) if tex_backslashes else (candidate,):
             try:
                 value = json.loads(attempt)
             except ValueError:
@@ -151,7 +153,7 @@ class ApiExecutor:
                     status = response.status_code
                     detail = response.text[:2000]
                     if status == 200:
-                        return self._parse(response)
+                        return self._parse(response, task)
                     if self._adapter.unsupported_format(status, detail) and self._mode != 'plain':
                         self._mode = 'json_object' if self._mode == 'json_schema' else 'plain'
                         continue
@@ -173,13 +175,13 @@ class ApiExecutor:
                 self._sleep(min(60, error.get('retry_after') or 2 ** attempt))
                 attempt += 1
 
-    def _parse(self, response) -> Result:
+    def _parse(self, response, task: Task) -> Result:
         try:
             data = response.json()
         except ValueError:
             return Result(status='failed', attestation='provider_response',
                           error=_error(INVALID_OUTPUT, 'response body is not JSON', True))
-        output, model, usage, truncated = self._adapter.parse(data)
+        output, model, usage, truncated = self._adapter.parse(data, tex_backslashes=task.tex_backslashes)
         if truncated:
             return Result(status='failed', model_reported=model, attestation='provider_response', usage=usage,
                           error=_error(INVALID_OUTPUT, 'the answer was cut off at max_output_tokens; '

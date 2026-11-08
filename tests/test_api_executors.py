@@ -191,12 +191,16 @@ def test_parse_json_text():
     assert parse_json_text('[1, 2]') is None and parse_json_text('no json') is None
 
 
-def test_parse_json_text_reads_raw_tex_backslashes_only_when_strict_parsing_fails():
+def test_parse_json_text_reads_raw_tex_backslashes_only_when_asked_and_strict_parsing_fails():
     from secondbrain.executors.api import escape_tex, json_problem
     raw = '{"p": "$P(x_t\\mid x_1,\\dots)$ and $a\\ge b$, \\text{s}, \\{x\\}\\n下一行"}'
-    assert parse_json_text(raw) == {'p': '$P(x_t\\mid x_1,\\dots)$ and $a\\ge b$, \\text{s}, \\{x\\}\n下一行'}
-    good = json.dumps({'p': '$\\frac{a}{b}$\n'})
-    assert parse_json_text(good) == {'p': '$\\frac{a}{b}$\n'} and escape_tex(good) == good
+    assert parse_json_text(raw) is None  # every step but `sb export`: not JSON, asked again
+    assert parse_json_text(raw, tex_backslashes=True) == {
+        'p': '$P(x_t\\mid x_1,\\dots)$ and $a\\ge b$, \\text{s}, \\{x\\}\n下一行'}
+    good = json.dumps({'p': '$\\frac{a}{b}$\n', 'q': 'a\\nb'})
+    # strict first: a valid answer is never re-read, so its \n stays a line break and its \\n a backslash and n
+    assert parse_json_text(good, tex_backslashes=True) == {'p': '$\\frac{a}{b}$\n', 'q': 'a\\nb'}
+    assert escape_tex(good) == good
     assert escape_tex('\\u00e9 \\" \\\\ \\n') == '\\u00e9 \\" \\\\ \\n'
     assert 'near' in json_problem('{"p": "a" "b"}') and json_problem('') == 'the answer is empty'
 
@@ -259,3 +263,48 @@ def test_doctor_live_check_uses_one_tiny_request_per_endpoint():
     assert report['producer']['status'] == 'completed' and report['producer']['output'] == {'ok': True}
     assert report['reviewer']['model_reported'] == 'claude-test-2026-01-01'
     assert len(rec.requests) == 2
+
+
+#: A producer answer as text whose JSON has a line break escape (\n) and an unescaped TeX command (\mid).
+TEX_AND_NEWLINE = '"line one\\nline two, so $a\\mid b$"'
+
+
+def test_an_ingest_answer_with_raw_tex_backslashes_is_refused_and_asked_again(tmp_path):
+    root = build_ingest_vault(tmp_path / 'vault')
+    bad = copy.deepcopy(first_candidate())
+    bad['cards'][0]['propositions'][0] = 'PLACEHOLDER'
+    bad_text = json.dumps(bad, ensure_ascii=False).replace('"PLACEHOLDER"', TEX_AND_NEWLINE)
+    assert parse_json_text(bad_text) is None and parse_json_text(bad_text, tex_backslashes=True) is not None
+    produced = [bad_text, first_candidate(), repair_candidate()]
+    reviewed = [first_review(), repair_review()]
+
+    def handler(request):
+        if request.url.host == 'llm.example.test':
+            task = packet_in(json.loads(request.content)['messages'][1]['content'])
+            if 'cards' in task:
+                return httpx.Response(200, json=wrap_openai(diagram_answer(task, {'marker-dimming': DIMMING_IR})))
+            answer = produced.pop(0)
+            body = wrap_openai({})
+            body['choices'][0]['message']['content'] = answer if isinstance(answer, str) else json.dumps(answer)
+            return httpx.Response(200, json=body)
+        return httpx.Response(200, json=wrap_anthropic(reviewed.pop(0)))
+    settings = replace(config.current(), producer=openai_endpoint(), reviewer=anthropic_endpoint())
+    config.activate(settings)
+    producer, reviewer = build(settings, 'api', transport=httpx.MockTransport(handler))
+    prepared = ingest.prepare(root, root / '00_Inbox' / SOURCE_NAME)
+    result = ingest.advance(root, prepared['job_id'], producer=producer, reviewer=reviewer)
+    assert result['status'] == 'applied' and not produced
+    runs = [r for r in jobs.list_runs(root, prepared['job_id']) if r['role'] == 'producer']
+    assert runs[0]['status'] == 'failed' and runs[0]['error']['code'] == 'INVALID_OUTPUT'
+    assert 'not a JSON object' in runs[0]['error']['message']
+    written = ''.join(p.read_text(encoding='utf-8') for p in (root / '10_Knowledge').rglob('*.md'))
+    assert 'line one' not in written and '\\nline' not in written
+
+
+def test_only_an_export_task_reads_raw_tex_backslashes():
+    body = copy.deepcopy(fixture('openai_chat_completion.json'))
+    body['choices'][0]['message']['content'] = '{"ok": "$a\\mid b$"}'
+    strict = executor(openai_endpoint(), Recorder((200, body, None))).run(task())
+    assert strict.status == 'failed' and strict.error['code'] == 'INVALID_OUTPUT'
+    lenient = executor(openai_endpoint(), Recorder((200, body, None))).run(task(tex_backslashes=True))
+    assert lenient.status == 'completed' and lenient.output == {'ok': '$a\\mid b$'}

@@ -91,7 +91,7 @@ def _open_run(root: Path, state: dict, role: str, chunk: str | None) -> dict | N
 
 def call_executor(root: Path, job_id: str, executor: Executor, *, role: str, step: str,
                   prompt_text: str, packet: dict, output_schema: dict,
-                  chunk: str | None = None) -> Result:
+                  chunk: str | None = None, tex_backslashes: bool = False) -> Result:
     """Record a run, call ``executor`` and submit its output through the gate.
 
     Raises :class:`AwaitingSubmission` for a host hand-off, and
@@ -116,7 +116,7 @@ def call_executor(root: Path, job_id: str, executor: Executor, *, role: str, ste
     _atomic_state(root, packet_rel, text.encode('utf-8'))
     task = Task(job_id=job_id, run_id=run['run_id'], role=role, step=step, prompt=prompt_text,
                 packet=packet, packet_sha256=state['input_sha256'], output_schema=output_schema,
-                chunk=chunk, packet_path=str(state_root(root) / packet_rel))
+                chunk=chunk, packet_path=str(state_root(root) / packet_rel), tex_backslashes=tex_backslashes)
     try:
         result = executor.run(task)
     except Exception as exc:
