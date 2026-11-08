@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 from secondbrain import cards as cardfmt
-from secondbrain import cli, jobs
+from secondbrain import cli, decisions, jobs
 from secondbrain.executors import FakeExecutor
 from secondbrain.pipelines import ingest, source_check
 from secondbrain.vault import read_snapshot
@@ -65,7 +65,7 @@ def produce(topics=False):
 
 def review(task):
     cand = task.packet['candidate']
-    return {'cards': [{'slug': c['slug'], 'decision': 'accept', 'reason': 'ok'} for c in cand['cards']],
+    return {'cards': [{'slug': c['slug'], 'decision': 'accept', 'overlap': 'distinct', 'reason': 'ok'} for c in cand['cards']],
             'new_topics': [{**{k: t[k] for k in ('domain', 'pillar', 'name')}, 'decision': 'accept', 'reason': 'ok'}
                            for t in cand['new_topics']],
             'coverage': {'decision': 'accept', 'reason': 'ok'}}
@@ -233,7 +233,7 @@ def test_host_mode_hands_the_check_to_a_reviewer(tmp_path):
     assert ingest.packet_for(root, job_id, role='reviewer', chunk=None, executor=HostExecutor())['run_id'] == \
         check['run_id']
     text = open(check['packet_path'], encoding='utf-8').read()
-    assert 'merge cards that repeat each other' in text
+    assert 'merge cards of this source that repeat each other' in text
     packet = packet_in(text)
     assert submit(check, {'cards': [], 'new_topics': []}) != 0  # every card needs a decision
     assert submit(check, keep_all(packet, **{'arrival-order': {'decision': 'same', 'with': 'queue-order',
@@ -256,7 +256,7 @@ def test_host_mode_gives_up_a_check_that_keeps_failing_only_after_two_failures(t
     assert submit(check, {'cards': [], 'new_topics': []}) != 0
     capsys.readouterr()
     assert skip() != 0 and 'after 2 rejected answers or given-up runs' in capsys.readouterr().err
-    assert submit(check, {'cards': [{'slug': 'nope', 'decision': 'keep'}], 'new_topics': []}) != 0
+    assert submit(check, {'cards': [{'slug': 'nope', 'overlap': 'distinct'}], 'new_topics': []}) != 0
     assert jobs.load_run(root, job_id, check['run_id'])['rejected_submits'] == 2
     assert skip() == 0
     assert jobs.load_run(root, job_id, check['run_id'])['status'] == 'abandoned'
@@ -350,91 +350,100 @@ def test_a_carried_link_to_a_card_the_retry_merges_goes_to_the_card_it_repeats(t
 
 
 # --- a retry's cards against the cards its source wrote (the real-vault ingest: a retry wrote, as confirmed, a card
-# whose points three cards of the parent already held; the chunk reviewer had sent it to the source check, which
-# by the retry no longer saw those cards) ------------------------------------------------------------------------
-@pytest.mark.parametrize('by_slug', [False, True])
-def test_a_single_chunk_retry_is_checked_against_the_cards_its_source_wrote(tmp_path, monkeypatch, by_slug):
-    monkeypatch.setattr(source_check, 'NEAR_WRITTEN', 1)  # the closest written card, then the ones the card links
+# whose points three cards of the parent already held). The chunk reviewer, the final judge of a card against the
+# vault's cards, sees the written cards (via: written) and judges them on the same scale; the merge check does not.
+def retry_reviewed(tmp_path, level=None, by_slug=False):
+    """The parent with arrival-order pending, then its retry; the chunk reviewer gives ``level(packet, ids)``."""
     root, job_id, parent, whole = partial_parent(tmp_path, {'arrival-order'})
     ids = {p['slug']: p['id'] for p in parent['produced']}
-    before = cardfmt.propositions_of(read_snapshot(root).cards[ids['queue-order']].body)
-    done, seen = retry_pending(root, job_id, parent, whole, keep_all, by_slug=by_slug)
-    assert len(jobs.read_input(root, done['job_id'])['chunks']) == 1  # only the chunk with the pending card
-    [task] = seen
-    [card] = task.packet['cards']
-    assert card['slug'] == 'arrival-order'
-    near = {e['id']: e for e in card['near_written']}
-    assert list(near) == [ids['queue-order'], ids['lantern-queue']]  # the closest, then the one it links
-    assert near[ids['lantern-queue']]['slug'] == 'lantern-queue'
-    assert near[ids['queue-order']]['propositions'] == before and before
-    assert near[ids['queue-order']]['essence'] and near[ids['queue-order']]['title'] == CARDS['queue-order']['title']
-    # kept: written as reviewed, and the carried link from the parent's cost card reaches it
+    pending = {'arrival-order'}
+    lantern = 'lantern-queue' if by_slug else ids['lantern-queue']
+    child = ingest.retry(root, job_id)
+    reviews, checks = [], []
+
+    def child_producer(task):
+        answer = whole(task)
+        answer['cards'] = [{**c, 'relations': [{**r, 'target': lantern} for r in c.get('relations') or []
+                                               if r['target'] == 'lantern-queue']}
+                           for c in answer['cards'] if c['slug'] in pending]
+        answer['coverage'] = [r for r in answer['coverage'] if not r.get('cards') or set(r['cards']) & pending]
+        answer['new_topics'] = []
+        return answer
+
+    def child_reviewer(task):
+        if is_source_check_task(task):
+            checks.append(task)
+            return keep_all(task.packet)
+        reviews.append(task)
+        out = review(task)
+        for row in out['cards']:
+            row.update(level(task.packet, ids) if level else {'overlap': 'distinct'})
+        return out
+    done = ingest.advance(root, child['job_id'], producer=FakeExecutor('gpt-test', responder=with_diagrams(child_producer)),
+                          reviewer=FakeExecutor('claude-test', responder=child_reviewer))
+    return root, ids, done, reviews, checks
+
+
+@pytest.mark.parametrize('by_slug', [False, True])
+def test_a_retry_card_is_judged_against_the_written_cards_by_the_chunk_reviewer(tmp_path, by_slug):
+    root, ids, done, reviews, checks = retry_reviewed(tmp_path, by_slug=by_slug)
+    [task] = reviews
+    shown = {e['id']: e for e in task.packet['candidates']['arrival-order']}
+    assert 'written' in shown[ids['queue-order']]['via']  # the closest written card
+    assert 'named' in shown[ids['lantern-queue']]['via']  # the written card it links, by id or by slug
+    order = task.packet['candidate_cards'][ids['queue-order']]
+    assert order['propositions'] == cardfmt.propositions_of(read_snapshot(root).cards[ids['queue-order']].body)
+    assert checks == []  # one chunk: no merge check, and written cards are not its business any more
     assert done['status'] == 'applied', done.get('pending')
     arrival = next(p['id'] for p in done['produced'] if p['slug'] == 'arrival-order')
-    assert read_snapshot(root).cards[arrival].fm['status'] == 'confirmed'
-    assert done['needs_review'] == [] and done['source_check']['same_as_written'] == []
+    assert read_snapshot(root).cards[arrival].fm['status'] == 'confirmed' and done['needs_review'] == []
     assert [r['target'] for r in done['restored_relations']] == [arrival]
 
 
-def test_a_retry_card_that_repeats_a_written_card_is_written_next_to_it_as_needs_review(tmp_path):
-    root, job_id, parent, whole = partial_parent(tmp_path, {'arrival-order'})
-    order = next(p['id'] for p in parent['produced'] if p['slug'] == 'queue-order')
-    before = read_snapshot(root).cards[order]
-    reason = 'both say items keep arrival order; this one adds the lit markers'
-    done, _ = retry_pending(root, job_id, parent, whole, lambda packet: keep_all(packet, **{'arrival-order': {
-        'decision': 'same', 'with': order, 'reason': reason,
-        'links': [{'target': order, 'type': 'similar_to', 'note': 'the same order rule'}]}}))
+def test_a_retry_card_the_same_as_a_written_card_is_not_written_and_links_to_it_go_there(tmp_path):
+    def same_as_order(packet, ids):
+        return {'overlap': 'same', 'with': [ids['queue-order']], 'reason': 'both say items keep arrival order'}
+    root, ids, done, _, _ = retry_reviewed(tmp_path, same_as_order)
+    assert done['status'] == 'applied' and done['produced'] == []
+    assert [{k: v for k, v in d.items() if k != 'chunk'} for d in done['duplicates']] == [
+        {'slug': 'arrival-order', 'title': ARRIVAL['title'], 'with': [ids['queue-order']],
+         'reason': 'both say items keep arrival order', 'by': 'reviewer'}]
+    assert done['outcomes'] == {'arrival-order': 'drop'}
+    assert done['restored_relations'][0]['target'] == ids['queue-order']
+
+
+def test_a_retry_card_that_extends_a_written_card_is_kept_out_of_the_merge_check(tmp_path):
+    def extends_order(packet, ids):
+        return {'overlap': 'extends', 'with': [ids['lantern-queue']], 'reason': 'adds that the order holds'}
+    root, ids, done, _, checks = retry_reviewed(tmp_path, extends_order)
+    assert checks == [] and done['outcomes'] == {'arrival-order': 'patch'}
     assert done['status'] == 'applied', done.get('pending')
-    arrival = next(p['id'] for p in done['produced'] if p['slug'] == 'arrival-order')
-    after = read_snapshot(root)
-    assert after.cards[arrival].fm['status'] == 'needs-review'
-    assert {'type': 'similar_to', 'target': order} in [{k: r[k] for k in ('type', 'target')}
-                                                         for r in after.cards[arrival].fm['relations']]
-    assert done['needs_review'] == [{'id': arrival, 'title': ARRIVAL['title'], 'overlap_with': order, 'reason': reason}]
-    assert done['source_check']['same_as_written'] == [{'slug': 'arrival-order', 'title': ARRIVAL['title'],
-                                                        'with': order, 'reason': reason, 'id': arrival}]
-    assert done['source_check']['merged'] == []
-    # the written card is not changed: nothing carried to it, only the back link of the new relation
-    assert cardfmt.view(after.cards[order], 'full') == cardfmt.view(before, 'full')
-    assert after.cards[order].fm['sources'] == before.fm['sources']
-    assert [r['target'] for r in done['restored_relations']] == [arrival]  # kept, not merged away
 
 
-def test_a_retry_card_is_shown_the_five_closest_written_cards_then_the_closest_it_links_eight_in_all():
-    from secondbrain.vault import Card, Snapshot
-    terms = [w * 3 for w in 'abcdefghijklmnop']  # 16 query words
-
-    def written(cid, k):  # the first k query words, padded so every card has the same length and the same title
-        body = (f'## Essence\n\n{" ".join(terms[:k] + ["filler"] * (16 - k))}\n\n'
-                f'## Propositions\n\n- P1. {cid} holds\n')
-        return Card(id=cid, title='Card', domain='d', path=f'{cid}.md', raw=b'', fm={}, body=body, sha256='')
-    cards = [written(f'kc_w{k}', k) for k in range(16)] + [written('kc_w10b', 10)]  # the more words, the closer
-    # it links 10 written cards: one of the closest, a tie (kc_w10, kc_w10b), one by slug, one with no word in common
-    links = ['kc_w15', 'kc_w10b', 'kc_w10', 'w9', 'kc_w8', 'kc_w7', 'kc_w5', 'kc_w3', 'kc_w1', 'kc_w0']
-    card = {'title': ' '.join(terms), 'essence': '', 'propositions': [],
-            'relations': [{'type': 'similar_to', 'target': t} for t in links]}
-
-    def near(order):
-        snapshot = Snapshot(root=None, cards={c.id: c for c in order}, registry={}, catalog={}, taxonomies={},
-                            issues=[], fingerprint='')
-        return ingest._near_written(snapshot, card, {'w9': 'kc_w9'})
-    shown = near(cards)
-    assert [e['id'] for e in shown] == ['kc_w15', 'kc_w14', 'kc_w13', 'kc_w12', 'kc_w11',  # the five closest
-                                        'kc_w10', 'kc_w10b', 'kc_w9']  # the closest linked ones, ties by id
-    assert near(list(reversed(cards))) == shown  # the same whatever order the vault lists them in
-    assert shown[7] == {'id': 'kc_w9', 'slug': 'w9', 'title': 'Card', 'domain': 'd', 'pillar': None, 'topic': None,
-                        'essence': ' '.join(terms[:9] + ['filler'] * 7), 'propositions': ['kc_w9 holds'],
-                        'flashcards': []}
-    assert 'slug' not in shown[0]
-    card['relations'] = card['relations'][:2]  # fewer links: all of them shown, no more than five closest otherwise
-    assert [e['id'] for e in near(cards)] == ['kc_w15', 'kc_w14', 'kc_w13', 'kc_w12', 'kc_w11', 'kc_w10b']
-
-
-def test_needs_a_check_for_two_chunks_or_for_any_accepted_card_of_a_retry_whose_source_wrote_cards():
+def test_needs_a_check_for_cards_of_the_decision_set_from_two_chunks():
     one, two, none = [{'accepted': {'a': {}}}], [{'accepted': {'a': {}}}, {'accepted': {'b': {}}}], [{'accepted': {}}]
-    assert source_check.needed(two) and source_check.needed(two, written=True)
-    assert not source_check.needed(one) and source_check.needed(one, written=True)
-    assert not source_check.needed(none, written=True)
+    assert source_check.needed(two) and not source_check.needed(one) and not source_check.needed(none)
+
+
+def recorded(settled, frozen, reply):
+    """The decision record the job would hold: each card's first steps, then the merge check's answer."""
+    entries = []
+    for o in settled:
+        for slug, card in o['accepted'].items():
+            decisions.step(entries, 'relations', slug, 'create', role='producer', slot=o['chunk'],
+                           data={'relations': card.get('relations') or []})
+            decisions.step(entries, 'classification', slug, 'propose', role='producer', slot=o['chunk'],
+                           data={k: card[k] for k in ('domain', 'pillar', 'topic')})
+    source_check.record(frozen, reply, entries, slot=source_check.SLOT, run=None)
+    return entries
+
+
+def applied(settled, frozen, reply):
+    """``(cards kept, report, entries)`` of the merge check's answer, each kept card with its final relations."""
+    entries = recorded(settled, frozen, reply)
+    out, report = source_check.apply(settled, frozen, entries)
+    kept = {s: {**c, 'relations': decisions.fold(entries, 'relations', s)} for o in out for s, c in o['accepted'].items()}
+    return kept, report, entries
 
 
 # --- the answer's form ------------------------------------------------------------------------------
@@ -455,29 +464,38 @@ FROZEN = {'cards': [frozen_card('a', 'b'), frozen_card('b'), frozen_card('c', 'a
 
 
 def answer(cards=None, topics=None):
-    rows = {s: {'slug': s, 'decision': 'keep'} for s in ('a', 'b', 'c')}
+    rows = {s: {'slug': s, 'overlap': 'distinct'} for s in ('a', 'b', 'c')}
     rows.update(cards or {})
-    trows = {t: {'id': t, 'decision': 'keep'} for t in ('T1', 'T2')}
+    trows = {t: {'id': t, 'overlap': 'distinct'} for t in ('T1', 'T2')}
     trows.update(topics or {})
     return {'cards': list(rows.values()), 'new_topics': list(trows.values())}
 
 
 def same(slug, into, **fields):
-    return {slug: {'slug': slug, 'decision': 'same', 'with': into, 'reason': 'r', **fields}}
+    """``slug`` goes into ``into``: ``extends`` when it carries something, else ``same``."""
+    carried = any((fields.get('carry') or {}).get(k) for k in ('propositions', 'flashcards', 'replace'))
+    return {slug: {'slug': slug, 'overlap': 'extends' if carried else 'same', 'with': [into], 'reason': 'r', **fields}}
 
 
 def links(slug, *rows):
-    return {slug: {'slug': slug, 'decision': 'keep', 'links': [dict(zip(('target', 'type'), r)) for r in rows]}}
+    return {slug: {'slug': slug, 'overlap': 'distinct', 'links': [dict(zip(('target', 'type'), r)) for r in rows]}}
 
 
 @pytest.mark.parametrize('cards, topics, message', [
-    ({**same('a', 'b'), **same('b', 'c')}, None, 'name c instead'),
-    ({'a': {'slug': 'a', 'decision': 'keep', 'with': 'b'}}, None, '"keep" takes no "with" or "carry"'),
-    (same('a', 'a'), None, 'another slug'),
-    ({'a': {'slug': 'a', 'decision': 'same', 'with': 'b'}}, None, 'what the two share'),
-    ({'z': {'slug': 'z', 'decision': 'keep'}}, None, "'z' is not in the packet"),
-    (None, {'T1': {'id': 'T1', 'decision': 'same', 'with': 'T2', 'reason': 'r'},
-            'T2': {'id': 'T2', 'decision': 'same', 'with': 'T1', 'reason': 'r'}}, 'name the topic that stays'),
+    ({**same('a', 'b'), **same('b', 'c')}, None, 'name the card that stays'),
+    ({'a': {'slug': 'a', 'overlap': 'distinct', 'carry': {'propositions': ['a one']}}}, None,
+     'only an "extends" card carries'),
+    ({'a': {'slug': 'a', 'overlap': 'extends', 'with': ['b'], 'reason': 'r'}}, None, 'give a non-empty "carry"'),
+    ({'a': {'slug': 'a', 'overlap': 'extends', 'with': ['b', 'c'], 'reason': 'r', 'carry': {'propositions': ['a one']}}},
+     None, 'names exactly one card'),
+    ({'a': {'slug': 'a', 'overlap': 'keep'}}, None, 'overlap must be one of distinct, extends, same'),
+    ({'a': {'slug': 'a', 'overlap': 'same', 'with': ['kc_old'], 'reason': 'r'}}, None,
+     'other cards of this packet'),  # an existing card is the chunk reviewer's to judge
+    (same('a', 'a'), None, 'other cards of this packet'),
+    ({'a': {'slug': 'a', 'overlap': 'same', 'with': ['b']}}, None, 'what the two share'),
+    ({'z': {'slug': 'z', 'overlap': 'distinct'}}, None, "'z' is not in the packet"),
+    (None, {'T1': {'id': 'T1', 'overlap': 'same', 'with': 'T2', 'reason': 'r'},
+            'T2': {'id': 'T2', 'overlap': 'same', 'with': 'T1', 'reason': 'r'}}, 'name the topic that stays'),
     (same('a', 'b', carry={'propositions': ['a one, reworded']}), None, 'copied exactly'),
     (same('a', 'b', carry={'flashcards': [{'q': 'a q1?', 'a': 'another answer'}]}), None, 'copied exactly'),
     (same('a', 'b', carry={'replace': [{'proposition': 'P3', 'by': 'a one'}]}), None, 'P1–P2'),
@@ -497,39 +515,6 @@ def test_the_answer_must_settle_every_card_without_chains(cards, topics, message
         return None if kind == 'similar_to' else f'{kind!r} is not open to domain {domain}'
     with pytest.raises(ValueError, match=message):
         source_check.validate_answer(FROZEN, answer(cards, topics), closed=closed)
-
-
-RETRY = {**FROZEN, 'cards': [frozen_card('a', 'b', written=[]), frozen_card('b', 'w2', written=['kc_w2']),  # by slug
-                             frozen_card('c', 'a', near=['kc_old'], written=['kc_w'])]}
-
-
-@pytest.mark.parametrize('cards, message', [
-    (same('c', 'kc_old', links=[{'target': 'kc_old', 'type': 'similar_to'}]), 'or one of its near_written ids'),
-    (same('a', 'kc_w'), 'another slug of the packet(?! or)'),
-    (same('c', 'kc_w', carry={'propositions': ['c one']}, links=[{'target': 'kc_w', 'type': 'similar_to'}]),
-     'give no "carry"'),
-    (same('c', 'kc_w'), 'link it in "links"'),
-    ({**same('b', 'kc_w2', links=[{'target': 'kc_w2', 'type': 'similar_to'}])}, 'linked already'),
-])
-def test_a_retry_card_may_repeat_only_a_written_card_listed_for_it_and_must_link_it_without_carrying(cards, message):
-    with pytest.raises(ValueError, match=message):
-        source_check.validate_answer(RETRY, answer(cards))
-
-
-def test_a_retry_card_that_repeats_a_written_card_it_links_or_links_now_is_valid_and_keeps_its_links():
-    for cards in (same('b', 'kc_w2'), same('c', 'kc_w', links=[{'target': 'kc_w', 'type': 'similar_to'}]),
-                  links('c', ('kc_w', 'similar_to')), {**same('b', 'kc_w2'), **links('c', ('b', 'similar_to'))}):
-        assert source_check.validate_answer(RETRY, answer(cards))
-    settled = [{'chunk': 'c01', 'accepted': {s: {'title': s, 'domain': 'd', 'pillar': 'p', 'topic': 't',
-                                                 'relations': [{'type': 'similar_to', 'target': 'kc_w2'}] if s == 'b'
-                                                 else [], 'propositions': [f'{s} one']} for s in 'abc'},
-                'topics': {}}]
-    out, report = source_check.apply(settled, RETRY, answer({**same('b', 'kc_w2'), **links('c', ('b', 'similar_to'))}))
-    kept = out[0]['accepted']
-    assert set(kept) == {'a', 'b', 'c'} and kept['b']['_overlap_with'] == 'kc_w2' and kept['b']['_overlap_reason'] == 'r'
-    assert kept['b']['propositions'] == ['b one'] and kept['c']['relations'] == [{'type': 'similar_to', 'target': 'b'}]
-    assert report['merged'] == [] and report['merged_into'] == {}
-    assert report['same_as_written'] == [{'slug': 'b', 'title': 'b', 'with': 'kc_w2', 'reason': 'r'}]
 
 
 def test_a_card_merged_into_may_hold_twice_the_flashcards_of_a_new_card():
@@ -552,7 +537,7 @@ def test_every_card_needs_a_decision_and_an_isolated_one_a_link_or_a_reason():
 
     def with_d(row=None, **cards):
         out = answer(cards)
-        out['cards'].append({'slug': 'd', 'decision': 'keep', **(row or {})})
+        out['cards'].append({'slug': 'd', 'overlap': 'distinct', **(row or {})})
         return out
     with pytest.raises(ValueError, match='d has no relation'):
         source_check.validate_answer(frozen, with_d())
@@ -575,8 +560,7 @@ def test_a_merge_carries_what_the_card_adds_and_a_moved_link_never_makes_a_pair_
                                          'replace': [{'proposition': 'P1', 'by': 'b two, with an example'}]}))
     reply['new_topics'] = []
     assert source_check.validate_answer(frozen, reply) is reply
-    out, report = source_check.apply(settled, frozen, reply)
-    kept = {s: c for o in out for s, c in o['accepted'].items()}
+    kept, report, _ = applied(settled, frozen, reply)
     assert set(kept) == {'a', 'c'}
     assert kept['a']['relations'] == []  # b -> c would be a -> c while c -> a exists; b -> a would be a -> a
     assert kept['c']['relations'] == [{'type': 'similar_to', 'target': 'a'}]
@@ -596,8 +580,7 @@ def test_a_check_of_other_cards_than_the_chunks_now_accept_is_refused():
     frozen = source_check.frozen_input(settled, {'filename': 'f'}, relation_views={})
     settled[1]['accepted'] = {'c': card('c')}
     with pytest.raises(ValueError, match='different set of cards'):
-        source_check.apply(settled, frozen, {'cards': [{'slug': s, 'decision': 'keep'} for s in 'ab'],
-                                             'new_topics': []})
+        source_check.apply(settled, frozen, [])
 
 
 def test_links_to_a_merged_card_follow_it_and_a_link_to_the_card_itself_becomes_text():
@@ -607,8 +590,8 @@ def test_links_to_a_merged_card_follow_it_and_a_link_to_the_card_itself_becomes_
     assert source_check._retitle('unlike [[Old]] or [[Old|the twin]]', mapping, 'Kept') == (
         'unlike Kept or the twin', 2)
     card = {'title': 'Kept', 'essence': 'e', 'propositions': ['[[Other]] stays'], 'confusions': ['vs [[Old]]'],
-            'flashcards': [{'q': 'Why [[Old]]?', 'a': 'a'}], 'relations': [{'type': 'x', 'target': 't', 'note': '[[Old]]'}]}
-    assert source_check._retitle_card(card, mapping) == 3
+            'flashcards': [{'q': 'Why [[Old]]?', 'a': 'a'}]}
+    assert source_check._retitle_card(card, mapping) == 2  # relation notes: see the merge test (a program step)
     assert card['confusions'] == ['vs Kept'] and card['propositions'] == ['[[Other]] stays']
 
 
@@ -623,12 +606,12 @@ def test_a_carried_question_the_kept_card_already_asks_word_for_word_is_skipped(
     settled = [{'chunk': 'c01', 'accepted': {'a': card('a', asked)}, 'topics': {}},
                {'chunk': 'c02', 'accepted': {'b': card('b', again)}, 'topics': {}}]
     frozen = source_check.frozen_input(settled, {'filename': 'f'}, relation_views={})
-    reply = {'cards': [{'slug': 'a', 'decision': 'keep', 'alone': 'a fact of its own'},
-                       {'slug': 'b', 'decision': 'same', 'with': 'a', 'reason': 'r', 'carry': {'flashcards': again}}],
+    reply = {'cards': [{'slug': 'a', 'overlap': 'distinct', 'alone': 'a fact of its own'},
+                       {'slug': 'b', 'overlap': 'extends', 'with': ['a'], 'reason': 'r', 'carry': {'flashcards': again}}],
              'new_topics': []}
     assert source_check.validate_answer(frozen, reply) is reply
-    out, report = source_check.apply(settled, frozen, reply)
-    kept = out[0]['accepted']['a']
+    kept, report, _ = applied(settled, frozen, reply)
+    kept = kept['a']
     assert [f['q'] for f in kept['flashcards']] == ['What does x hold?', 'Why is y kept?']
     assert report['merged'][0]['carried'] == {'propositions': 0, 'flashcards': 1}
     assert report['merged'][0]['repeats_skipped'] == 1

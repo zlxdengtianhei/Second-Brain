@@ -42,7 +42,7 @@ def test_retry_redoes_only_the_pending_card(tmp_path):
     child = ingest.retry(root, parent)
     assert child['job_id'] == f'{parent}-retry1' and child['chunks'] == ['c01']
     assert ingest.retry(root, parent)['job_id'] == child['job_id']  # asking again returns the same child
-    review = {'cards': [{'slug': 'marker-dimming', 'decision': 'accept', 'reason': 'matches the text now'}],
+    review = {'cards': [{'slug': 'marker-dimming', 'decision': 'accept', 'overlap': 'distinct', 'reason': 'matches the text now'}],
               'new_topics': [], 'coverage': {'decision': 'accept', 'reason': 'only the open card was missing'}}
     produce, respond, seen = scripted([retry_answer()], [review], {'marker-dimming': DIMMING_IR})
     done = ingest.advance(root, child['job_id'], producer=FakeExecutor('gpt-test', responder=produce),
@@ -70,9 +70,9 @@ def test_retry_redoes_only_the_pending_card(tmp_path):
 
 #: A passage the parent's producer handled as a duplicate of an existing card (no card written).
 SKIM_ROW = {'source_quote': 'A reader that holds a marker can jump straight to it without scanning the items',
-            'disposition': 'duplicate', 'duplicate_of': [EXISTING], 'reason': 'the existing card says it'}
+            'disposition': 'same', 'with': [EXISTING], 'reason': 'the existing card says it'}
 #: One more such passage, found by the first retry.
-CUT_ROW = {'source_quote': 'When the queue is compacted', 'disposition': 'duplicate', 'duplicate_of': [EXISTING],
+CUT_ROW = {'source_quote': 'When the queue is compacted', 'disposition': 'same', 'with': [EXISTING],
            'reason': 'compaction is described there'}
 
 
@@ -91,9 +91,9 @@ def test_a_retry_child_is_shown_what_earlier_jobs_settled_and_passes_it_on(tmp_p
     settled = jobs.read_input(root, child['job_id'])['retry']['settled']['c01']
     queue_order = CARDS['queue-order']
     assert settled['duplicates'] == [
-        {k: SKIM_ROW[k] for k in ('source_quote', 'duplicate_of')},  # the producer's row, without its reason
+        {k: SKIM_ROW[k] for k in ('source_quote', 'with')},  # the producer's row, without its reason
         {'source_quote': queue_order['source_quotes'][0], 'title': queue_order['title'],  # the reviewer's verdict
-         'duplicate_of': [EXISTING], 'review': 'already covered by the existing card'}]
+         'with': [EXISTING], 'review': 'already covered by the existing card'}]
     assert settled['out_of_scope'] == [{'source_quote': 'Thanks for reading, see you next week!'}]
     answer = retry_answer()
     answer['coverage'].append(CUT_ROW)
@@ -118,7 +118,7 @@ def test_a_retry_child_is_shown_what_earlier_jobs_settled_and_passes_it_on(tmp_p
     grandchild = ingest.retry(root, child['job_id'])
     passed_on = jobs.read_input(root, grandchild['job_id'])['retry']['settled']['c01']
     assert passed_on['duplicates'] == settled['duplicates'] + [
-        {k: CUT_ROW[k] for k in ('source_quote', 'duplicate_of')}]
+        {k: CUT_ROW[k] for k in ('source_quote', 'with')}]
     assert passed_on['out_of_scope'] == settled['out_of_scope']
 
 
@@ -149,7 +149,7 @@ def rollback(root, job_id):
 def apply_retry(root, parent):
     """Retry ``parent`` and write the fixed pending card; returns the child's final state."""
     child = ingest.retry(root, parent)
-    review = {'cards': [{'slug': 'marker-dimming', 'decision': 'accept', 'reason': 'matches the text now'}],
+    review = {'cards': [{'slug': 'marker-dimming', 'decision': 'accept', 'overlap': 'distinct', 'reason': 'matches the text now'}],
               'new_topics': [], 'coverage': {'decision': 'accept', 'reason': 'only the open card was missing'}}
     produce, respond, _ = scripted([retry_answer()], [review], {'marker-dimming': DIMMING_IR})
     done = ingest.advance(root, child['job_id'], producer=FakeExecutor('gpt-test', responder=produce),
@@ -265,7 +265,7 @@ def test_retrying_a_parent_names_the_newest_partial_job_of_the_chain(tmp_path):
     root = build_ingest_vault(tmp_path / 'vault')
     parent = two_pending_job(root)
     child = ingest.retry(root, parent)
-    fixed = {'cards': [{'slug': 'marker-dimming', 'decision': 'accept', 'reason': 'matches now'},
+    fixed = {'cards': [{'slug': 'marker-dimming', 'decision': 'accept', 'overlap': 'distinct', 'reason': 'matches now'},
                        {'slug': 'lit-marker-cost', 'decision': 'revise', 'reason': 'numbers still off'}],
              'new_topics': [{**TOPIC_KEY, 'decision': 'accept', 'reason': 'still needed'}],
              'coverage': {'decision': 'accept', 'reason': 'both open cards answered'}}

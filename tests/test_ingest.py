@@ -189,7 +189,9 @@ def test_ingest_acceptance_list(tmp_path, lay, language):
     repair_task = seen['producer'][1]
     assert repair_task.step == 'repair' and repair_task.chunk == 'c01.r1'
     assert repair_task.packet['kept_slugs'] == ['lantern-queue', 'lit-marker-cost']
-    assert [c['slug'] for c in repair_task.packet['review_findings']['cards']] == ['marker-dimming', 'queue-order']
+    # queue-order was accepted as the same as an existing card: settled, not a finding to repair
+    assert [c['slug'] for c in repair_task.packet['review_findings']['cards']] == ['marker-dimming']
+    assert [d.get('title') for d in repair_task.packet['already_settled']['duplicates']] == ['Arrival order in lantern queues']
     # 7. the same file again is unchanged
     again = ingest.prepare(root, root / source_rel)
     assert again['status'] == 'unchanged'
@@ -284,7 +286,7 @@ def test_relation_to_a_pending_card_is_not_written(tmp_path):
     review = first_review()
     review['cards'][1]['decision'] = 'revise'
     review['cards'][1]['reason'] = 'numbers are off'
-    review['cards'][2] = {'slug': 'marker-dimming', 'decision': 'accept', 'reason': 'fine'}
+    review['cards'][2] = {'slug': 'marker-dimming', 'decision': 'accept', 'overlap': 'distinct', 'reason': 'fine'}
     again = {'cards': [CARDS['lit-marker-cost']], 'new_topics': [], 'coverage': coverage(['lit-marker-cost'])[:1]}
     producer, reviewer, _ = executors([first_candidate(), again], [review, {
         'cards': [{'slug': 'lit-marker-cost', 'decision': 'revise', 'reason': 'numbers are still off'}],
@@ -367,8 +369,8 @@ def test_review_must_judge_every_card_and_topic():
     with pytest.raises(ingest.IngestError, match='concrete reason'):
         ingest.validate_review(candidate, no_reason, {EXISTING})
     bad_dup = json.loads(json.dumps(review))
-    bad_dup['cards'][3]['duplicate_of'] = 'kc_missing'
-    with pytest.raises(ingest.IngestError, match='duplicate_of'):
+    bad_dup['cards'][3]['with'] = ['kc_missing']
+    with pytest.raises(ingest.IngestError, match='may name only existing cards'):
         ingest.validate_review(candidate, bad_dup, {EXISTING})
 
 
@@ -376,7 +378,7 @@ def test_rejected_new_topic_keeps_its_cards_pending(tmp_path):
     root = build_ingest_vault(tmp_path / 'vault')
     review = first_review()
     review['new_topics'][0].update(decision='revise', reason='too narrow for a topic')
-    review['cards'][2] = {'slug': 'marker-dimming', 'decision': 'accept', 'reason': 'fine'}
+    review['cards'][2] = {'slug': 'marker-dimming', 'decision': 'accept', 'overlap': 'distinct', 'reason': 'fine'}
     repair = {'cards': [], 'new_topics': [], 'coverage': [
         {'source_quote': 'Markers cost one extra word', 'disposition': 'needs_taxonomy',
          'suggested_pillar': 'Marker economics', 'reason': 'no fitting pillar'}]}

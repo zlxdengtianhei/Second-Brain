@@ -56,7 +56,7 @@ def cache_dir(root: Path) -> Path | None:
 
 
 def default_section() -> str:
-    return cardfmt.HEADINGS[config.current().card_language]['flashcards']
+    return cardfmt.HEADINGS[config.active().card_language]['flashcards']
 
 
 def card_metas(snapshot) -> list:

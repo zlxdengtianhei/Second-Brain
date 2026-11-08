@@ -242,8 +242,18 @@ PAGES = {
 
 
 def language() -> str:
-    """The active language: ``[cards] language``, or the vault's when the config file does not set it."""
-    return config.current().card_language
+    """The active language: ``[cards] language``, or the vault's when the config file does not set it.
+
+    In a job step, the language the job froze.
+    """
+    return config.active().card_language
+
+
+def effective_language(snapshot, configured) -> str:
+    """The language a write to ``snapshot``'s vault uses with the ``configured`` settings: theirs when the config
+    file sets it or the vault has none, else the vault's (what :func:`check_language` makes active)."""
+    vault = vault_language(snapshot.root, catalog=snapshot.catalog)
+    return vault if vault and not configured.card_language_set else configured.card_language
 
 
 def recorded_language(catalog) -> str | None:
@@ -294,7 +304,7 @@ def vault_language(root, *, catalog=None) -> str | None:
 
 def describe(root) -> dict:
     """Where the vault's language comes from and which language writes use (`sb language`)."""
-    settings = config.current()
+    settings = config.active()
     recorded = recorded_language(_catalog(root))
     detected = detected_language(root)
     vault = recorded or detected
@@ -313,9 +323,13 @@ def check_language(snapshot) -> None:
     one instead.
     """
     vault = vault_language(snapshot.root, catalog=snapshot.catalog)
-    settings = config.current()
+    settings = config.active()
     if vault is None or vault == settings.card_language:
         return
+    if config.in_job():
+        raise ValueError(f'This vault\'s generated text is {vault} now, but this job was frozen to write '
+                         f'{settings.card_language}; nothing was written. Roll the job back or reset it and ingest '
+                         'the source again.')
     if not settings.card_language_set:
         config.use_language(vault)
         return

@@ -12,7 +12,7 @@ whether a new card repeats it is the reviewer's judgement, never a score.
   conflict or an ``overlap_hint`` (all of them are shown, at ``full``, and do
   not count toward the budget);
 - ``words``: the first route, a BM25 search of the query text (top ``k``);
-- ``hop``: the relation neighbours of the first ``hop`` words hits;
+- ``hop``: the cards the first ``hop`` words hits link (their relations);
 - ``shelf``: the cards of the topic the card is filed under (``title`` view);
 - ``written``: in a retry, the cards earlier jobs of the source wrote.
 
@@ -54,7 +54,7 @@ def words(root, snapshot, query: str, k: int) -> list[str]:
 
 
 def hop(snapshot, start: list[str], n: int) -> list[str]:
-    """Second route: the relation neighbours of the first ``n`` ids of ``start``, in relation order."""
+    """Second route: the cards the first ``n`` ids of ``start`` link, in relation order."""
     out = []
     for cid in start[:max(0, n)]:
         card = snapshot.cards.get(cid)
@@ -74,13 +74,13 @@ def shelf(snapshot, domain, pillar, topic, *, limit: int = SHELF_MAX, rank=None)
 
 
 def candidates(root, snapshot, query: str, *, k: int, hop_from: int = 0, named=(), written=None,
-               shelf_of: tuple | None = None, exclude=()) -> list[dict]:
+               written_k: int | None = None, shelf_of: tuple | None = None, exclude=()) -> list[dict]:
     """``[{id, rank, via}]`` for one query, in packing order.
 
     ``named`` ids must exist (a missing one raises :class:`RetrievalError`;
     nothing is dropped silently). ``written``, in a retry, is a snapshot of the
     cards earlier jobs of the source wrote: they are ranked among themselves
-    (top ``k``) and added with ``via: written``. ``shelf_of`` is a
+    (top ``written_k``, else ``k``) and added with ``via: written``. ``shelf_of`` is a
     (domain, pillar, topic) whose shelf is added. ``exclude`` ids are left out
     of the retrieved routes (the card itself, cards shown elsewhere).
     """
@@ -99,7 +99,7 @@ def candidates(root, snapshot, query: str, *, k: int, hop_from: int = 0, named=(
     if written is not None and written.cards:
         from .search import search as rank_written
         ranked = [h['id'] for h in rank_written(written, query, len(written.cards))] if query.strip() else []
-        for rank, cid in enumerate(ranked[:k], 1):
+        for rank, cid in enumerate(ranked[:written_k if written_k is not None else k], 1):
             add(cid, rank, 'written')
     first = [cid for cid in words(root, snapshot, query, k) if cid not in exclude]
     for rank, cid in enumerate(first, 1):

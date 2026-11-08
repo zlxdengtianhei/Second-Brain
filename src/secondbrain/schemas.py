@@ -59,6 +59,8 @@ _CONFLICTS = {'type': 'array', 'items': {'type': 'object', 'required': ['with', 
 _REL = {'type': 'object', 'required': ['type', 'target'],
         'properties': {'type': _STR, 'target': _STR, 'note': _NSTR,
                        'tier': {'type': ['string', 'null'], 'enum': ['extension', None]}}}
+from .overlap import COVERAGE as _COVERAGE, LEVELS as _LEVELS  # noqa: E402
+
 CARDS = {
     'type': 'object', 'required': ['cards', 'coverage'],
     'properties': {
@@ -75,16 +77,19 @@ CARDS = {
                 'intuition': _NSTR, 'confusions': {'type': 'array', 'items': _STR},
                 'flashcards': {'type': 'array', 'items': _QA},
                 'relations': {'type': 'array', 'items': _REL},
-                'source_quotes': {'type': 'array', 'items': _STR}, 'reason': _STR, 'conflicts': _CONFLICTS}}},
+                'source_quotes': {'type': 'array', 'items': _STR}, 'reason': _STR, 'conflicts': _CONFLICTS,
+                'overlap_hint': {'type': ['object', 'null'], 'properties': {
+                    'overlap': {'type': 'string', 'enum': list(_LEVELS)},
+                    'with': {'type': 'array', 'items': _STR}}}}}},
         'new_topics': {'type': 'array', 'items': {
             'type': 'object', 'required': ['domain', 'pillar', 'name', 'boundary', 'reason'],
             'properties': {'domain': _STR, 'pillar': _STR, 'name': _STR, 'boundary': _STR, 'reason': _STR}}},
         'coverage': {'type': 'array', 'items': {
             'type': 'object', 'required': ['source_quote', 'disposition', 'reason'],
             'properties': {'source_quote': _STR,
-                           'disposition': {'type': 'string', 'enum': ['card', 'duplicate', 'out_of_scope', 'needs_taxonomy']},
+                           'disposition': {'type': 'string', 'enum': list(_COVERAGE)},
                            'cards': {'type': 'array', 'items': _STR},
-                           'duplicate_of': {'type': 'array', 'items': _STR},
+                           'with': {'type': 'array', 'items': _STR},
                            'suggested_pillar': _NSTR, 'reason': _STR}}},
     }}
 REVIEW_CARDS = {
@@ -92,10 +97,9 @@ REVIEW_CARDS = {
     'properties': {
         'cards': {'type': 'array', 'items': {
             'type': 'object', 'required': ['slug', 'decision', 'reason'],
-            'properties': {'slug': _STR, 'decision': {'type': 'string', 'enum': ['accept', 'revise', 'duplicate']},
-                           'duplicate_of': _NSTR, 'suggested_domain': _NSTR, 'reason': _STR,
-                           'overlap': {'type': ['string', 'null'], 'enum': ['distinct', 'needs_review', None]},
-                           'overlap_with': _NSTR, 'conflicts': _CONFLICTS}}},
+            'properties': {'slug': _STR, 'decision': _DECISION, 'suggested_domain': _NSTR, 'reason': _STR,
+                           'overlap': {'type': ['string', 'null'], 'enum': [*_LEVELS, None]},
+                           'with': {'type': ['array', 'null'], 'items': _STR}, 'conflicts': _CONFLICTS}}},
         'new_topics': {'type': 'array', 'items': {
             'type': 'object', 'required': ['domain', 'pillar', 'name', 'decision', 'reason'],
             'properties': {'domain': _STR, 'pillar': _STR, 'name': _STR, 'decision': _DECISION, 'reason': _STR}}},

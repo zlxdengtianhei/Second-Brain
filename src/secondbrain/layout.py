@@ -189,12 +189,15 @@ def unregister_all() -> None:
 
 
 def of(root) -> VaultLayout:
-    """Layout for ``root``: registered, else the configured vault's, else default."""
+    """Layout for ``root``: in a job step the layout the job froze; else registered, the configured vault's, default."""
+    from . import config
     key = _key(root)
+    frozen = config.active() if config.in_job() else None
+    if frozen is not None and frozen.vault is not None and _key(frozen.vault) == key:
+        return frozen.layout
     if key in _REGISTERED:
         return _REGISTERED[key]
-    from . import config
-    settings = config.current()
+    settings = config.active()
     if settings.vault is not None and _key(settings.vault) == key:
         return settings.layout
     return DEFAULT

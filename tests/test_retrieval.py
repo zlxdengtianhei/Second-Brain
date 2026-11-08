@@ -112,7 +112,7 @@ def test_past_the_budget_titles_go_last_and_the_report_says_so():
 
 # --- every packet takes existing cards through cards.view -------------------------------------------------------
 PACKET_BUILDERS = [ingest.producer_packet, ingest.review_packet, ingest._review_candidates,
-                   ingest._producer_candidates, ingest._source_check_input, ingest._near_written, ingest.retry,
+                   ingest._producer_candidates, ingest._source_check_input, ingest.retry,
                    source_check.frozen_input, retrieval.candidates, retrieval.fit]
 
 

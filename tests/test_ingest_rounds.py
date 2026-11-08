@@ -70,14 +70,14 @@ def test_a_repair_round_sees_the_passages_earlier_rounds_settled_without_a_card(
     """Drill 2: the repair reviewer did not see round 0's duplicate row and called that passage missing."""
     root = build_ingest_vault(tmp_path / 'vault')
     first = first_candidate()
-    skim = {'source_quote': 'A reader that holds a marker can jump straight to it', 'disposition': 'duplicate',
-            'duplicate_of': [EXISTING], 'reason': 'the existing card says it'}
+    skim = {'source_quote': 'A reader that holds a marker can jump straight to it', 'disposition': 'same',
+            'with': [EXISTING], 'reason': 'the existing card says it'}
     first['coverage'].append(skim)
     _, seen = run(root, [first, {'cards': [FIXED_DIMMING], 'new_topics': [], 'coverage': rows(FIXED_DIMMING)}],
                   [first_review(), accept('marker-dimming')])
-    expected = {'duplicates': [{k: skim[k] for k in ('source_quote', 'duplicate_of')},
+    expected = {'duplicates': [{k: skim[k] for k in ('source_quote', 'with')},
                                {'source_quote': CARDS['queue-order']['source_quotes'][0],
-                                'title': CARDS['queue-order']['title'], 'duplicate_of': [EXISTING],
+                                'title': CARDS['queue-order']['title'], 'with': [EXISTING],
                                 'review': 'already covered by the existing card'}],
                 'out_of_scope': [{'source_quote': 'Thanks for reading, see you next week!'}]}
     assert seen['producer'][1].packet['already_settled'] == expected
@@ -89,7 +89,7 @@ def test_a_repair_round_sees_the_passages_earlier_rounds_settled_without_a_card(
 # --- a new topic the review did not accept, replaced in the repair round ----------------------
 def topic_refused_review():
     review = first_review()
-    review['cards'][2] = {'slug': 'marker-dimming', 'decision': 'accept', 'reason': 'fine'}
+    review['cards'][2] = {'slug': 'marker-dimming', 'decision': 'accept', 'overlap': 'distinct', 'reason': 'fine'}
     review['new_topics'][0].update(decision='revise', reason='too broad; name what the cards share')
     return review
 
@@ -245,7 +245,7 @@ def test_status_counts_only_open_items_across_a_retry_chain(tmp_path):
     parent = result['job_id']
     assert len(result['pending']) == 2
     child = ingest.retry(root, parent)
-    fixed = {'cards': [{'slug': 'marker-dimming', 'decision': 'accept', 'reason': 'matches now'},
+    fixed = {'cards': [{'slug': 'marker-dimming', 'decision': 'accept', 'overlap': 'distinct', 'reason': 'matches now'},
                        {'slug': 'lit-marker-cost', 'decision': 'revise', 'reason': 'numbers still off'}],
              'new_topics': [{**{k: TOPIC_PROPOSAL[k] for k in ('domain', 'pillar', 'name')}, 'decision': 'accept',
                              'reason': 'needed'}], 'coverage': {'decision': 'accept', 'reason': 'answered'}}

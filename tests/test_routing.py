@@ -204,7 +204,7 @@ def test_the_first_ingest_into_an_empty_vault_writes_cards_and_maps(tmp_path):
                  'coverage': [{'source_quote': quote, 'disposition': 'card', 'cards': [card['slug']], 'reason': 'r'},
                               {'source_quote': 'Aside: the online judge harness', 'disposition': 'out_of_scope',
                                'reason': 'aside'}]}
-    review = {'cards': [{'slug': card['slug'], 'decision': 'accept', 'reason': 'faithful'}], 'new_topics': [],
+    review = {'cards': [{'slug': card['slug'], 'decision': 'accept', 'overlap': 'distinct', 'reason': 'faithful'}], 'new_topics': [],
               'coverage': {'decision': 'accept', 'reason': 'the rest is practice text'}}
     produce, respond, _ = scripted([candidate], [review])
     prepared = ingest.prepare(root, root / '00_Inbox' / 'notes.md')

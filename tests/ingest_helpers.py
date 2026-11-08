@@ -124,7 +124,7 @@ def first_review():
                        'overlap': 'distinct'},
                       {'slug': 'marker-dimming', 'decision': 'revise',
                        'reason': 'the text says dimmed rather than deleted; the card says deleted'},
-                      {'slug': 'queue-order', 'decision': 'duplicate', 'duplicate_of': EXISTING,
+                      {'slug': 'queue-order', 'decision': 'accept', 'overlap': 'same', 'with': [EXISTING],
                        'reason': 'already covered by the existing card'}],
             'new_topics': [{'domain': DOMAIN, 'pillar': PILLAR, 'name': NEW_TOPIC, 'decision': 'accept',
                             'reason': 'markers deserve their own topic'}],
@@ -133,6 +133,7 @@ def first_review():
 
 def repair_review(decision='accept'):
     return {'cards': [{'slug': 'marker-dimming', 'decision': decision,
+                       **({'overlap': 'distinct'} if decision == 'accept' else {}),
                        'reason': 'now matches the text' if decision == 'accept' else 'still wrong'}],
             'new_topics': [], 'coverage': {'decision': 'accept', 'reason': 'covered with earlier round'}}
 
@@ -201,18 +202,33 @@ def is_source_check_task(task):
 
 
 def keep_all(packet, **decisions):
-    """A source-check answer: ``keep`` for every card and topic unless ``decisions`` (slug -> row) says otherwise.
+    """A merge-check answer: ``distinct`` for every card and topic unless ``decisions`` (slug -> row) says otherwise.
 
-    A card with no relation is said to stand alone unless its row says something else.
+    A card with no relation is said to stand alone unless its row says something else. A row may say
+    ``{"overlap": "extends" | "same", "with": "<slug>"}`` (one slug for ``with`` is made a list).
     """
     def row(card):
-        base = {'slug': card['slug'], 'decision': 'keep', **({'alone': 'test'} if card.get('isolated') else {})}
-        given = decisions.get(card['slug'], {})
-        return {**base, **given} if 'links' not in given and given.get('decision') != 'same' else \
+        base = {'slug': card['slug'], 'overlap': 'distinct', **({'alone': 'test'} if card.get('isolated') else {})}
+        given = _level(decisions.get(card['slug'], {}))
+        return {**base, **given} if 'links' not in given and given.get('overlap', 'distinct') == 'distinct' else \
             {k: v for k, v in {**base, **given}.items() if k != 'alone'}
     return {'cards': [row(c) for c in packet['cards']],
-            'new_topics': [{'id': t['id'], 'decision': 'keep', **decisions.get(t['id'], {})}
+            'new_topics': [{'id': t['id'], 'overlap': 'distinct', **_level(decisions.get(t['id'], {}), topic=True)}
                            for t in packet['new_topics']]}
+
+
+def _level(row: dict, topic: bool = False) -> dict:
+    """A test's row in the short form: ``decision`` same (with a carry: extends) or keep, one slug in ``with``."""
+    row = dict(row)
+    decision = row.pop('decision', None)
+    if decision == 'keep':
+        row['overlap'] = 'distinct'
+    elif decision == 'same':
+        carried = any((row.get('carry') or {}).get(k) for k in ('propositions', 'flashcards', 'replace'))
+        row['overlap'] = 'extends' if carried and not topic else 'same'
+    if not topic and isinstance(row.get('with'), str):
+        row['with'] = [row['with']]
+    return row
 
 
 def with_source_check(responder, seen=None, **decisions):

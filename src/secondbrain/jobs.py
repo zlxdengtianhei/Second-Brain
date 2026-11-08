@@ -131,7 +131,45 @@ def create(root: Path, job_id: str, kind: str, packet: dict, **extra) -> dict:
 
 
 _PROTECTED = {'schema', 'job_id', 'input_sha256', 'kind', 'created_at', 'runs',
-              'candidate', 'review', 'chunks'}
+              'candidate', 'review', 'chunks', 'decisions'}
+
+#: Kind -> "module:function" turning a validated submission into decision-record entries (see
+#: secondbrain.decisions). Signature as for SUBMISSION_VALIDATORS, plus ``slot_ref``, ``run`` and
+#: ``entries`` (the record so far, appended to in place); runs under the vault lock with the new
+#: artifact bound to its slot, before the state is written.
+DECISION_RECORDERS = {
+    'ingest': 'secondbrain.pipelines.ingest:record_decisions',
+}
+
+
+def frozen_settings(root: Path, packet: dict):
+    """The settings a job step reads (``config.job_settings``), made from what the job froze, or None.
+
+    Ingest jobs freeze their review rules, vault layout, card language and
+    ingest parameters in ``input.json`` (``settings``); a job frozen before that,
+    and the other job kinds, have none, and read the configured settings.
+    """
+    frozen = (packet or {}).get('settings') if isinstance(packet, dict) else None
+    if not isinstance(frozen, dict) or not isinstance(frozen.get('review'), dict):
+        return None
+    ingest = {k: frozen[k] for k in ('chunk_chars', 'new_topics_per_source', 'id_prefix', 'after_ingest',
+                                     'candidates_k', 'candidates_chars', 'candidates_hop', 'candidates_shelf',
+                                     'review_named', 'review_words_view') if k in frozen}
+    return config.Settings(
+        vault=Path(root).absolute(),
+        layout=layouts.VaultLayout.from_mapping(frozen['layout']) if 'layout' in frozen else layouts.of(root),
+        review=config.ReviewPolicy(**frozen['review']), ingest=config.IngestConfig(**ingest),
+        card_language=frozen.get('language', 'en'), card_language_set=True,
+        card_diagrams=bool(frozen.get('diagrams', True)))
+
+
+def policy_of(packet: dict):
+    """The review rules of a job: the ones it froze, else (jobs frozen before, other kinds) the configured ones."""
+    frozen = (packet or {}).get('settings') if isinstance(packet, dict) else None
+    if isinstance(frozen, dict) and isinstance(frozen.get('review'), dict):
+        return config.ReviewPolicy(**frozen['review'])
+    return config.active_review()
+
 
 
 def update(root: Path, job_id: str, **fields) -> dict:
@@ -257,6 +295,14 @@ def abandon_run(root: Path, job_id: str, run_id: str, *, reason: str) -> dict:
                       error={'code': 'ABANDONED', 'message': reason, 'retryable': True})
 
 
+def _recorder(kind: str):
+    target = DECISION_RECORDERS.get(kind)
+    if not target:
+        return None
+    module, name = target.split(':')
+    return getattr(importlib.import_module(module), name)
+
+
 def _validator(kind: str):
     target = SUBMISSION_VALIDATORS.get(kind)
     if not target:
@@ -295,11 +341,14 @@ def submit(root: Path, job_id: str, payload: dict, *, role: str, run_id: str,
         elif run['status'] == 'started' and \
                 (slot.get('candidate') or {}).get('sha256') != run.get('base_candidate_sha256'):
             raise Conflict('STALE_CANDIDATE')
+        packet = json.loads(input_raw)
+        frozen = frozen_settings(root, packet)
         validate = _validator(state['kind'])
         if validate is not None:
             try:
-                checked = validate(json.loads(input_raw), payload, role=role, candidate=candidate,
-                                   root=root, chunk=chunk, state=state)
+                with config.job_settings(frozen):
+                    checked = validate(packet, payload, role=role, candidate=candidate,
+                                       root=root, chunk=chunk, state=state)
             except ValueError:
                 # a host sub-agent's refused answers never reach the executor's failure count; the run keeps the
                 # count, so a step that keeps failing can be given up within bounds (the ingest source check).
@@ -339,19 +388,26 @@ def submit(root: Path, job_id: str, payload: dict, *, role: str, run_id: str,
                    attestation=attestation, usage=usage)
         if role == 'reviewer' and slot['candidate'].get('run_id'):  # a program-made input has no producer
             producer = load_run(root, job_id, slot['candidate']['run_id'])
-            policy = config.review_policy()
+            rules = policy_of(packet)
             a = gates.model_family(producer.get('model_reported') or producer.get('model_requested'),
-                                   policy.model_families)
+                                   rules.model_families)
             b = gates.model_family(run.get('model_reported') or run.get('model_requested'),
-                                   policy.model_families)
+                                   rules.model_families)
             run['same_family'] = a is not None and a == b
             try:
-                gates.assess_families(producer, run, policy)
+                gates.assess_families(producer, run, rules)
             except ValueError as exc:
                 run['independence_error'] = str(exc)
             if run.get('same_family'):
                 slot['same_family'] = True
                 state['same_family'] = True
+        recorder = _recorder(state['kind'])
+        if recorder is not None:
+            entries = list(state.get('decisions') or [])
+            with config.job_settings(frozen):
+                recorder(packet, payload, role=role, candidate=candidate, root=root, chunk=chunk, state=state,
+                         run=run, entries=entries)
+            state['decisions'] = entries
         result = {'job_id': job_id, 'run_id': run_id, 'chunk': chunk, 'status': slot['status'],
                   'artifact': ref, 'written_to_knowledge': False}
         run['submit_result'] = result
@@ -418,7 +474,7 @@ def require_independent_review(root: Path, state: dict, chunk: str | None = None
     producer = load_run(root, state['job_id'], candidate_ref['run_id'])
     reviewer = load_run(root, state['job_id'], review_ref['run_id'])
     gates.check_independence(state['input_sha256'], candidate_ref, review_ref,
-                             producer, reviewer, config.review_policy())
+                             producer, reviewer, policy_of(json.loads(input_raw)))
     return json.loads(review_raw)
 
 

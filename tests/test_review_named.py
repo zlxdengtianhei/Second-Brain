@@ -44,8 +44,8 @@ def naming(card_slug='lantern-queue', target='demo_far'):
     for card in candidate['cards']:
         if card['slug'] == card_slug:
             card['relations'] = [*card['relations'], {'type': 'similar_to', 'target': target, 'note': 'named'}]
-    candidate['coverage'].append({'source_quote': 'Thanks for reading', 'disposition': 'duplicate',
-                                  'duplicate_of': [target], 'reason': 'PRODUCER-REASON-9'})
+    candidate['coverage'].append({'source_quote': 'Thanks for reading', 'disposition': 'same',
+                                  'with': [target], 'reason': 'PRODUCER-REASON-9'})
     return candidate
 
 

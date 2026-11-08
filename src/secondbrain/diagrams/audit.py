@@ -111,7 +111,7 @@ def knowledge_dir(flag: str | None = None) -> tuple[str, str]:
     else ``[layout] knowledge`` of a loaded config file, else the default."""
     if flag:
         return flag, "--knowledge-dir"
-    settings = config.current()
+    settings = config.active()
     if settings.source is not None:
         return settings.layout.knowledge, f"[layout] knowledge in {settings.source}"
     return DEFAULT_FORMAT.knowledge_dir, "default"
@@ -133,7 +133,7 @@ def card_format(vault: Path, language: str | None = None, refs: Iterable[str] | 
     root = Path(vault)
     paths = [root / r for r in refs] if refs is not None else sorted((root / knowledge_dir).rglob("*.md"))
     counts = heading_counts(paths)
-    settings = config.current()
+    settings = config.active()
     vault_language = None if language else labels.vault_language(root.absolute())
     if language:
         source = "--language"

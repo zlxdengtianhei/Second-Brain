@@ -43,8 +43,8 @@ class HostExecutor:
     def for_vault(cls, root) -> 'HostExecutor':
         """A host executor whose submit commands reach this vault, config file and state directory."""
         from .. import config
-        settings = config.current()
-        return cls(vault=str(root), config=str(settings.source) if settings.source else None,
+        live = config.runtime()  # the config file a hand-off's submit command names: how to run, not what to decide
+        return cls(vault=str(root), config=str(live.source) if live.source else None,
                    state_dir=os.environ.get('SECONDBRAIN_STATE_DIR') or None)
 
     def run(self, task: Task) -> Result:

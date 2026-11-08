@@ -235,6 +235,10 @@ def config_path() -> Path:
 
 
 def load(path: Path | None = None) -> Settings:
+    return _read(path)
+
+
+def _read(path: Path | None = None) -> Settings:
     path = Path(path) if path is not None else config_path()
     if not path.exists():
         return Settings()
@@ -245,14 +249,74 @@ def load(path: Path | None = None) -> Settings:
 
 _CURRENT: Settings | None = None
 _POLICY: ReviewPolicy | None = None
+#: The frozen settings of the job step that is running (:func:`job_settings`), else None.
+_JOB: Settings | None = None
 
 
 def current() -> Settings:
     """The active settings (loaded once from the config file)."""
     global _CURRENT
     if _CURRENT is None:
-        _CURRENT = load()
+        _CURRENT = _read()
     return _CURRENT
+
+
+@dataclass(frozen=True)
+class Runtime:
+    """What a job step may still read from the live configuration: how to run, never what to decide.
+
+    The endpoints and keys of the executors (switching a key must not stall a
+    job), the config file a host hand-off names in its submit command, git
+    commits (made after the write, outside its transaction) and where job
+    records are kept.
+    """
+    producer: EndpointConfig | None
+    reviewer: EndpointConfig | None
+    executor_default: str
+    source: Path | None
+    git_commit: bool
+    state_dir: Path | None
+
+
+def runtime() -> Runtime:
+    """The live settings a job step may read (see :class:`Runtime`); every other setting is frozen with the job."""
+    global _CURRENT
+    if _CURRENT is None:
+        _CURRENT = _read()
+    live = _CURRENT
+    return Runtime(producer=live.producer, reviewer=live.reviewer, executor_default=live.executor_default,
+                   source=live.source, git_commit=live.git_commit, state_dir=live.state_dir)
+
+
+def in_job() -> bool:
+    """True inside :func:`job_settings`: a job step is running on frozen settings."""
+    return _JOB is not None
+
+
+def active() -> Settings:
+    """The settings to read: the running job step's frozen ones (:func:`job_settings`), else the configured ones."""
+    return _JOB if _JOB is not None else current()
+
+
+class job_settings:
+    """``with config.job_settings(frozen):`` -- the steps inside read ``frozen`` through :func:`active`.
+
+    Made from a job's frozen input (``secondbrain.jobs.frozen_settings``); a job
+    step reads its vault layout, card language and review policy only there.
+    """
+
+    def __init__(self, frozen: Settings | None):
+        self.frozen, self.before = frozen, None
+
+    def __enter__(self):
+        global _JOB
+        self.before, _JOB = _JOB, (self.frozen if self.frozen is not None else _JOB)
+        return self.frozen
+
+    def __exit__(self, *exc):
+        global _JOB
+        _JOB = self.before
+        return False
 
 
 def activate(settings: Settings | None) -> Settings | None:
@@ -277,8 +341,9 @@ def state_dir() -> Path:
     explicit = os.environ.get('SECONDBRAIN_STATE_DIR')
     if explicit:
         return Path(explicit).expanduser().absolute()
-    if _CURRENT is not None and _CURRENT.state_dir is not None:
-        return _CURRENT.state_dir
+    configured = runtime().state_dir
+    if configured is not None:
+        return configured
     state_home = Path(os.environ.get('XDG_STATE_HOME') or (Path.home() / '.local/state'))
     return (state_home / 'secondbrain').absolute()
 
@@ -289,6 +354,13 @@ def validate_state_dir(root: Path, folder: Path) -> None:
     if target == protected or target.is_relative_to(protected):
         raise ValueError('The state directory must not live inside the vault; '
                          'set SECONDBRAIN_STATE_DIR to a directory outside it')
+
+
+def active_review() -> ReviewPolicy:
+    """The review rules to apply: the running job step's frozen ones, else :func:`review_policy` (with an override)."""
+    if _JOB is not None:
+        return _JOB.review
+    return _POLICY if _POLICY is not None else current().review
 
 
 def review_policy() -> ReviewPolicy:
@@ -351,7 +423,7 @@ converter = "none"           # none | markitdown
 id_prefix = "kc_"
 candidates_k = "auto"        # existing cards per query, or "auto" (each role's built-in count)
 candidates_chars = 40000     # characters of retrieved card views per packet (named cards do not count)
-candidates_hop = 0           # second route: relation neighbours of the first N hits (0: off)
+candidates_hop = 0           # second route: the cards the first N hits link (0: off)
 candidates_shelf = false     # the reviewer also sees the titles of every card in each card's topic
 review_named = true          # the reviewer sees, whole, every existing card the producer named
 review_words_view = "full"   # full | brief: how the reviewer sees the cards the search found

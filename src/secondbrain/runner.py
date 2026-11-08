@@ -13,7 +13,7 @@ from importlib import resources
 from pathlib import Path
 from typing import Callable
 
-from . import config, jobs, schemas
+from . import jobs, schemas
 from .executors.base import Executor, ExecutorFailure, INVALID_OUTPUT, Result, Task, render_task_text
 from .locks import job_lock
 from .store import Conflict, digest
@@ -36,7 +36,10 @@ class _ContinueJob(RuntimeError):
 
 
 def prompt(name: str) -> str:
-    return resources.files('secondbrain').joinpath('prompts', name).read_text(encoding='utf-8')
+    """A prompt file; the shared definition of the repeat scale is put in from :mod:`secondbrain.overlap`."""
+    from .overlap import PLACEHOLDER, definition
+    text = resources.files('secondbrain').joinpath('prompts', name).read_text(encoding='utf-8')
+    return text.replace(PLACEHOLDER, definition().rstrip('\n'))
 
 
 def withhold_reasons(value):
@@ -149,7 +152,7 @@ def _record_handoff(root: Path, job_id: str, run_id: str, handoff: dict) -> None
 
 def rounds_left(packet: dict, state: dict) -> int:
     used = int(packet.get('repair_depth', 0)) + int(state.get('repair_round', 0))
-    return config.review_policy().max_repair_rounds - used
+    return jobs.policy_of(packet).max_repair_rounds - used
 
 
 def run_job(root: Path, job_id: str, *, producer: Executor, reviewer: Executor,
@@ -192,7 +195,7 @@ def _run_locked(root: Path, job_id: str, *, producer: Executor, reviewer: Execut
     candidate = jobs.artifact(root, state, 'candidate')
     spec.check(packet, candidate)
     if not state.get('review'):
-        shown = withhold_reasons(candidate) if config.review_policy().withhold_producer_reasons else candidate
+        shown = withhold_reasons(candidate) if jobs.policy_of(packet).withhold_producer_reasons else candidate
         review_packet = {'input': {k: v for k, v in packet.items() if k != 'repair_feedback'},
                          'candidate': shown}
         call_executor(root, job_id, reviewer, role='reviewer', step='review',

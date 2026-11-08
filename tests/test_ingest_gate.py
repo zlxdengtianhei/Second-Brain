@@ -90,19 +90,32 @@ def test_two_relations_between_the_same_two_cards_are_refused(tmp_path):
 
 
 # --- J-2: an accepted card that links existing cards needs an explicit overlap decision ------------
-def test_an_accepted_card_linking_an_existing_card_needs_an_overlap_decision():
+def test_every_accepted_card_needs_its_level_against_the_existing_cards():
     candidate = first_candidate()
     review = first_review()
     del review['cards'][0]['overlap']
-    with pytest.raises(ingest.IngestError, match=r'lantern-queue: the card links existing cards \(card_exist\)'):
+    with pytest.raises(ingest.IngestError, match=r'lantern-queue: an accepted card needs overlap'):
         ingest.validate_review(candidate, review, {EXISTING})
-    review['cards'][0].update(overlap='needs_review', overlap_with=OTHER_CARD)
-    with pytest.raises(ingest.IngestError, match='overlap_with must name the existing card it repeats'):
+    review['cards'][0].update(overlap='extends', with_=None)
+    review['cards'][0].pop('with_')
+    review['cards'][0]['with'] = [OTHER_CARD]  # extends a card it does not link
+    with pytest.raises(ingest.IngestError, match='an `extends` card links the card it extends'):
         ingest.validate_review(candidate, review, {EXISTING, OTHER_CARD})
-    review['cards'][0]['overlap_with'] = EXISTING
+    review['cards'][0]['with'] = [EXISTING]
     assert ingest.validate_review(candidate, review, {EXISTING, OTHER_CARD})
-    review['cards'][3]['overlap'] = 'maybe'
-    with pytest.raises(ingest.IngestError, match='overlap must be distinct or needs_review'):
+    review['cards'][0]['with'] = [EXISTING, OTHER_CARD]
+    with pytest.raises(ingest.IngestError, match='`extends` names exactly one card'):
+        ingest.validate_review(candidate, review, {EXISTING, OTHER_CARD})
+    review['cards'][0]['with'] = ['kc_nowhere']
+    with pytest.raises(ingest.IngestError, match='may name only existing cards'):
+        ingest.validate_review(candidate, review, {EXISTING})
+    review['cards'][0].update(overlap='same', with_=None)
+    review['cards'][0].pop('with_')
+    review['cards'][0]['with'] = []
+    with pytest.raises(ingest.IngestError, match='`same` names at least one card'):
+        ingest.validate_review(candidate, review, {EXISTING})
+    review['cards'][3]['overlap'] = 'needs_review'  # an old level
+    with pytest.raises(ingest.IngestError, match='overlap must be one of distinct, extends, same'):
         ingest.validate_review(candidate, review, {EXISTING})
 
 
@@ -113,17 +126,21 @@ def run(root, review):
                           reviewer=FakeExecutor('claude-test', responder=respond))
 
 
-def test_a_card_the_reviewer_says_mostly_repeats_one_is_written_as_needs_review(tmp_path):
+def test_a_card_that_extends_an_existing_card_it_cannot_go_into_is_written_next_to_it(tmp_path):
+    # the existing card's propositions are not numbered P1, P2 ..., so nothing can be added to it
     root = build_ingest_vault(tmp_path / 'vault')
     review = first_review()
-    review['cards'][0].update(overlap='needs_review', overlap_with=EXISTING, reason='repeats the existing card')
+    review['cards'][0].update(overlap='extends', reason='adds the lit markers to the existing card')
+    review['cards'][0]['with'] = [EXISTING]
     result = run(root, review)
     assert result['status'] == 'applied'
     queue = next(p for p in result['produced'] if p['slug'] == 'lantern-queue')
-    assert result['needs_review'] == [{'id': queue['id'], 'title': 'Lantern queue', 'overlap_with': EXISTING,
-                                       'reason': 'repeats the existing card'}]
+    assert result['needs_review'] == [{'id': queue['id'], 'title': 'Lantern queue', 'with': EXISTING,
+                                       'reason': 'adds the lit markers to the existing card'}]
+    assert result['outcomes']['lantern-queue'] == 'patch'
     cards = {c.title: c for c in read_snapshot(root).cards.values()}
     assert cards['Lantern queue'].fm['status'] == 'needs-review'
+    assert cards['Lantern queue'].fm['review_reason'] == ['possible_repeat']
     assert cards['Lit marker memory cost'].fm['status'] == 'confirmed'  # judged distinct
     assert ('similar_to', EXISTING) in {(r['type'], r['target']) for r in cards['Lantern queue'].fm['relations']}
 
@@ -218,7 +235,7 @@ def test_a_link_to_a_card_judged_a_duplicate_goes_to_the_card_it_repeats(tmp_pat
     candidate['cards'][0] = {**candidate['cards'][0], 'relations': candidate['cards'][0]['relations'] + [
         {'type': 'depends_on', 'target': 'queue-order', 'note': 'order comes first'}]}
     review = first_review()
-    review['cards'][3]['duplicate_of'] = OTHER_CARD  # queue-order repeats the pebble card (for the test)
+    review['cards'][3]['with'] = [OTHER_CARD]  # queue-order is the same as the pebble card (for the test)
     produce, respond, _ = scripted([candidate, repair_candidate()], [review, repair_review()])
     job = ingest.prepare(root, root / '00_Inbox' / SOURCE_NAME)
     result = ingest.advance(root, job['job_id'], producer=FakeExecutor('gpt-test', responder=produce),
@@ -257,7 +274,8 @@ def retried(root, job_id, candidates, reviews):
 
 
 def verdict(decision, **fields):
-    return {'cards': [{'slug': 'marker-dimming', 'decision': decision, 'reason': 'r', **fields}],
+    level = {'overlap': 'distinct'} if decision == 'accept' else {}
+    return {'cards': [{'slug': 'marker-dimming', 'decision': decision, 'reason': 'r', **level, **fields}],
             'new_topics': [], 'coverage': {'decision': 'accept', 'reason': 'ok'}}
 
 
@@ -299,7 +317,7 @@ def test_a_carried_link_the_new_card_already_makes_is_reported_as_linked(tmp_pat
 def test_a_carried_link_to_a_card_judged_a_duplicate_goes_to_the_card_it_repeats(tmp_path):
     root = build_ingest_vault(tmp_path / 'vault')
     job_id, cost_id, repair = pending_link(root)
-    done = retried(root, job_id, [repair], [verdict('duplicate', duplicate_of=OTHER_CARD)])
+    done = retried(root, job_id, [repair], [verdict('accept', overlap='same', **{'with': [OTHER_CARD]})])
     assert done['status'] == 'applied' and done['produced'] == []
     assert done['restored_relations'] == [{'from': cost_id, 'type': 'similar_to', 'target_slug': 'marker-dimming',
                                            'target': OTHER_CARD, 'redirected_from': 'marker-dimming'}]
@@ -417,7 +435,7 @@ def test_the_cli_takes_a_placement_and_a_retry_keeps_it(tmp_path, capsys):
 def test_the_reviewer_is_told_about_standalone_cards_overlap_and_conflicts():
     review = (ingest.Path(ingest.__file__).parents[1] / 'prompts' / 'review_cards.md').read_text(encoding='utf-8')
     assert 'Readable without the source' in review and '本讲义' in review
-    assert '`needs_review`: the card mostly repeats one existing card' in review
+    assert '`extends`: what the card adds' in review and '<!-- overlap.definition -->' in review
     assert 'the program records it for the owner' in review and 'Do not merge or correct the existing card' in review
     produce = (ingest.Path(ingest.__file__).parents[1] / 'prompts' / 'produce_cards.md').read_text(encoding='utf-8')
     assert 'Never put such a note into the card\'s propositions' in produce and 'One relation per target' in produce
