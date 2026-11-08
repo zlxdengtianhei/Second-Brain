@@ -5,9 +5,11 @@ import unicodedata
 
 
 def plain(text) -> str:
-    """``text`` in one form (NFKC), case folded, without spaces and punctuation."""
+    """``text`` in one form (NFKC), case folded, without spaces (Unicode Z*, and tabs and line breaks) and
+    punctuation (Unicode P*). Letters, marks, digits and symbols (``<``, ``^``, ``+``, ``≤``, ``$``, ``→``) stay:
+    two texts that differ in a symbol do not say the same thing."""
     folded = unicodedata.normalize('NFKC', str(text or '')).casefold()
-    return ''.join(ch for ch in folded if ch.isalnum())
+    return ''.join(ch for ch in folded if not ch.isspace() and unicodedata.category(ch)[0] not in 'PZ')
 
 
 def same_text(a, b) -> bool:
