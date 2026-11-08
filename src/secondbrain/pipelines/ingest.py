@@ -2155,6 +2155,17 @@ def _merge_round(state: dict) -> int:
     return n
 
 
+def _merge_due(state: dict, routed: list[dict]) -> bool:
+    """Whether the merge check runs (or ran) for the cards of ``routed``.
+
+    It runs when :func:`source_check.needed` says so. Once a round has answered, it stays due while the source has
+    cards to judge, even when a dispute took the cards that made it needed out of the patch set (a card judged
+    again ``same``, ``distinct`` or given up): that round's answer is in the decision record (two cards of the source
+    merged, say), and only a later round replaces it, so the write and the record never differ.
+    """
+    return source_check.needed(routed) or (_merge_round(state) >= 0 and any(o['accepted'] for o in routed))
+
+
 def _rejudge_slot(number: int, slug: str) -> str:
     """The slot where the chunk reviewer judges ``slug`` again after round ``number - 1`` of the merge check disputed it."""
     return f'xr{number}-{slug}'
@@ -2205,7 +2216,7 @@ def _source_check_stage(root: Path, job_id: str, packet: dict, settled: list[dic
     while True:
         state = jobs.load(root, job_id)
         routed = _for_merge(root, packet, _routed(state, settled))
-        if not source_check.needed(routed):
+        if not _merge_due(state, routed):
             return []
         n = max(0, _merge_round(state))
         slot = source_check.round_slot(n)
@@ -2246,7 +2257,7 @@ def _source_check_stage(root: Path, job_id: str, packet: dict, settled: list[dic
             slot = source_check.round_slot(n + 1)
             info = {}
             routed = _for_merge(root, packet, _routed(state, settled))
-            if not source_check.needed(routed):
+            if not _merge_due(state, routed):
                 return []
         if not info.get('candidate'):
             jobs.put_program_candidate(root, job_id, slot, _source_check_input(root, packet, routed))
@@ -2582,8 +2593,8 @@ def _skip_source_check(root: Path, job_id: str, *, reason: str) -> dict:
             raise IngestError(f'{job_id} is not an ingest job')
         settled = [chunk_outcome(root, state, packet, c['chunk_id']) for c in effective_chunks(packet, state)]
         info = (state.get('chunks') or {}).get(source_check.SLOT) or {}
-        if not all(o['settled'] for o in settled) or not source_check.needed(
-                _for_merge(root, packet, _routed(state, settled))) or not info.get('candidate'):
+        if not all(o['settled'] for o in settled) or not _merge_due(
+                state, _for_merge(root, packet, _routed(state, settled))) or not info.get('candidate'):
             raise IngestError(f'{job_id} has no source check waiting; run `sb job advance`')
         if info.get('review') or info.get('skipped'):
             raise IngestError(f'The source check of {job_id} is already done')
@@ -2615,7 +2626,7 @@ def _checked(root: Path, state: dict, packet: dict, settled: list[dict],
     entries = list(state.get('decisions') or []) if entries is None else entries
     routed = _routed(state, settled)
     judged = _for_merge(root, packet, routed)
-    if not source_check.needed(judged):
+    if not _merge_due(state, judged):
         return routed, None
     slot = source_check.round_slot(max(0, _merge_round(state)))
     info = (state.get('chunks') or {}).get(slot) or {}
