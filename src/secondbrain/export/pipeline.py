@@ -28,7 +28,7 @@ from pathlib import Path
 from .. import config, jobs, schemas, vault
 from ..executors.base import ExecutorFailure
 from ..locks import job_lock
-from ..runner import AwaitingSubmission, call_executor, prompt
+from ..runner import AwaitingSubmission, fail_call, finish_call, prompt, start_call
 from ..store import digest, vault_lock, write_json
 from . import checks, render, skeleton
 
@@ -322,25 +322,49 @@ def _smooth_packet(root, job_id, state, packet) -> dict:
 
 
 def _run_steps(root, job_id, steps, producer, reviewer, workers) -> tuple[list, list]:
-    """Run ``steps``; returns ``(handoffs, failures)``."""
-    def one(step):
-        kind, chunk, text, model_packet, schema, role = step
+    """Run ``steps``; returns ``(handoffs, failures)``.
+
+    The runs are recorded and their answers submitted here, one after another; only the model calls run on the
+    worker threads (up to ``workers`` at once), so the job's state is only read and written by this thread.
+    """
+    handoffs, failures, started = [], [], []
+    for kind, chunk, text, model_packet, schema, role in steps:
         executor = producer if role == 'producer' else reviewer
         try:
-            call_executor(root, job_id, executor, role=role, step=kind, prompt_text=text,
-                          packet=model_packet, output_schema=schema, chunk=chunk, tex_backslashes=True)
-            return None, None
+            task = start_call(root, job_id, executor, role=role, step=kind, prompt_text=text, packet=model_packet,
+                              output_schema=schema, chunk=chunk, tex_backslashes=True)
         except AwaitingSubmission as waiting:
-            return waiting.handoff, None
-        except ExecutorFailure as failure:
-            return None, (chunk, kind, failure.error)
+            handoffs.append(waiting.handoff)
+            continue
+        started.append((chunk, kind, executor, task))
+
+    def model(item):
+        _, _, executor, task = item
+        try:
+            return executor.run(task), None
+        except Exception as exc:  # recorded on the run below, then raised
+            return None, exc
     host = 'host' in {producer.name, reviewer.name}
-    if host or workers <= 1 or len(steps) == 1:
-        results = [one(s) for s in steps]
+    if host or workers <= 1 or len(started) <= 1:
+        results = [model(item) for item in started]
     else:
-        with ThreadPoolExecutor(max_workers=min(workers, len(steps))) as pool:
-            results = list(pool.map(one, steps))
-    return [h for h, _ in results if h], [f for _, f in results if f]
+        with ThreadPoolExecutor(max_workers=min(workers, len(started))) as pool:
+            results = list(pool.map(model, started))
+    raised = None
+    for (chunk, kind, _, task), (result, exc) in zip(started, results):
+        if exc is not None:
+            fail_call(root, task, exc)
+            raised = raised or exc
+            continue
+        try:
+            finish_call(root, task, result)
+        except AwaitingSubmission as waiting:
+            handoffs.append(waiting.handoff)
+        except ExecutorFailure as failure:
+            failures.append((chunk, kind, failure.error))
+    if raised is not None:
+        raise raised
+    return handoffs, failures
 
 
 def advance(root: Path, job_id: str, *, producer, reviewer, checker=None, workers: int = 4,

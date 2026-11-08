@@ -98,6 +98,26 @@ def call_executor(root: Path, job_id: str, executor: Executor, *, role: str, ste
     :class:`ExecutorFailure` (code ``INVALID_OUTPUT`` for outputs the
     validators reject) after recording the failure on the run.
     """
+    task = start_call(root, job_id, executor, role=role, step=step, prompt_text=prompt_text, packet=packet,
+                      output_schema=output_schema, chunk=chunk, tex_backslashes=tex_backslashes)
+    try:
+        result = executor.run(task)
+    except Exception as exc:
+        fail_call(root, task, exc)
+        raise
+    return finish_call(root, task, result)
+
+
+def start_call(root: Path, job_id: str, executor: Executor, *, role: str, step: str,
+               prompt_text: str, packet: dict, output_schema: dict,
+               chunk: str | None = None, tex_backslashes: bool = False) -> Task:
+    """The first part of :func:`call_executor`: record the run and keep its text; returns the task to run.
+
+    :func:`start_call`, :func:`finish_call` and :func:`fail_call` read and write the job's state; only
+    ``executor.run(task)`` between them may run on another thread (several model calls at once), so the state
+    of one job is only ever read and written by one thread. Raises :class:`AwaitingSubmission` when the host
+    already holds this hand-off.
+    """
     state = jobs.load(root, job_id)
     stale = _open_run(root, state, role, chunk)
     if stale is not None:
@@ -114,30 +134,35 @@ def call_executor(root: Path, job_id: str, executor: Executor, *, role: str, ste
     from .store import _atomic_state, state_root
     packet_rel = jobs.location(job_id, 'packets', f"{role}-{chunk or 'job'}-{run['run_id']}.md")
     _atomic_state(root, packet_rel, text.encode('utf-8'))
-    task = Task(job_id=job_id, run_id=run['run_id'], role=role, step=step, prompt=prompt_text,
+    return Task(job_id=job_id, run_id=run['run_id'], role=role, step=step, prompt=prompt_text,
                 packet=packet, packet_sha256=state['input_sha256'], output_schema=output_schema,
                 chunk=chunk, packet_path=str(state_root(root) / packet_rel), tex_backslashes=tex_backslashes)
-    try:
-        result = executor.run(task)
-    except Exception as exc:
-        jobs.fail_run(root, job_id, run['run_id'],
-                      error={'code': 'EXECUTOR_EXCEPTION', 'message': str(exc), 'retryable': True})
-        raise
+
+
+def fail_call(root: Path, task: Task, exc: BaseException) -> None:
+    """Record on the run of ``task`` that its executor raised ``exc``."""
+    jobs.fail_run(root, task.job_id, task.run_id,
+                  error={'code': 'EXECUTOR_EXCEPTION', 'message': str(exc), 'retryable': True})
+
+
+def finish_call(root: Path, task: Task, result: Result) -> Result:
+    """The last part of :func:`call_executor`: record a hand-off, a failure, or submit the output."""
+    job_id = task.job_id
     if result.status == 'awaiting_submission':
-        _record_handoff(root, job_id, run['run_id'], result.handoff or {})
+        _record_handoff(root, job_id, task.run_id, result.handoff or {})
         raise AwaitingSubmission(result.handoff or {})
     if result.status != 'completed' or not isinstance(result.output, dict):
         error = result.error or {'code': INVALID_OUTPUT, 'message': 'executor returned no JSON object',
                                  'retryable': True}
-        jobs.fail_run(root, job_id, run['run_id'], error=error)
+        jobs.fail_run(root, job_id, task.run_id, error=error)
         raise ExecutorFailure(error)
     try:
-        jobs.submit(root, job_id, result.output, role=role, run_id=run['run_id'],
+        jobs.submit(root, job_id, result.output, role=task.role, run_id=task.run_id,
                     model_reported=result.model_reported, attestation=result.attestation,
                     usage=result.usage)
     except ValueError as exc:
         error = {'code': INVALID_OUTPUT, 'message': str(exc), 'retryable': True}
-        jobs.fail_run(root, job_id, run['run_id'], error=error)
+        jobs.fail_run(root, job_id, task.run_id, error=error)
         raise ExecutorFailure(error) from exc
     return result
 

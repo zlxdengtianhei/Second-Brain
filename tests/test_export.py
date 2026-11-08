@@ -254,6 +254,37 @@ def test_parallel_export_end_to_end_writes_markdown_and_html(vault_root, tmp_pat
     assert '<span class="cite">合成卡 012</span>' in html and labels.export("zh")["hint"] not in html
 
 
+def test_parallel_model_calls_overlap_and_only_the_controller_thread_touches_the_job_state(vault_root, monkeypatch):
+    """Several threads read and wrote one state.json at once ("refusing a non-regular or hard-linked file", lost
+    updates); now only the model calls run on worker threads."""
+    import contextlib
+    import threading
+    from secondbrain import store
+    controller, elsewhere = threading.current_thread(), []
+    real = store._state_parent
+
+    @contextlib.contextmanager
+    def watched(root, rel, *, create):
+        if threading.current_thread() is not controller:
+            elsewhere.append(rel)
+        with real(root, rel, create=create) as opened:
+            yield opened
+    monkeypatch.setattr(store, "_state_parent", watched)
+    together, base = threading.Barrier(2, timeout=20), writer()
+
+    def respond(task):
+        if task.step == "produce" and task.chunk in {"u01", "u02"}:
+            together.wait()  # raises unless the first two units are written at the same time
+        return base(task)
+    config.set_review_policy(ReviewPolicy(max_repair_rounds=1))
+    job = pipeline.prepare(vault_root, domain=DOMAIN, mode="parallel")
+    result = pipeline.advance(vault_root, job["job_id"], producer=FakeExecutor("gpt-writer", responder=respond),
+                              reviewer=FakeExecutor("claude-reviewer", responder=reviewer()), checker=FakeMathJax(),
+                              workers=4)
+    assert result["status"] == "complete" and not together.broken
+    assert elsewhere == []
+
+
 def test_sequential_mode_shows_the_previous_paragraph(vault_root):
     _, result, producer, _ = run(vault_root, mode="sequential")
     writes = [t for t in producer.calls if t.chunk != pipeline.SMOOTH]
