@@ -2281,17 +2281,23 @@ def _split_stage(root: Path, job_id: str, packet: dict, settled: list[dict], pro
             handed.add(item['slot'])
 
 
+#: The view each route's candidates get in the merge check's packet (it only adds links).
+MERGE_CHECK_LEVELS = {'words': 'brief'}
+
+
 def _source_check_input(root: Path, packet: dict, settled: list[dict]) -> dict:
     """The merge check's frozen input: the decision set's cards, their relation types, the existing cards each may link."""
     snapshot = read_snapshot(root)
     domains = sorted({c['domain'] for o in settled for c in o['accepted'].values()})
     k = retrieval.k_for(_frozen(packet, 'candidates_k'), 'merge_check')
-
-    def to_link(card):  # only to add links: the brief view says what each card is
-        entries = retrieval.candidates(root, snapshot, retrieval.card_query(card), k=k)
-        return [{**cardfmt.view(snapshot.cards[e['id']], 'brief'), 'rank': e['rank'], 'via': e['via']}
-                for e in entries]
-    frozen = source_check.frozen_input(settled, packet["source"], candidates=to_link,
+    found = {slug: retrieval.candidates(root, snapshot, retrieval.card_query(card), k=k)
+             for o in settled for slug, card in o['accepted'].items()}
+    # only to add links: the brief view says what each card is; one table within the packets' budget
+    table, _ = retrieval.fit(snapshot, retrieval.merge(found.values()), _frozen(packet, 'candidates_chars'),
+                             MERGE_CHECK_LEVELS)
+    rows = {slug: [{**e, 'domain': snapshot.cards[e['id']].domain} for e in retrieval.keep(entries, table)]
+            for slug, entries in found.items()}
+    frozen = source_check.frozen_input(settled, packet["source"], candidates=rows, candidate_cards=table,
                                        relation_views=_relation_views(packet['catalog'], domains),
                                        existing=lambda cid: cardfmt.view(snapshot.cards[cid], 'full'))
     if _frozen(packet, 'context_note') != 'off' and len(packet['chunks']) > 1:  # one copy of the source's outline

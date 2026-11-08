@@ -118,14 +118,15 @@ def round_slot(n: int) -> str:
 
 
 def frozen_input(settled: list[dict], source: dict, *, relation_views: dict,
-                 candidates: Callable[[dict], list[dict]] = lambda card: [],
+                 candidates: dict | None = None, candidate_cards: dict | None = None,
                  existing: Callable[[str], dict] | None = None) -> dict:
     """What the reviewer judges: every card of the decision set and every new topic, sorted by where they are filed.
 
-    ``candidates(card)`` gives the existing cards (brief view, with ``rank`` and
-    ``via``) a card may link; ``relation_views`` the relation types and their
-    meanings.
+    ``candidates`` gives, by slug, the existing cards a card may link (``{id, rank, via, domain}``), and
+    ``candidate_cards`` shows each of them once (``{id: view}``, packed within the budget by
+    :func:`secondbrain.retrieval.fit`); ``relation_views`` the relation types and their meanings.
     """
+    candidates = candidates or {}
     accepted = [(o['chunk'], s, c) for o in settled for s, c in o['accepted'].items()]
     slugs = {s for _, s, _ in accepted}
     linked_from: dict = {}
@@ -150,7 +151,7 @@ def frozen_input(settled: list[dict], source: dict, *, relation_views: dict,
                                      if isinstance(f, dict)],
                       'relations': relations, 'linked_from': sorted(linked_from.get(slug, [])),
                       'isolated': not relations and not linked_from.get(slug),
-                      'candidates': candidates(c),
+                      'candidates': list(candidates.get(slug) or []),
                       **({'amended': c['_amended']} if c.get('_amended') else {}),
                       **({'review_notes': notes_of[slug]} if notes_of.get(slug) else {})})
     cards.sort(key=lambda c: (c['domain'], c['pillar'], c['topic'], c['chunk'], c['slug']))
@@ -170,7 +171,7 @@ def frozen_input(settled: list[dict], source: dict, *, relation_views: dict,
                                   'flashcards': [{'q': f.get('q'), 'a': f.get('a')}
                                                  for f in c.get('flashcards') or [] if isinstance(f, dict)]})
     return {'source': {'filename': source.get('filename'), 'chunks': len(settled)},
-            **relation_views, 'cards': cards, 'new_topics': topics,
+            **relation_views, 'cards': cards, 'candidate_cards': dict(candidate_cards or {}), 'new_topics': topics,
             'patch_set': [patch_set[t] for t in sorted(patch_set)]}
 
 
@@ -243,7 +244,7 @@ def validate_answer(frozen: dict, payload: Any, closed: Callable[[str, str, str]
         if links and slug in merged:
             errors.append(f'cards: {slug} is "{row["overlap"]}"; put its links on {merged[slug]}')
             continue
-        existing = {e['id']: e.get('domain') for e in link_candidates(cards[slug])}
+        existing = {e['id']: e.get('domain') for e in link_candidates(cards[slug], frozen)}
         for i, link in enumerate(links):
             at = f'cards: {slug}.links[{i}]'
             target, kind = link.get('target') if isinstance(link, dict) else None, (link or {}).get('type')
@@ -342,9 +343,11 @@ def _row_items(rows: dict, slug: str, key: str) -> list:
     return list(((rows.get(slug) or {}).get('carry') or {}).get(key) or [])
 
 
-def link_candidates(card: dict) -> list:
-    """The existing cards a card of the frozen input may link (``near_existing`` in inputs frozen before ``candidates``)."""
-    return card.get('candidates', card.get('near_existing')) or []
+def link_candidates(card: dict, frozen: dict | None = None) -> list:
+    """The existing cards a card of the frozen input may link, each with its view from ``candidate_cards``
+    (inputs frozen before it carry the view in the row; before ``candidates``, the rows are ``near_existing``)."""
+    table = (frozen or {}).get('candidate_cards') or {}
+    return [{**table.get(e.get('id'), {}), **e} for e in card.get('candidates', card.get('near_existing')) or []]
 
 
 def _final_domains(frozen: dict, topics: dict) -> dict:
