@@ -1426,7 +1426,9 @@ class AnswerRole:
     producer and a reviewer may answer in the same slot). Once the count is past ``max_invalid_retries``,
     ``used_up`` says what follows: ``pending`` (what the answer was for waits for the owner, with the reason) or
     ``without`` (the job goes on without it; ``skip`` says how, and is recorded on the slot). ``retries`` is the
-    budget of one slot: ``max_invalid_retries``, except where the role asks again in a slot of its own.
+    budget of one slot: ``max_invalid_retries``, except where the role asks again in a slot of its own. ``repairs``
+    is the role's budget of content repair rounds (a slot sent back with a reason and answered again in a slot of
+    its own, ``c01.r1``; for the merge check, a round after a dispute, ``xc01.r1``), read by :func:`_rounds_left`.
     """
     name: str
     role: str
@@ -1438,22 +1440,30 @@ class AnswerRole:
     skip: str = ''
     rounds: bool = False  # a slot with repair rounds (``c01.r1``): its chunk shows the latest refusal too
     retries: Callable[[object], int] = lambda rules: rules.max_invalid_retries
+    repairs: Callable[[object], int] = lambda rules: 0
+
+
+def _repair_rounds(rules) -> int:
+    """The content repair rounds of a role whose slot is sent back with a reason: ``max_repair_rounds``."""
+    return rules.max_repair_rounds
 
 
 #: Every role that asks a model in an ingest job; a slot and a role name exactly one. An answer's schema is read
 #: from here (:func:`_answer_schema`), so a new kind of slot cannot be asked for without its count and budget.
 ANSWER_ROLES = (
-    AnswerRole('chunk producer', 'producer', lambda s: not _aux_slot(s), lambda s: schemas.CARDS, rounds=True),
+    AnswerRole('chunk producer', 'producer', lambda s: not _aux_slot(s), lambda s: schemas.CARDS, rounds=True,
+               repairs=_repair_rounds),
     AnswerRole('chunk reviewer', 'reviewer', lambda s: not _aux_slot(s), lambda s: schemas.REVIEW_CARDS,
-               count='invalid_reviews', error='last_review_error'),
+               count='invalid_reviews', error='last_review_error', repairs=_repair_rounds),
     AnswerRole('merge check', 'reviewer', lambda s: source_check.is_slot(s), lambda s: source_check.SCHEMA,
-               used_up='without', skip='the cards were written as the chunk reviews left them'),
+               used_up='without', skip='the cards were written as the chunk reviews left them',
+               repairs=_repair_rounds),
     AnswerRole('dispute re-judge', 'reviewer', lambda s: _is_rejudge(s), lambda s: REJUDGE_SCHEMA,
                count='invalid_reviews', error='last_review_error'),
     AnswerRole('split producer', 'producer', lambda s: split.is_slot(_base(s)), lambda s: split.CARD_SCHEMA,
-               rounds=True),
+               rounds=True, repairs=_repair_rounds),
     AnswerRole('split reviewer', 'reviewer', lambda s: split.is_slot(_base(s)), lambda s: split.REVIEW_SCHEMA,
-               count='invalid_reviews', error='last_review_error'),
+               count='invalid_reviews', error='last_review_error', repairs=_repair_rounds),
     AnswerRole('context note', 'producer', lambda s: notes.is_slot(s),
                lambda s: notes.CONCEPTS_SCHEMA if s == notes.CONCEPTS_SLOT else notes.SUMMARY_SCHEMA,
                used_up='without', skip="the chunk has the program's note alone"),
@@ -1469,6 +1479,12 @@ def answer_role(slot: str, role: str) -> AnswerRole:
     if len(found) != 1:
         raise IngestError(f'no {role} answers in slot {slot!r}')
     return found[0]
+
+
+def _rounds_left(slot: str, role: str, rules, used: int) -> int:
+    """The content repair rounds the slot of ``role`` has left after ``used`` (the one test,
+    :func:`secondbrain.budget.rounds_left`, of the role's own budget, ``AnswerRole.repairs``)."""
+    return budget.rounds_left(used, answer_role(slot, role).repairs(rules))
 
 
 def _refusals(info: dict, spec: AnswerRole) -> int:
@@ -1846,7 +1862,6 @@ def chunk_outcome(root: Path, state: dict, packet: dict, base: str) -> dict:
     slots = _slots(state, base)
     info0 = (state.get('chunks') or {}).get(base) or {}
     rules = jobs.policy_of(packet)
-    max_rounds = rules.max_repair_rounds
     used = len(slots) - 1  # content repair rounds begun; format retries are counted per slot (_retries_left)
     out = {'chunk': base, 'settled': False, 'next': None, 'accepted': {}, 'pending': [], 'amended': [], 'notes': [],
            'turned': [],
@@ -1940,7 +1955,7 @@ def chunk_outcome(root: Path, state: dict, packet: dict, base: str) -> dict:
     unaccepted = {k for k, t in topic_state.items() if t['decision'] != 'accept'}
     findings = bool(open_cards) or open_coverage is not None or \
         any((c['domain'], c['pillar'], c['topic']) in unaccepted for s, c in accepted.items() if s not in held)
-    if findings and used < max_rounds and merged_rounds == len(slots):
+    if findings and _rounds_left(base, 'producer', rules, used) and merged_rounds == len(slots):
         out['next'] = ('repair', _slot_name(base, len(slots)))
         return out
     pending = list(open_cards.values())
@@ -2220,7 +2235,7 @@ def _source_check_stage(root: Path, job_id: str, packet: dict, settled: list[dic
             return []
         if info.get('review'):
             disputed = _disputed(state, slot)
-            if not disputed or n >= rules.max_repair_rounds:
+            if not disputed or not _rounds_left(slot, 'reviewer', rules, n):
                 return []
             for slug in sorted(disputed):
                 rj = _rejudge_slot(n + 1, slug)
@@ -2394,7 +2409,6 @@ def split_outcome(root: Path, state: dict, packet: dict, item: dict) -> dict:
     slots = _slots(state, base)
     info0 = (state.get('chunks') or {}).get(base) or {}
     rules = jobs.policy_of(packet)
-    max_rounds = rules.max_repair_rounds
     used = len(slots) - 1
     if not slots or not slots[0][1].get('candidate'):
         if not _retries_left(info0, rules):
@@ -2417,7 +2431,8 @@ def split_outcome(root: Path, state: dict, packet: dict, item: dict) -> dict:
         if review['decision'] == 'accept':
             card = jobs.artifact(root, state, 'candidate', slot)['card']
             return {'settled': True, 'next': None, 'card': {**card, '_slot': slot}, 'pending': None}
-    if last and used < max_rounds and len(slots) == sum(1 for _, i in slots if i.get('review')):
+    if last and _rounds_left(base, 'producer', rules, used) and len(slots) == sum(1 for _, i in slots
+                                                                                 if i.get('review')):
         return {'settled': False, 'next': ('repair', _slot_name(base, len(slots))), 'card': None, 'pending': None}
     return {'settled': True, 'next': None, 'card': None,
             'pending': f'the split card was not accepted: {(last[1] if last else {}).get("reason", "")}'}

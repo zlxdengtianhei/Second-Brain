@@ -182,8 +182,10 @@ def _record_handoff(root: Path, job_id: str, run_id: str, handoff: dict) -> None
 
 
 def rounds_left(packet: dict, state: dict) -> int:
+    """The repair rounds a maintenance job has left (a repair child job counts its parent's): the one test,
+    :func:`secondbrain.budget.rounds_left`."""
     used = int(packet.get('repair_depth', 0)) + int(state.get('repair_round', 0))
-    return jobs.policy_of(packet).max_repair_rounds - used
+    return budget.rounds_left(used, jobs.policy_of(packet).max_repair_rounds)
 
 
 def _refusal_key(state: dict, role: str) -> str:

@@ -347,9 +347,11 @@ def _plan(root, job_id, state, packet, errors_for, feedback) -> list[tuple]:
 def _settled(root, job_id, chunk, slot, review, revise, found) -> bool:
     """Settle ``chunk`` after its review, as ingest does: True when it is done (``accepted``, or ``escalated``
     when the repair rounds ran out: kept, marked and listed for the owner); False when it goes back for a repair
-    round. Recorded against the review's bytes, so planning again before the repair is submitted asks the same."""
-    review_sha = slot['review']['sha256']
-    if slot.get('repair_for') == review_sha:
+    round. Recorded against the review's run, so planning again before the repair is submitted asks the same; a
+    later round's review is another run even when its words are the same, so it is settled again and its round
+    counts (keyed by the review's bytes, a reviewer that gave the same review twice was repaired without end)."""
+    review_key = slot['review'].get('run_id') or slot['review']['sha256']
+    if slot.get('repair_for') == review_key:
         return False
     rounds = int(slot.get('round', 0))
     history = list(slot.get('history') or []) + [{'round': rounds, 'revise': len(revise),
@@ -359,11 +361,11 @@ def _settled(root, job_id, chunk, slot, review, revise, found) -> bool:
     if not revise and not found:
         _set_chunk(root, job_id, chunk, status='accepted', history=history, unresolved=None)
         return True
-    if rounds >= config.review_policy().max_repair_rounds:
+    if not budget.rounds_left(rounds, config.review_policy().max_repair_rounds):
         _set_chunk(root, job_id, chunk, status='escalated', history=history,
                    unresolved={'review': revise, 'program': found})
         return True
-    _set_chunk(root, job_id, chunk, round=rounds + 1, history=history, repair_for=review_sha)
+    _set_chunk(root, job_id, chunk, round=rounds + 1, history=history, repair_for=review_key)
     return False
 
 
