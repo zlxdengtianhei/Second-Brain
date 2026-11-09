@@ -267,32 +267,52 @@ class RepairFault(RuntimeError):
     """A repair changed knowledge text: a fault of the program, never of the answer."""
 
 
-def _knowledge(card: dict, records: list) -> str:
-    """The card's knowledge text, to compare before and after the repairs, with what a repair may change there put
-    back: a card id it named by ``[[title]]``, and a link to a card whose title it wrote full width."""
-    text = json.dumps({k: card.get(k) for k in KNOWLEDGE}, ensure_ascii=False, sort_keys=True)
-    back = [(r['after'], r['before']) for r in records if r['rule'] == 'card_id'] + \
-        [('[[' + r['after'], '[[' + r['before']) for r in records if r['rule'] == 'title']
-    for after, before in back:
-        text = text.replace(json.dumps(after, ensure_ascii=False)[1:-1], json.dumps(before, ensure_ascii=False)[1:-1])
-    return text
+def _canonical(payload: dict, ctx: Context) -> Callable[[str], str]:
+    """One way to write the text a repair may change, built from the answer as given: a card id that names a card
+    becomes ``[[title]]`` (its title written full width where a title may not hold a character), and a link to a
+    card of the answer by its title as given becomes a link by that title written full width. The guard of
+    :func:`repair` writes both sides so before it compares them; nothing is ever turned back, so a card that already
+    names a card by ``[[title]]`` and also by its id compares equal once the id is repaired."""
+    titles = {c['title']: c['title'].translate(FULL_WIDTH) for c in _cards(payload) if isinstance(c.get('title'), str)}
+    names = {k: v for k, v in ctx.title_of.items() if isinstance(v, str)}
+    if ctx.prefix:
+        names.update({ctx.prefix + c['slug']: titles[c['title']] for c in _cards(payload)
+                      if _slug(c) and isinstance(c.get('title'), str)})
+    ids = re.compile(re.escape(ctx.prefix) + r'[a-z0-9][a-z0-9-]*') if ctx.prefix else None
+    renamed = {t: f for t, f in titles.items() if t != f}
+    links = re.compile(r'\[\[(' + '|'.join(re.escape(t) for t in renamed) + r')(?=[\]|#])') if renamed else None
+
+    def canon(text: str) -> str:
+        if links is not None:
+            text = links.sub(lambda m: '[[' + renamed[m.group(1)], text)
+        if ids is not None:
+            text = ids.sub(lambda m: f'[[{names[m.group(0)]}]]' if m.group(0) in names else m.group(0), text)
+        return text
+    return canon
+
+
+def _knowledge(card: dict, canon: Callable[[str], str]) -> str:
+    """The card's knowledge text (:data:`KNOWLEDGE`), every string of it written by ``canon``."""
+    view = copy.deepcopy({k: card.get(k) for k in KNOWLEDGE})
+    _each_text(view, canon)
+    return json.dumps(view, ensure_ascii=False, sort_keys=True)
 
 
 def repair(payload, ctx: Context) -> tuple:
     """``(payload, records)``: a copy of ``payload`` with the :data:`RULES` applied, and what each changed. A payload
     that is not an object is given back as it is. Raises :class:`RepairFault` when the knowledge text of a card
-    changed beyond naming a card by title."""
+    changed beyond naming a card by title: before and after are compared in one written form (:func:`_canonical`)."""
     if not isinstance(payload, dict):
         return payload, []
     out = copy.deepcopy(payload)
-    before = {id(c): (_slug(c), _knowledge(c, [])) for c in _cards(out)}
+    canon = _canonical(payload, ctx)
+    before = {id(c): (_slug(c), _knowledge(c, canon)) for c in _cards(out)}
     records = []
     for rule in RULES:
         records += rule.fn(out, ctx)
     for c in _cards(out):
         slug, was = before.get(id(c), (None, None))
-        allowed = [r for r in records if r['rule'] == 'title' or (r['rule'] == 'card_id' and r.get('card') == slug)]
-        if was is not None and _knowledge(c, allowed) != was:
+        if was is not None and _knowledge(c, canon) != was:
             raise RepairFault(f'a repair changed the knowledge text of {slug!r}; nothing was kept')
     return out, records
 
