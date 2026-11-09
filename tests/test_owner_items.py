@@ -28,6 +28,8 @@ def a_job_that_leaves_one_of_each(tmp_path):
     candidate = copy.deepcopy(first_candidate())
     cards = {c['slug']: c for c in candidate['cards']}
     cards['lantern-queue']['status'] = 'needs-review'  # the producer finds the source unclear
+    # a link to a card of the source that ends pending: plain text when written, and listed (dangling_link)
+    cards['lantern-queue']['propositions'][0] += f" (see [[{cards['marker-dimming']['title']}]])"
     cards['queue-order']['relations'] = [{'type': 'similar_to', 'target': EXISTING, 'note': 'n'}]
     candidate['coverage'].append({'source_quote': 'When the queue is compacted', 'disposition': 'needs_taxonomy',
                                   'suggested_pillar': 'Maintenance', 'reason': 'no pillar for upkeep'})
@@ -57,6 +59,8 @@ def test_every_kind_of_item_that_waits_for_the_owner_is_on_one_list(tmp_path, ca
     assert set(by) == set(OWNER_REASONS)
     assert [i['title'] for i in by['source_unclear']] == [CARDS['lantern-queue']['title']]
     assert [i['title'] for i in by['possible_repeat']] == [CARDS['queue-order']['title']]
+    assert [i['title'] for i in by['dangling_link']] == [CARDS['lantern-queue']['title']]
+    assert done['links_unlinked'] == [{'card': 'lantern-queue', 'link': CARDS['marker-dimming']['title']}]
     assert by['conflict'][0]['with'] == EXISTING
     assert {i['slug'] for i in by['pending']} == {'marker-dimming', 'lit-marker-cost'}
     taxonomy = {i['kind']: i for i in by['needs_taxonomy']}

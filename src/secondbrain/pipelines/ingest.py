@@ -3284,6 +3284,26 @@ def _apply_job(root: Path, job_id: str, settled: list[dict] | None = None) -> di
                     back.append(_inverse_edge(inv, ids[slug], r))
     title_of = {cid: c.title for cid, c in snapshot.cards.items()}
     title_of.update({ids[s]: titles[s] for s in ids})
+    # [[links]] in the text written go to the final titles: a card of this source that was written under another
+    # title, went into an existing card or was judged the same as one is named by that card's title; a link to a
+    # card that is nowhere becomes plain text, and its card is written needs-review (dangling_link)
+    relinks = _final_links(settled, fates, ids, titles, title_of, into_existing, duplicate_of, alias,
+                           (check or {}).get('merged_into') or {})
+    links_moved, links_unlinked = [], []
+    for _, slug, card in accepted:
+        moved, gone = _relink_card(card, relinks, set(title_of.values()), titles[slug])
+        links_moved += [{'card': slug, 'from': a, 'to': b} for a, b in moved]
+        links_unlinked += [{'card': slug, 'link': x} for x in gone]
+        if gone:
+            card['_unlinked'] = gone
+    for slug, fate in fates.items():
+        if fate.get('how') == 'patched':  # the propositions and review cards a patch adds to an existing card
+            fix = _relinker(relinks, set(title_of.values()), title_of.get(fate['target']))
+            fate['add'] = [fix(x) for x in fate.get('add') or []]
+            fate['add_flashcards'] = [{**f, 'q': fix(f.get('q')), 'a': fix(f.get('a'))} if isinstance(f, dict) else f
+                                      for f in fate.get('add_flashcards') or []]
+            links_moved += [{'card': slug, 'from': a, 'to': b} for a, b in fix.moved]
+            links_unlinked += [{'card': slug, 'link': x, 'into': fate['target']} for x in fix.gone]
     changes: list[Change] = []
     updated: dict = {}
     produced = []
@@ -3561,6 +3581,9 @@ def _apply_job(root: Path, job_id: str, settled: list[dict] | None = None) -> di
               'refused_topics': [t for o in settled for t in o.get('refused_topics') or []],
               'merged_into_existing': merged_into_existing,
               'replacements_not_made': replacements_not_made,
+              # [[links]] the program pointed at the title a card was written or merged under, and links to cards
+              # that were not written, left as plain text (their cards are written needs-review: dangling_link)
+              'links_moved': links_moved, 'links_unlinked': links_unlinked,
               'split': [{'slug': f['card']['slug'], 'id': ids.get(f['card']['slug']), 'from': s, 'of': ids.get(f['target'], f['target']),
                          'slot': f['slot']} for s, f in fates.items() if f['how'] == 'split'],
               'patch_set': {s: r['how'] for s, r in recorded_fates.items() if not r.get('of_source')},
@@ -3687,7 +3710,75 @@ def _review_reasons(card: dict) -> list[str]:
     """Why a card is written ``needs-review``: the source is unclear (the producer's flag, accepted by the reviewer),
     a possible repeat of an existing card that could not take it (the outcome table)."""
     return [reason for reason, why in (('source_unclear', card.get('status') == 'needs-review'),
-                                       ('possible_repeat', bool(card.get('_with')))) if why]
+                                       ('possible_repeat', bool(card.get('_with'))),
+                                       ('dangling_link', bool(card.get('_unlinked')))) if why]
+
+
+def _final_links(settled: list[dict], fates: dict, ids: dict, titles: dict, title_of: dict, into_existing: dict,
+                 duplicate_of: dict, alias: dict, merged: dict) -> dict:
+    """``{title a card of this source was proposed under: the title it is in the vault under now, or None}``: written
+    (perhaps under a title made unique), gone into an existing card, judged the same as one, rewritten as a split
+    card, merged into another card of the source; None when it was not written at all."""
+    proposed: dict = {}
+    for o in settled:
+        for s, c in [*o['accepted'].items(), *(o.get('repeats') or {}).items(), *(o.get('split_merges') or {}).items()]:
+            proposed.setdefault(s, c.get('title'))
+        for d in o.get('duplicates') or []:
+            proposed.setdefault(d.get('slug'), d.get('title'))
+        for p in o.get('pending') or []:
+            proposed.setdefault(p.get('slug'), p.get('title'))
+
+    def final(slug, depth=0):
+        if slug in ids:
+            return titles[slug]
+        if slug in alias and alias[slug] in ids:
+            return titles[alias[slug]]
+        if slug in into_existing:
+            return title_of.get(into_existing[slug])
+        if slug in duplicate_of:
+            return title_of.get(duplicate_of[slug])
+        if slug in merged and depth < 5:
+            return final(merged[slug], depth + 1)
+        return None
+    return {t: final(s) for s, t in proposed.items() if isinstance(t, str) and t}
+
+
+def _relinker(relinks: dict, known: set, own: str | None):
+    """A function that points a text's ``[[links]]`` at final titles (:func:`_final_links`); it keeps the links it
+    moved (``moved``) and those it left as plain text (``gone``)."""
+    from .source_check import _WIKILINK
+
+    def sub(m):
+        target = m.group(1).strip()
+        if target in known and target != own:
+            return m.group(0)
+        to = relinks.get(target) if target not in known else target
+        if to is not None and to != own:
+            fix.moved.append((target, to))
+            return f'[[{to}{m.group(2)}{m.group(3)}]]'
+        if to is None:
+            fix.gone.append(target)
+        return m.group(3)[1:] if m.group(3) else target  # plain text: the alias, or the title
+
+    def fix(text):
+        return _WIKILINK.sub(sub, text) if isinstance(text, str) else text
+    fix.moved, fix.gone = [], []
+    return fix
+
+
+def _relink_card(card: dict, relinks: dict, known: set, own: str) -> tuple[list, list]:
+    """Point the links in ``card``'s text at final titles, in place; returns (moved, gone)."""
+    fix = _relinker(relinks, known, own)
+    for key in ('essence', 'intuition'):
+        if key in card:
+            card[key] = fix(card[key])
+    for key in ('propositions', 'confusions'):
+        if isinstance(card.get(key), list):
+            card[key] = [fix(x) for x in card[key]]
+    if isinstance(card.get('flashcards'), list):
+        card['flashcards'] = [{**f, 'q': fix(f.get('q')), 'a': fix(f.get('a'))} if isinstance(f, dict) else f
+                              for f in card['flashcards']]
+    return fix.moved, list(dict.fromkeys(fix.gone))
 
 
 def _outcomes_of(entries: list, chunks: list[dict], routed: list[dict], check: dict | None) -> dict:

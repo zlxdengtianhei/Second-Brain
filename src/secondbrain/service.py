@@ -14,8 +14,8 @@ from .vault import card_packet, read_snapshot
 
 
 #: Why an item waits for the owner (the design's ``owner_reason``); the first two can be on a card.
-OWNER_REASONS = ('source_unclear', 'possible_repeat', 'conflict', 'pending', 'needs_taxonomy')
-CARD_REASONS = OWNER_REASONS[:2]
+OWNER_REASONS = ('source_unclear', 'possible_repeat', 'dangling_link', 'conflict', 'pending', 'needs_taxonomy')
+CARD_REASONS = OWNER_REASONS[:3]
 #: The job kinds of the maintenance commands (`sb classify`, `sb curate`, `sb relocate`, `sb domain create`).
 MAINTENANCE_KINDS = ('classification', 'curation', 'relocation', 'domcreate')
 
