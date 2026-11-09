@@ -40,7 +40,7 @@ RUN_SCHEMA = "secondbrain-run/1"
 #: plan never substitutes for the review gate of semantic jobs.
 PROJECTION_KIND = "projection"
 #: Every job kind the package creates, and whether its steps ask a model. A kind that asks one counts the answers
-#: that fail the program's checks at the one gate (:data:`REFUSAL_RECORDERS`, :func:`refuse`); a test reads this
+#: that fail the program's checks at the one gate (:data:`REFUSAL_RECORDERS`, :func:`receive`); a test reads this
 #: table, and finds each ``jobs.create`` call in the package, so a new kind cannot be left out.
 KINDS = {'ingest': True, 'export': True, 'classification': True, 'curation': True, 'relocation': True,
          'domcreate': True, 'classification-batch': False, PROJECTION_KIND: False}
@@ -160,7 +160,9 @@ DECISION_RECORDERS = {
 #: a host sub-agent), against its slot's budget (:mod:`secondbrain.budget`). Every kind that asks a model has one
 #: (a test enumerates them). Signature: ``fn(packet, *, role, root, chunk, state, run, message) -> bool``, True when
 #: the slot is now given up; runs under the vault lock with the job's frozen settings and updates ``state`` in place,
-#: which is then written. :func:`refuse` is the one way in. ``keep`` (given by the validator as ``exc.keep``) is what a
+#: which is then written. :func:`_refused_answer` is the one way in: :func:`receive` for an answer, :func:`set_aside`
+#: for one taken and then not read, :func:`abandon_run` for a run with none. ``keep`` (given by the validator as
+#: ``exc.keep``) is what a
 #: refused answer leaves for the next ask (the cards that passed); a recorder that keeps nothing ignores it.
 REFUSAL_RECORDERS = {
     'ingest': 'secondbrain.pipelines.ingest:record_refusal',
@@ -327,7 +329,7 @@ def fail_run(root: Path, job_id: str, run_id: str, *, error: dict) -> dict:
 def abandon_run(root: Path, job_id: str, run_id: str, *, reason: str) -> dict:
     """Give up a run that never submitted (e.g. a host sub-agent that vanished).
 
-    A run given up without an answer counts against its slot's budget like a refused answer (:func:`refuse`), for
+    A run given up without an answer counts against its slot's budget like a refused answer (:func:`receive`), for
     every role: a sub-agent that never answers is not asked for ever."""
     if not isinstance(reason, str) or not reason.strip():
         raise ValueError('abandon needs a concrete reason')
@@ -359,23 +361,6 @@ def _record_fault(state: dict, run: dict, fault: dict) -> str:
         'reading this answer after it was taken'
     return (f'the program failed while {when} ({fault["type"]}: {fault["message"]}); this is an error '
             'of the program, not of the answer, and it is listed for the owner; the answer is counted as refused')
-
-
-def refuse(root: Path, job_id: str, run_id: str, *, role: str, message: str, fault: dict | None = None) -> bool:
-    """Count an answer of ``run_id`` that never reached the validator: a file that is not JSON (``sb job submit``),
-    or an executor's answer that is no JSON object, or one the program failed to read (``fault``, kept for the
-    owner). The same count as a refusal by the validator (:func:`submit`); True when the slot is now given up (a
-    host run is then closed)."""
-    with vault_lock(root):
-        state = load(root, job_id)
-        run = load_run(root, job_id, run_id)
-        if run['role'] != role:
-            raise Conflict('RUN_ROLE_MISMATCH')
-        if run['status'] not in {'started', 'submitted'}:
-            raise Conflict(f'TERMINAL_RUN: {run["status"]}')
-        if fault is not None:
-            message = _record_fault(state, run, fault) + f' ({message})'
-        return _refused_answer(root, job_id, state, run, message)
 
 
 def _refused_answer(root: Path, job_id: str, state: dict, run: dict, message: str, keep=None) -> bool:
@@ -443,6 +428,9 @@ MAX_ANSWER_BYTES = 8_000_000
 #: among them: a focused review writes it.)
 PROGRAM_WRITTEN = ('program_repairs', 'held_cards', 'held', 'held_carries', 'turned', 'amend_refused')
 PROGRAM_WRITTEN_IN_ROWS = PROGRAM_WRITTEN
+#: At the top of an answer also ``blocking``: the program names there the kind of note it turned a split card's
+#: accept into a revise for; no model schema has it at the top (a focused review writes it in a row of ``cards``).
+PROGRAM_WRITTEN_AT_TOP = PROGRAM_WRITTEN + ('blocking',)
 
 #: The steps of :func:`receive`, in order. An error in ``read``, ``size`` or ``check`` is the answer's when it is an
 #: :class:`~secondbrain.schemas.AnswerError`, which a check raises on purpose to refuse an answer; any other error,
@@ -481,9 +469,10 @@ class _NotAVerdict(Exception):
 
 
 def _without_program_fields(payload: dict) -> tuple[dict, list[str]]:
-    """``(payload, removed)``: ``payload`` without the fields only the program writes (:data:`PROGRAM_WRITTEN`)."""
-    removed = [k for k in PROGRAM_WRITTEN if k in payload]
-    out = {k: v for k, v in payload.items() if k not in PROGRAM_WRITTEN}
+    """``(payload, removed)``: ``payload`` without the fields only the program writes (:data:`PROGRAM_WRITTEN_AT_TOP`
+    at its top, :data:`PROGRAM_WRITTEN_IN_ROWS` in each row of ``cards`` and ``items``)."""
+    removed = [k for k in PROGRAM_WRITTEN_AT_TOP if k in payload]
+    out = {k: v for k, v in payload.items() if k not in PROGRAM_WRITTEN_AT_TOP}
     for key in ('cards', 'items'):
         rows = out.get(key)
         if not isinstance(rows, list):

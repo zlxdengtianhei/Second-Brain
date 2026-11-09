@@ -25,13 +25,16 @@ def secondbrain_state_tmp(monkeypatch, tmp_path):
 
 @pytest.fixture(autouse=True)
 def program_fields_listed(monkeypatch):
-    """Every field a registered check adds to an answer it keeps is a model schema's or in ``jobs.PROGRAM_WRITTEN``
-    (:mod:`tests.field_audit`): a new field the program writes into an answer fails each test that makes it write
-    it, until the field is listed (and so taken out of every model's answer)."""
+    """Every field a registered check adds to an answer it keeps sits where the answer's own schema has a field, or
+    is in ``jobs.PROGRAM_WRITTEN`` at a place the entry point takes such fields out (:mod:`tests.field_audit`, by
+    path): a new field the program writes into an answer fails each test that makes it write it, until the field
+    is listed (and so taken out of every model's answer)."""
     from secondbrain import jobs
     from tests.field_audit import unlisted
     found: list = []
     real = jobs._validator
+    listed = {'': jobs.PROGRAM_WRITTEN_AT_TOP, '.cards[]': jobs.PROGRAM_WRITTEN_IN_ROWS,
+              '.items[]': jobs.PROGRAM_WRITTEN_IN_ROWS}
 
     def validator(kind):
         check = real(kind)
@@ -40,13 +43,13 @@ def program_fields_listed(monkeypatch):
 
         def audited(packet, payload, **kw):
             kept = check(packet, payload, **kw)
-            found.extend(unlisted(payload, kept, jobs.PROGRAM_WRITTEN))
+            found.extend(unlisted(payload, kept, listed, kind, kw.get('role'), kw.get('chunk')))
             return kept
         return audited
     monkeypatch.setattr(jobs, '_validator', validator)
     yield
-    assert not found, f'fields a check wrote into an answer that no model schema names and jobs.PROGRAM_WRITTEN ' \
-                      f'does not list: {sorted(set(found))}'
+    assert not found, f'fields a check wrote into an answer that its schema does not describe and jobs.PROGRAM_WRITTEN ' \
+                      f'does not list there: {sorted(set(found))}'
 
 
 @pytest.fixture

@@ -1595,7 +1595,7 @@ def record_refusal(packet: dict, *, role: str, root, chunk, state: dict, run: di
 
 def _failed_answer(root: Path, job_id: str, slot: str, role: str, failure: ExecutorFailure) -> None:
     """An executor failure of a model call: an answer that failed the program's checks was counted at the gate
-    (:func:`secondbrain.jobs.refuse`, by :func:`record_refusal`), and the planning reads the count; any other
+    (:func:`secondbrain.jobs.receive`, by :func:`record_refusal`), and the planning reads the count; any other
     failure is raised again."""
     if failure.code != INVALID_OUTPUT:
         raise failure
@@ -2781,7 +2781,7 @@ def _skip_source_check(root: Path, job_id: str, *, reason: str) -> dict:
     """Give up the source check of ``job_id`` after it kept failing; the cards are written as the chunk reviews left them.
 
     Answers that fail validation, and runs given up without an answer, are counted at the gate in both modes
-    (:func:`secondbrain.jobs.refuse`); once they are more than ``max_invalid_retries`` the check is skipped by
+    (:func:`secondbrain.jobs.receive`); once they are more than ``max_invalid_retries`` the check is skipped by
     itself, and this command finds it done. Before that it refuses: hand the check to a new sub-agent.
     """
     if not isinstance(reason, str) or not reason.strip():

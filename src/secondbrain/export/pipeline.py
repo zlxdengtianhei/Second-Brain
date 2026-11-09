@@ -393,7 +393,7 @@ STEPS = ('produce', 'review', 'repair')
 
 
 def record_refusal(packet, *, role, root, chunk, state, run, message, keep=None) -> bool:
-    """The gate's hook (:func:`secondbrain.jobs.refuse`): an answer of step ``produce``, ``review`` or ``repair`` of
+    """The gate's hook (:func:`secondbrain.jobs.receive`): an answer of step ``produce``, ``review`` or ``repair`` of
     a unit that failed the program's checks, from an API run or a host sub-agent alike, counted in the job state by
     step and repair round (:func:`secondbrain.budget.count`; an export run again goes on counting); True when the
     step is now given up. :func:`_given_up` reads the count."""

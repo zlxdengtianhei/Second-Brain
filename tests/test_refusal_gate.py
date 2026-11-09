@@ -4,7 +4,7 @@ The fifth verdict found the format budget still had gaps outside the ingest tabl
 not a JSON object, or a file that is not JSON, was refused without being counted (probe p2), so a sub-agent could
 submit for ever; export counted with a second copy of the code; a host run given up without an answer counted only
 for the merge check; and the maintenance kinds (classification, curation, relocation, domcreate) had no budget for
-their reviewer at all. Now every refused answer goes through ``jobs.refuse`` (the validator's refusal, a payload that is
+their reviewer at all. Now every refused answer goes through one count (``jobs.receive``; the validator's refusal, a payload that is
 not an object, a file that is not JSON, an executor's answer that is no JSON object, a run given up without an
 answer), each kind counts it with ``budget.count`` against ``max_invalid_retries``, and a host run whose slot is given
 up is closed.
@@ -105,7 +105,7 @@ def test_each_way_an_answer_is_refused_is_counted_once_and_a_host_run_is_closed_
                               model_requested='m', chunk=slot)
     start('r1')
     ways = [lambda: jobs.submit(root, job_id, ['not', 'an', 'object'], role=role, run_id='r1'),
-            lambda: jobs.refuse(root, job_id, 'r1', role=role, message='the answer file is not JSON')]
+            lambda: jobs.receive(root, job_id, 'r1', role=role, raw=b'the answer file is not JSON')]
     for n in range(limit):
         try:
             ways[n % 2]()

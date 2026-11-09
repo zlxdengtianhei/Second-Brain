@@ -215,7 +215,7 @@ def _refusal_key(state: dict, role: str) -> str:
 
 
 def record_refusal(packet, *, role, root, chunk, state, run, message, keep=None) -> bool:
-    """The gate's hook (:func:`secondbrain.jobs.refuse`) for the maintenance kinds: an answer of ``role`` that failed
+    """The gate's hook (:func:`secondbrain.jobs.receive`) for the maintenance kinds: an answer of ``role`` that failed
     the program's checks, from an API run or a host sub-agent alike, counted in the job state
     (:func:`secondbrain.budget.count`); True when the role's budget for this round is now spent."""
     row = state.setdefault('refused', {}).setdefault(_refusal_key(state, role), {'count': 0})

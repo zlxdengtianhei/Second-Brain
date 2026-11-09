@@ -168,3 +168,45 @@ def test_a_review_set_aside_takes_its_decisions_with_it_and_the_review_asked_aga
     [void] = [e for e in entries if e['kind'] == 'void']
     assert void['run'] == broke[0] and void['entries'] == jobs.load_run(root, job_id, broke[0])['recorded']
     assert jobs.load_run(root, job_id, broke[0])['set_aside'] == 'outcome'
+
+
+def test_a_split_card_its_review_packet_cannot_read_is_set_aside_and_asked_again(tmp_path):
+    """The mark on the split card's review packet names that card: it is set aside and counted, and the card is
+    asked for again (without the mark, the split stage would park the whole job)."""
+    from types import SimpleNamespace
+
+    from secondbrain.pipelines import split
+    from tests.ingest_helpers import SOURCE_NAME, build_ingest_vault, with_diagrams
+    from tests.test_ingest import settings
+    from tests.test_invariants import SOURCE, two_chunk_producer
+    from tests.test_patch_set import SPLIT_CARD, reviewer, run, sb_existing
+    from tests.test_split_repair import BOLD, PLAIN
+    root = build_ingest_vault(tmp_path / 'vault')
+    settings(chunk_chars=1000)
+    (root / '00_Inbox' / SOURCE_NAME).write_text(SOURCE.replace(PLAIN, BOLD), encoding='utf-8')
+    job_id = ingest.prepare(root, root / '00_Inbox' / SOURCE_NAME)['job_id']
+    sb_existing(root, 11)
+    produced = []
+
+    def produce(task):
+        if split.is_slot(task.chunk.split('.')[0]):
+            produced.append(task.chunk)
+            return {'card': copy.deepcopy(SPLIT_CARD)}
+        plain = {**task.packet, 'chunk': {**task.packet['chunk'], 'text': task.packet['chunk']['text'].replace(
+            BOLD, PLAIN)}}
+        return two_chunk_producer(SimpleNamespace(packet=plain))
+    real, broke = ingest._program_view, []
+
+    def program_view(root_, state, slot, candidate):
+        if split.is_slot(slot.split('.')[0]) and not broke:
+            broke.append(slot)
+            raise KeyError('a value the review packet did not expect')
+        return real(root_, state, slot, candidate)
+    with pytest.MonkeyPatch.context() as m:
+        m.setattr(ingest, '_program_view', program_view)
+        run(root, job_id, reviewer(), with_diagrams(produce))
+    [row] = [r for r in jobs.load(root, job_id).get('program_errors') or [] if r.get('type') == 'KeyError']
+    assert (row['slot'], row['role'], row['stage']) == (broke[0], 'producer', 'review_packet')
+    assert jobs.load_run(root, job_id, row['run_id'])['set_aside'] == 'review_packet'
+    assert produced.count(broke[0]) == 2  # asked for again
+    assert not jobs.load(root, job_id).get('parked')

@@ -3,9 +3,11 @@
 Every job kind that asks a model (ingest, export, classification, curation, relocation, domcreate) counts an answer
 that failed the program's checks in the job state, by slot and role or step, with :func:`count`, and every one asks
 :func:`used_up` whether that budget (``max_invalid_retries``) is spent. The count reaches this module through one
-gate, :func:`secondbrain.jobs.refuse`: an answer the validator refused, a submission that is not a JSON object, a
-file that is not JSON, an executor's answer that is no JSON object, and a host run given up without an answer all
-go there, in API and host mode alike. :func:`rounds_left` is the one test of the repair rounds a slot has left.
+gate, ``secondbrain.jobs._refused_answer``: an answer refused at the one entry point (:func:`secondbrain.jobs.receive`:
+the validator's refusal, a submission that is not a JSON object, a file that is not JSON, an executor's answer that
+is no JSON object, an error of the program while it checks one), an answer set aside after it was taken
+(:func:`secondbrain.jobs.set_aside`), and a host run given up without an answer all go there, in API and host mode
+alike. :func:`rounds_left` is the one test of the repair rounds a slot has left.
 """
 from __future__ import annotations
 

@@ -128,8 +128,15 @@ def calls(tree, owner, names):
             and n.func.attr in names and isinstance(n.func.value, ast.Name) and n.func.value.id == owner]
 
 
+def imported_from_jobs(tree, names):
+    """Names of ``names`` imported from the ``jobs`` module (``from .jobs import submit``, ``from ..jobs import x as
+    y``, ``from secondbrain.jobs import ...``)."""
+    return [a.name for n in ast.walk(tree) if isinstance(n, ast.ImportFrom)
+            and (n.module or '').split('.')[-1] == 'jobs' for a in n.names if a.name in names]
+
+
 def test_the_package_takes_answers_only_through_the_entry_point():
-    """Outside ``jobs``, nothing in the package calls ``jobs.submit`` or ``jobs.refuse``; the CLI, the MCP tool and
+    """Outside ``jobs``, nothing in the package calls ``jobs.submit`` or ``jobs._refused_answer``, under any name; the CLI, the MCP tool and
     the service go through ``Service.submit``, which calls ``jobs.receive``, and the runner calls ``jobs.receive``.
     Inside ``jobs``, only ``receive`` runs a kind's check or its recorder, so there is no second way in."""
     callers = {}
@@ -139,6 +146,9 @@ def test_the_package_takes_answers_only_through_the_entry_point():
         assert not calls(tree, 'jobs', {'submit', 'refuse', '_refused_answer'}), rel
         if calls(tree, 'jobs', {'receive'}):
             callers[rel] = len(calls(tree, 'jobs', {'receive'}))
+        if rel != 'jobs.py':  # nor takes these names out of ``jobs`` to call them under another name
+            assert not imported_from_jobs(tree, {'submit', 'refuse', '_refused_answer', 'receive', 'set_aside',
+                                                 '_validator', '_recorder', '_read'}), rel
     assert callers == {'runner.py': 1, 'service.py': 1}
     tree = ast.parse((PACKAGE / 'jobs.py').read_text(encoding='utf-8'))
     for fn in tree.body:
