@@ -23,6 +23,32 @@ def secondbrain_state_tmp(monkeypatch, tmp_path):
     layout.unregister_all()
 
 
+@pytest.fixture(autouse=True)
+def program_fields_listed(monkeypatch):
+    """Every field a registered check adds to an answer it keeps is a model schema's or in ``jobs.PROGRAM_WRITTEN``
+    (:mod:`tests.field_audit`): a new field the program writes into an answer fails each test that makes it write
+    it, until the field is listed (and so taken out of every model's answer)."""
+    from secondbrain import jobs
+    from tests.field_audit import unlisted
+    found: list = []
+    real = jobs._validator
+
+    def validator(kind):
+        check = real(kind)
+        if check is None:
+            return None
+
+        def audited(packet, payload, **kw):
+            kept = check(packet, payload, **kw)
+            found.extend(unlisted(payload, kept, jobs.PROGRAM_WRITTEN))
+            return kept
+        return audited
+    monkeypatch.setattr(jobs, '_validator', validator)
+    yield
+    assert not found, f'fields a check wrote into an answer that no model schema names and jobs.PROGRAM_WRITTEN ' \
+                      f'does not list: {sorted(set(found))}'
+
+
 @pytest.fixture
 def old_review_rules(monkeypatch, tmp_path):
     """A config file with the review rules the scripted flows of these tests were written for: one repair round

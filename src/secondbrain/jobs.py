@@ -434,11 +434,13 @@ def _validator(kind: str):
 MAX_ANSWER_BYTES = 8_000_000
 
 #: Fields of an answer that only the program writes into what it keeps (its repairs, the cards it held back, what
-#: the merge check's last answer held, a verdict turned into a revise): a model that copies them from a packet into
-#: its answer would otherwise put the program's words into the record. They are taken out of every answer before it
-#: is checked (:func:`_without_program_fields`), at the top and in each row of ``cards`` and ``items``. (``blocking``
-#: is not among them: a focused review writes it.)
-PROGRAM_WRITTEN = ('program_repairs', 'held_cards', 'held', 'held_carries', 'turned')
+#: the merge check's last answer held, a verdict turned into a revise, a reviewer's fix it refused): a model that
+#: copies them from a packet into its answer would otherwise put the program's words into the record. They are taken
+#: out of every answer before it is checked (:func:`_without_program_fields`), at the top and in each row of
+#: ``cards`` and ``items``. No model schema names one; every other field a check adds to an answer is a field of a
+#: model schema (a default it fills in), which the tests hold for every answer they check. (``blocking`` is not
+#: among them: a focused review writes it.)
+PROGRAM_WRITTEN = ('program_repairs', 'held_cards', 'held', 'held_carries', 'turned', 'amend_refused')
 PROGRAM_WRITTEN_IN_ROWS = PROGRAM_WRITTEN
 
 #: The steps of :func:`receive`, in order. An error in ``read``, ``size`` or ``check`` is the answer's when it is an
