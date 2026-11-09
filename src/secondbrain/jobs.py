@@ -37,6 +37,11 @@ RUN_SCHEMA = "secondbrain-run/1"
 #: computed locally from frozen inputs; no model run exists, and their frozen
 #: plan never substitutes for the review gate of semantic jobs.
 PROJECTION_KIND = "projection"
+#: Every job kind the package creates, and whether its steps ask a model. A kind that asks one counts the answers
+#: that fail the program's checks at the one gate (:data:`REFUSAL_RECORDERS`, :func:`refuse`); a test reads this
+#: table, and finds each ``jobs.create`` call in the package, so a new kind cannot be left out.
+KINDS = {'ingest': True, 'export': True, 'classification': True, 'curation': True, 'relocation': True,
+         'domcreate': True, 'classification-batch': False, PROJECTION_KIND: False}
 
 #: Kind -> "module:function" validating a submission before it is persisted.
 #: Signature: ``fn(packet, payload, *, role, candidate, root, chunk, state) -> payload``;
@@ -143,13 +148,18 @@ DECISION_RECORDERS = {
     'ingest': 'secondbrain.pipelines.ingest:record_decisions',
 }
 
-#: Kind -> "module:function" counting a submission the validator refused, from any executor (an API run or a host
-#: sub-agent), where the kind counts the answers of a slot that failed its checks. Signature: ``fn(packet, *, role,
-#: root, chunk, state, run, message) -> bool``, True when the slot is now given up; runs under the vault lock with
-#: the job's frozen settings and updates ``state`` in place, which is then written.
+#: Kind -> "module:function" counting an answer that failed the program's checks, from any executor (an API run or
+#: a host sub-agent), against its slot's budget (:mod:`secondbrain.budget`). Every kind that asks a model has one
+#: (a test enumerates them). Signature: ``fn(packet, *, role, root, chunk, state, run, message) -> bool``, True when
+#: the slot is now given up; runs under the vault lock with the job's frozen settings and updates ``state`` in place,
+#: which is then written. :func:`refuse` is the one way in.
 REFUSAL_RECORDERS = {
     'ingest': 'secondbrain.pipelines.ingest:record_refusal',
     'export': 'secondbrain.export.pipeline:record_refusal',
+    'classification': 'secondbrain.runner:record_refusal',
+    'curation': 'secondbrain.runner:record_refusal',
+    'relocation': 'secondbrain.runner:record_refusal',
+    'domcreate': 'secondbrain.runner:record_refusal',
 }
 
 
@@ -306,11 +316,65 @@ def fail_run(root: Path, job_id: str, run_id: str, *, error: dict) -> dict:
 
 
 def abandon_run(root: Path, job_id: str, run_id: str, *, reason: str) -> dict:
-    """Give up a run that never submitted (e.g. a host sub-agent that vanished)."""
+    """Give up a run that never submitted (e.g. a host sub-agent that vanished).
+
+    A run given up without an answer counts against its slot's budget like a refused answer (:func:`refuse`), for
+    every role: a sub-agent that never answers is not asked for ever."""
     if not isinstance(reason, str) or not reason.strip():
         raise ValueError('abandon needs a concrete reason')
-    return _close_run(root, job_id, run_id, 'abandoned',
-                      error={'code': 'ABANDONED', 'message': reason, 'retryable': True})
+    with vault_lock(root):
+        run = load_run(root, job_id, run_id)
+        if run['status'] != 'started':
+            raise Conflict(f'run already ended ({run["status"]}); cannot change it to abandoned')
+        run.update(error={'code': 'ABANDONED', 'message': reason, 'retryable': True}, status='abandoned',
+                   ended_at=now())
+        write_json(root, run_location(job_id, run_id), run)
+        state = load(root, job_id)
+        _count_refused(root, job_id, state, run, f'the run was given up without an answer: {reason}')
+        return run
+
+
+def refuse(root: Path, job_id: str, run_id: str, *, role: str, message: str) -> bool:
+    """Count an answer of ``run_id`` that never reached the validator: a file that is not JSON (``sb job submit``),
+    or an executor's answer that is no JSON object. The same count as a refusal by the validator
+    (:func:`submit`); True when the slot is now given up (a host run is then closed)."""
+    with vault_lock(root):
+        state = load(root, job_id)
+        run = load_run(root, job_id, run_id)
+        if run['role'] != role:
+            raise Conflict('RUN_ROLE_MISMATCH')
+        if run['status'] not in {'started', 'submitted'}:
+            raise Conflict(f'TERMINAL_RUN: {run["status"]}')
+        return _refused_answer(root, job_id, state, run, message)
+
+
+def _refused_answer(root: Path, job_id: str, state: dict, run: dict, message: str) -> bool:
+    """The gate's one count of a refused answer (under the vault lock): the run keeps the reason, the kind's
+    recorder counts it against the slot's budget, and a host run whose slot is now given up is closed, so the
+    sub-agent cannot submit again. Writes the state and the run; True when the slot is given up."""
+    run['rejected_submits'] = int(run.get('rejected_submits', 0)) + 1
+    run['rejected'] = list(run.get('rejected') or []) + [str(message)[:4000]]
+    given_up = _count_refused(root, job_id, state, run, message)
+    if given_up and run['executor'] == 'host' and run['status'] == 'started':
+        run.update(status='failed', ended_at=now(), error={
+            'code': 'INVALID_OUTPUT', 'message': str(message)[:4000], 'retryable': False, 'given_up': True})
+    write_json(root, run_location(job_id, run['run_id']), run)
+    return given_up
+
+
+def _count_refused(root: Path, job_id: str, state: dict, run: dict, message: str) -> bool:
+    """Count one answer of ``run`` that failed the checks, by its job kind's recorder (:data:`REFUSAL_RECORDERS`),
+    with the job's frozen settings; writes the state. A kind without one asks no model."""
+    count = _refusal_recorder(state['kind'])
+    if count is None:
+        return False
+    packet = read_input(root, job_id)
+    with config.job_settings(frozen_settings(root, packet)):
+        given_up = count(packet, role=run['role'], root=root, chunk=run.get('chunk'), state=state, run=run,
+                         message=str(message))
+    state['updated_at'] = now()
+    write_json(root, location(job_id), state)
+    return bool(given_up)
 
 
 def _recorder(kind: str):
@@ -340,9 +404,10 @@ def _validator(kind: str):
 def submit(root: Path, job_id: str, payload: dict, *, role: str, run_id: str,
            model_reported: str | None = None, attestation: str = 'self_reported',
            usage: dict | None = None) -> dict:
-    """Validate and persist one run's output; never writes knowledge."""
-    if not isinstance(payload, dict):
-        raise ValueError('a submission must be a JSON object')
+    """Validate and persist one run's output; never writes knowledge.
+
+    A submission refused here (not a JSON object, or refused by the kind's validator) is counted against its slot's
+    budget (:func:`_refused_answer`), the same count for a host sub-agent and an API run."""
     if attestation not in {'provider_response', 'self_reported', 'test'}:
         raise ValueError(f'unknown attestation: {attestation}')
     with vault_lock(root):
@@ -355,6 +420,12 @@ def submit(root: Path, job_id: str, payload: dict, *, role: str, run_id: str,
             raise Conflict('RUN_ROLE_MISMATCH')
         if run['status'] not in {'started', 'submitted'}:
             raise Conflict(f'TERMINAL_RUN: {run["status"]}')
+        if not isinstance(payload, dict):  # counted like any refused answer
+            message = f'a submission must be a JSON object, not {type(payload).__name__}'
+            _refused_answer(root, job_id, state, run, message)
+            refused = ValueError(message)
+            refused.counted = True
+            raise refused
         chunk = run.get('chunk')
         slot = _slot(state, chunk, create=True)
         if run['status'] == 'started' and _job_write_blocked(root, job_id, state):
@@ -377,23 +448,9 @@ def submit(root: Path, job_id: str, payload: dict, *, role: str, run_id: str,
                                        root=root, chunk=chunk, state=state)
             except ValueError as exc:
                 # the run keeps each reason, for the job result; the kind counts the refusal against its slot's
-                # budget, the same count for a host sub-agent and an API run (``exc.counted`` tells the caller it
-                # is counted). A host run whose slot is given up is closed: the sub-agent cannot submit again.
-                run['rejected_submits'] = int(run.get('rejected_submits', 0)) + 1
-                run['rejected'] = list(run.get('rejected') or []) + [str(exc)[:4000]]
-                count = _refusal_recorder(state['kind'])
-                if count is not None:
-                    with config.job_settings(frozen):
-                        given_up = count(packet, role=role, root=root, chunk=chunk, state=state, run=run,
-                                         message=str(exc))
-                    exc.counted = True
-                    if given_up and run['executor'] == 'host' and run['status'] == 'started':
-                        run.update(status='failed', ended_at=now(), error={
-                            'code': 'INVALID_OUTPUT', 'message': str(exc)[:4000], 'retryable': False,
-                            'given_up': True})
-                    state['updated_at'] = now()
-                    write_json(root, location(job_id), state)
-                write_json(root, run_location(job_id, run_id), run)
+                # budget (``exc.counted`` tells the caller it is counted)
+                _refused_answer(root, job_id, state, run, str(exc))
+                exc.counted = True
                 raise
             payload = checked if isinstance(checked, dict) else payload
         raw = encoded(payload)

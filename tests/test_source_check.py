@@ -280,7 +280,8 @@ def test_host_mode_gives_up_a_check_that_keeps_failing_only_after_its_retries(tm
 
 
 def test_host_mode_skips_a_check_whose_runs_were_given_up(tmp_path, capsys):
-    """A sub-agent that never answers: its runs are abandoned, and after three of them the check can be skipped."""
+    """A sub-agent that never answers: its runs are abandoned, each counted as a refused answer; after three of them
+    the check is given up by its budget, as after three refused answers, and there is nothing left to skip by hand."""
     root, job_id, check, submit, advance = host_until_check(tmp_path)
 
     def skip():
@@ -292,12 +293,15 @@ def test_host_mode_skips_a_check_whose_runs_were_given_up(tmp_path, capsys):
         if _ < 2:
             assert skip() != 0 and 'after 3 rejected answers or given-up runs' in capsys.readouterr().err
             [check] = advance()['handoffs']  # handed out again
-    assert skip() == 0
+    assert skip() != 0 and 'already done' in capsys.readouterr().err
     [diagram] = advance()['handoffs']
     assert diagram['step'] == 'diagram'
     assert submit(diagram, diagram_answer(packet_in(open(diagram['packet_path'], encoding='utf-8').read()))) == 0
     done = advance()
-    assert done['source_check']['status'] == 'skipped' and 'no answer' in done['source_check']['reason']
+    assert done['source_check']['status'] == 'skipped'
+    assert "the merge check's answer failed validation 3 times" in done['source_check']['reason']
+    slot = jobs.load(root, job_id)['chunks'][source_check.SLOT]
+    assert slot['given_up'].endswith('the run was given up without an answer: the sub-agent is gone')
 
 
 def partial_parent(tmp_path, pending):

@@ -1,4 +1,5 @@
 import copy
+import json
 
 import pytest
 
@@ -18,14 +19,25 @@ def setup(root):
     return root, path, row, review
 
 
+def state_but_the_count(root):
+    """The job state without the count of refused answers (and the time it was last written): a refused submission
+    is counted against its budget there, and changes nothing else."""
+    state = json.loads(store.read_state(root, jobs.location('classify')))
+    return {k: v for k, v in state.items() if k not in ('refused', 'updated_at')}
+
+
+def refused(root):
+    return {k: v['count'] for k, v in (jobs.load(root, 'classify').get('refused') or {}).items()}
+
+
 def test_direct_jobs_submit_guard_is_atomic_and_exact_duplicate_is_idempotent(tmp_path):
     root, path, row, _ = setup(tmp_path)
     payload = {'items': [row]}
     reserve(root, 'classify', 'p1', 'producer')
-    state_after_reserve = store.read_state(root, jobs.location('classify'))
+    state_after_reserve = state_but_the_count(root)
     with pytest.raises(ValueError):
         jobs.submit(root, 'classify', {'items': [{'id': row['id']}]}, role='producer', run_id='p1')
-    assert store.read_state(root, jobs.location('classify')) == state_after_reserve
+    assert state_but_the_count(root) == state_after_reserve and refused(root) == {'producer@0': 1}
     assert not store.read_state(root, jobs.location('classify', 'producer-p1.json'))
     first = jobs.submit(root, 'classify', payload, role='producer', run_id='p1')
     artifact_before = store.read_state(root, first['artifact']['path'])
@@ -92,10 +104,10 @@ def test_malformed_submission_can_retry_same_slot_without_pollution(tmp_path, ba
     elif bad == 'illegal_pair': r['topic'] = 'not a curated topic'
     elif bad == 'domain': r['domain'] = 'not-this-domain'
     reserve(root, 'classify', 'retry', 'producer')
-    before = store.read_state(root, jobs.location('classify'))
+    before = state_but_the_count(root)
     with pytest.raises(ValueError):
         Service(root).submit('classify', payload, role='producer', run_id='retry')
-    assert store.read_state(root, jobs.location('classify')) == before
+    assert state_but_the_count(root) == before and refused(root) == {'producer@0': 1}
     assert store.read_state(root, jobs.location('classify', 'producer-retry.json')) is None
     result = Service(root).submit('classify', valid, role='producer', run_id='retry')
     after = store.read_state(root, jobs.location('classify'))

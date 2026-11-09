@@ -256,7 +256,12 @@ def _job(args, root: Path):
     if args.job_command == 'show':
         return service.job_show(args.id)
     if args.job_command == 'submit':
-        payload = json.loads(args.file.read_text(encoding='utf-8'))
+        try:
+            payload = json.loads(args.file.read_text(encoding='utf-8'))
+        except json.JSONDecodeError as exc:  # counted like any refused answer, against the run's slot
+            message = f'the answer file is not JSON: {exc}'
+            jobs.refuse(root, args.id, args.run_id, role=args.role, message=message)
+            raise ValueError(message) from exc
         return service.submit(args.id, payload, role=args.role, run_id=args.run_id, model=args.model)
     if args.job_command == 'abandon':
         return jobs.abandon_run(root, args.id, args.run_id, reason=args.reason)

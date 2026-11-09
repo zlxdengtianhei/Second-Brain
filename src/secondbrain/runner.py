@@ -13,7 +13,7 @@ from importlib import resources
 from pathlib import Path
 from typing import Callable
 
-from . import jobs, schemas
+from . import budget, jobs, schemas
 from .executors.base import Executor, ExecutorFailure, INVALID_OUTPUT, Result, Task, render_task_text
 from .locks import job_lock
 from .store import Conflict, digest
@@ -154,8 +154,11 @@ def finish_call(root: Path, task: Task, result: Result) -> Result:
         _record_handoff(root, job_id, task.run_id, result.handoff or {})
         raise AwaitingSubmission(result.handoff or {})
     if result.status != 'completed' or not isinstance(result.output, dict):
-        error = result.error or {'code': INVALID_OUTPUT, 'message': 'executor returned no JSON object',
-                                 'retryable': True}
+        error = dict(result.error or {'code': INVALID_OUTPUT, 'message': 'executor returned no JSON object',
+                                      'retryable': True})
+        if error.get('code') == INVALID_OUTPUT:  # an answer of the wrong shape: counted at the gate, like a refusal
+            jobs.refuse(root, job_id, task.run_id, role=task.role, message=str(error.get('message', '')))
+            error['counted'] = True
         jobs.fail_run(root, job_id, task.run_id, error=error)
         raise ExecutorFailure(error)
     try:
@@ -181,6 +184,33 @@ def _record_handoff(root: Path, job_id: str, run_id: str, handoff: dict) -> None
 def rounds_left(packet: dict, state: dict) -> int:
     used = int(packet.get('repair_depth', 0)) + int(state.get('repair_round', 0))
     return jobs.policy_of(packet).max_repair_rounds - used
+
+
+def _refusal_key(state: dict, role: str) -> str:
+    """Where a maintenance job counts the refused answers of ``role``: by repair round (``producer@1``), as export
+    counts a unit's steps."""
+    return f'{role}@{int(state.get("repair_round", 0))}'
+
+
+def record_refusal(packet, *, role, root, chunk, state, run, message) -> bool:
+    """The gate's hook (:func:`secondbrain.jobs.refuse`) for the maintenance kinds: an answer of ``role`` that failed
+    the program's checks, from an API run or a host sub-agent alike, counted in the job state
+    (:func:`secondbrain.budget.count`); True when the role's budget for this round is now spent."""
+    row = state.setdefault('refused', {}).setdefault(_refusal_key(state, role), {'count': 0})
+    return budget.used_up(budget.count(row, message, keep=2000), jobs.policy_of(packet).max_invalid_retries)
+
+
+def _spent(state: dict, packet: dict, role: str) -> str | None:
+    """Why ``role`` is not asked again in this round (its refused answers spent ``max_invalid_retries``), or None."""
+    row = (state.get('refused') or {}).get(_refusal_key(state, role)) or {}
+    if not budget.used_up(int(row.get('count', 0)), jobs.policy_of(packet).max_invalid_retries):
+        return None
+    return f'the {role} answer failed validation {row["count"]} times: {row.get("message", "")}'
+
+
+def _give_up(root: Path, job_id: str, why: str) -> dict:
+    """The job waits for the owner: nothing more is asked, nothing applied."""
+    return jobs.update(root, job_id, escalation_required=True, escalation_reason=why)
 
 
 def run_job(root: Path, job_id: str, *, producer: Executor, reviewer: Executor,
@@ -213,6 +243,9 @@ def _run_locked(root: Path, job_id: str, *, producer: Executor, reviewer: Execut
     packet = jobs.read_input(root, job_id)
     head = prompt('common.md').format(kind=state['kind'], job_id=job_id)
     if not state.get('candidate'):
+        spent = _spent(state, packet, 'producer')
+        if spent:
+            return _give_up(root, job_id, spent)
         feedback = packet.get('repair_feedback')
         text = head + '\n' + prompt(spec.produce_prompt)
         if feedback:
@@ -223,6 +256,9 @@ def _run_locked(root: Path, job_id: str, *, producer: Executor, reviewer: Execut
     candidate = jobs.artifact(root, state, 'candidate')
     spec.check(packet, candidate)
     if not state.get('review'):
+        spent = _spent(state, packet, 'reviewer')
+        if spent:
+            return _give_up(root, job_id, spent)
         shown = withhold_reasons(candidate) if jobs.policy_of(packet).withhold_producer_reasons else candidate
         review_packet = {'input': {k: v for k, v in packet.items() if k != 'repair_feedback'},
                          'candidate': shown}
@@ -262,7 +298,7 @@ def _produce(root, job_id, producer, text, model_packet, spec, packet, *, step):
             return
         except ExecutorFailure as failure:
             state = jobs.load(root, job_id)
-            if failure.code != INVALID_OUTPUT or rounds_left(packet, state) <= 0:
+            if failure.code != INVALID_OUTPUT or rounds_left(packet, state) <= 0 or _spent(state, packet, 'producer'):
                 raise
             jobs._internal_update(root, job_id, repair_round=int(state.get('repair_round', 0)) + 1)
             text = text + ('\n## Your previous answer was rejected by the validator\n\n'

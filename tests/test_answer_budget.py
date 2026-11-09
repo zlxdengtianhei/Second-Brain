@@ -2,7 +2,7 @@
 
 The fourth verdict found two roles with no budget at all (R6c): an answer of the split reviewer or of the dispute
 re-judge that failed the checks stopped the job, and every `sb job advance` asked again, without end; the item never
-reached the owner. Now every role that asks a model goes through one entry (``ingest._refused_answer``) that counts
+reached the owner. Now every role that asks a model goes through one entry (``jobs.refuse``, by ``ingest.record_refusal``) that counts
 per slot in the job state, and the roles are one table (``ingest.ANSWER_ROLES``), the one an answer's schema is read
 from. This test takes every role from that table: a role added later without a scenario here fails it.
 

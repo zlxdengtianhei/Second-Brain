@@ -31,7 +31,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .. import config, jobs, review_notes, schemas, vault
+from .. import budget, config, jobs, review_notes, schemas, vault
 from ..executors.base import ExecutorFailure
 from ..locks import job_lock
 from ..runner import AwaitingSubmission, fail_call, finish_call, prompt, start_call
@@ -376,31 +376,20 @@ def _last_refusal(slot: dict, kind: str) -> str | None:
     return (slot.get('refused') or {}).get(_step_key(slot, kind), {}).get('message')
 
 
-def _count_refused(state: dict, chunk: str, kind: str, message: str) -> int:
-    """Count, in ``state``, an answer of step ``kind`` of ``chunk`` that failed the program's checks (an export run
-    again goes on counting); returns the count so far. :func:`_given_up` reads it."""
-    slot = state.setdefault('chunks', {}).setdefault(chunk, {})
-    row = slot.setdefault('refused', {}).setdefault(_step_key(slot, kind), {'count': 0})
-    row.update(count=int(row['count']) + 1, message=str(message)[:2000])
-    return row['count']
-
-
-def _refused(root, job_id, chunk: str, kind: str, message: str) -> int:
-    """:func:`_count_refused` for an API answer that never reached the gate (no JSON object)."""
-    with vault_lock(root):
-        state = jobs.load(root, job_id)
-        count = _count_refused(state, chunk, kind, message)
-        state['updated_at'] = jobs.now()
-        write_json(root, jobs.location(job_id), state)
-        return count
+#: The steps of a unit (and of the smoothing step) that ask a model; each counts its refused answers.
+STEPS = ('produce', 'review', 'repair')
 
 
 def record_refusal(packet, *, role, root, chunk, state, run, message) -> bool:
-    """jobs.submit hook: an answer the validator refused, from an API run or a host sub-agent alike, counted against
-    its step's budget (:func:`_count_refused`); True when the step is now given up."""
-    if chunk is None or run.get('step') not in {'produce', 'review', 'repair'}:
+    """The gate's hook (:func:`secondbrain.jobs.refuse`): an answer of step ``produce``, ``review`` or ``repair`` of
+    a unit that failed the program's checks, from an API run or a host sub-agent alike, counted in the job state by
+    step and repair round (:func:`secondbrain.budget.count`; an export run again goes on counting); True when the
+    step is now given up. :func:`_given_up` reads the count."""
+    if chunk is None or run.get('step') not in STEPS:
         return False
-    return _count_refused(state, chunk, run['step'], message) > config.review_policy().max_invalid_retries
+    slot = state.setdefault('chunks', {}).setdefault(chunk, {})
+    row = slot.setdefault('refused', {}).setdefault(_step_key(slot, run['step']), {'count': 0})
+    return budget.used_up(budget.count(row, message, keep=2000), config.review_policy().max_invalid_retries)
 
 
 def _given_up(root, job_id, chunk: str, slot: dict, kind: str, paragraph_ids=(), unresolved=None) -> bool:
@@ -410,7 +399,7 @@ def _given_up(root, job_id, chunk: str, slot: dict, kind: str, paragraph_ids=(),
     a writer that never answered: the unit, with nothing of it in the article)."""
     row = (slot.get('refused') or {}).get(_step_key(slot, kind)) or {}
     count = int(row.get('count', 0))
-    if count <= config.review_policy().max_invalid_retries:
+    if not budget.used_up(count, config.review_policy().max_invalid_retries):
         return False
     who = 'review' if kind == 'review' else 'writer'
     why = f'its {who} answer failed validation {count} times, so it was not reviewed: {row.get("message", "")}' \
@@ -556,10 +545,8 @@ def advance(root: Path, job_id: str, *, producer, reviewer, checker=None, worker
                 return {'job_id': job_id, 'status': 'awaiting_submission', 'handoffs': handoffs}
             for chunk, kind, error in failed:
                 key = (chunk, kind)
-                if error.get('code') == 'INVALID_OUTPUT':  # counted in the job state; planning gives it up
-                    if not error.get('counted'):  # an answer refused at the gate is counted there
-                        _refused(root, job_id, chunk, kind, str(error.get('message', '')))
-                    continue
+                if error.get('code') == 'INVALID_OUTPUT':  # counted at the gate, in the job state; planning gives
+                    continue                                 # it up
                 failures[key] = failures.get(key, 0) + 1
                 if failures[key] >= MAX_FAILURES or not error.get('retryable', False):
                     raise ExecutorFailure(error)

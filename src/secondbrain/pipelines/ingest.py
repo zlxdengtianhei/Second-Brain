@@ -31,7 +31,7 @@ from dataclasses import asdict, dataclass
 from typing import Callable
 
 from .. import cards as cardfmt
-from .. import config, decisions, inbox, jobs, labels, overlap, review_notes, schemas
+from .. import budget, config, decisions, inbox, jobs, labels, overlap, review_notes, schemas
 from .. import layout as layouts
 from ..catalog import category_pairs, open_relation_types, relation_meanings, taxonomy_packet, validate_catalog
 from ..classification import projection_changes, snapshot_checks, taxonomy_fingerprint, writable_snapshot
@@ -1420,7 +1420,7 @@ def _made_amends(root: Path, packet: dict, state: dict, chunk: str, candidate: d
 @dataclass(frozen=True)
 class AnswerRole:
     """A role that asks a model for an answer in an ingest job: the slots it answers in, its answer's schema, and
-    how its answers the program refuses (``INVALID_OUTPUT``) are counted (:func:`_refused_answer`).
+    how its answers the program refuses (``INVALID_OUTPUT``) are counted (:func:`record_refusal`).
 
     ``count`` and ``error`` are the slot fields of the job state that keep the count and the last refusal (a
     producer and a reviewer may answer in the same slot). Once the count is past ``max_invalid_retries``,
@@ -1480,7 +1480,7 @@ def _retries_left(info: dict, rules, spec: AnswerRole | None = None) -> bool:
     """Whether a slot whose answers failed the program's checks may be asked again (``max_invalid_retries``); the
     chunk producer's count unless ``spec`` names another role."""
     spec = spec or ANSWER_ROLES[0]
-    return _refusals(info, spec) <= spec.retries(rules)
+    return not budget.used_up(_refusals(info, spec), spec.retries(rules))
 
 
 def _count_refusal(state: dict, packet: dict, slot: str, spec: AnswerRole, message: str) -> int:
@@ -1490,34 +1490,13 @@ def _count_refusal(state: dict, packet: dict, slot: str, spec: AnswerRole, messa
     chunks = state.setdefault('chunks', {})
     fresh = {'candidate': None, 'review': None, 'status': 'prepared', 'round': 0}
     info = chunks.setdefault(slot, dict(fresh))
-    info[spec.count] = failed = int(info.get(spec.count, 0)) + 1
-    info[spec.error] = message[:8000]
+    failed = budget.count(info, message, field=spec.count, error=spec.error)
     if spec.rounds and slot != _base(slot):  # the chunk shows its latest error too
         chunks.setdefault(_base(slot), dict(fresh))[spec.error] = message[:8000]
-    if failed > spec.retries(jobs.policy_of(packet)):
+    if budget.used_up(failed, spec.retries(jobs.policy_of(packet))):
         info['given_up'] = f"the {spec.name}'s answer failed validation {failed} times: {message[:500]}"
         if spec.used_up == 'without':
             info['skipped'] = f"the {spec.name}'s answer failed validation {failed} times; {spec.skip}"
-    return failed
-
-
-def _refused_answer(root: Path, job_id: str, slot: str, role: str, message: str) -> int:
-    """The one count of the answers of any role that failed the program's checks; returns the count so far.
-
-    An answer refused at the gate (``jobs.submit``, from an API run or a host sub-agent alike) is counted there, by
-    :func:`record_refusal`; an API answer that never reached the gate (no JSON object) is counted here, from
-    :func:`_failed_answer`. Both go through :func:`_count_refusal`. The count is kept in the job state under the
-    slot, by role, so a job run again goes on counting from there: one ``advance`` asks at most
-    ``max_invalid_retries`` + 1 times (the role's ``retries`` + 1), and a resumed job no more. What was asked for
-    then waits for the owner or is done without, as its role says (:data:`ANSWER_ROLES`).
-    """
-    from ..store import vault_lock, write_json
-    spec = answer_role(slot, role)
-    with vault_lock(root):
-        state = jobs.load(root, job_id)
-        failed = _count_refusal(state, jobs.read_input(root, job_id), slot, spec, message)
-        state['updated_at'] = jobs.now()
-        write_json(root, jobs.location(job_id), state)
     return failed
 
 
@@ -1532,12 +1511,11 @@ def record_refusal(packet: dict, *, role: str, root, chunk, state: dict, run: di
 
 
 def _failed_answer(root: Path, job_id: str, slot: str, role: str, failure: ExecutorFailure) -> None:
-    """An executor failure of a model call: an answer that failed the program's checks is counted (unless the gate
-    counted it already, ``counted``); any other failure is raised again."""
+    """An executor failure of a model call: an answer that failed the program's checks was counted at the gate
+    (:func:`secondbrain.jobs.refuse`, by :func:`record_refusal`), and the planning reads the count; any other
+    failure is raised again."""
     if failure.code != INVALID_OUTPUT:
         raise failure
-    if not failure.error.get('counted'):
-        _refused_answer(root, job_id, slot, role, failure.error.get('message', ''))
 
 
 def _answer_schema(chunk: str, role: str) -> dict:
@@ -1607,9 +1585,7 @@ def _merge_check_failures(root: Path, state: dict, slot: str) -> int:
     A run that ended without an answer for another reason (a transport or gateway error, a timeout, a key that
     could not be read) is not counted: it is no answer (decision D-23)."""
     info = (state.get('chunks') or {}).get(slot) or {}
-    runs = [jobs.load_run(root, state['job_id'], r) for r in state.get('runs') or []]
-    return _refusals(info, answer_role(slot, 'reviewer')) + sum(
-        1 for r in runs if r.get('chunk') == slot and r['status'] == 'abandoned')
+    return _refusals(info, answer_role(slot, 'reviewer'))  # a run given up without an answer is counted there too
 
 
 def _last_merge_answer(root: Path, state: dict, packet: dict, slot: str) -> bool:
@@ -2593,11 +2569,9 @@ def skip_source_check(root: Path, job_id: str, *, reason: str) -> dict:
 def _skip_source_check(root: Path, job_id: str, *, reason: str) -> dict:
     """Give up the source check of ``job_id`` after it kept failing; the cards are written as the chunk reviews left them.
 
-    In API mode an answer that fails validation more than ``max_invalid_retries``
-    times is skipped by itself. In host mode the answer is refused at `sb job
-    submit` and the run stays open, so the coordinator ends it here, once as many
-    answers were rejected or runs abandoned. Its open run is abandoned and the
-    reason is recorded with the skip.
+    Answers that fail validation, and runs given up without an answer, are counted at the gate in both modes
+    (:func:`secondbrain.jobs.refuse`); once they are more than ``max_invalid_retries`` the check is skipped by
+    itself, and this command finds it done. Before that it refuses: hand the check to a new sub-agent.
     """
     if not isinstance(reason, str) or not reason.strip():
         raise ValueError('skipping the source check needs a concrete reason')
