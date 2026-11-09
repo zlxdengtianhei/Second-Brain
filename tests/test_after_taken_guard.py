@@ -229,11 +229,34 @@ def curation_revise_flow(tmp_path, monkeypatch):
                                                 reviewer=FakeExecutor('claude-test', responder=review))
 
 
+def ingest_note_check_flow(tmp_path, monkeypatch):
+    """A minor note that may name a blocking problem: its check says yes once, and the card is written again."""
+    from secondbrain.pipelines import notecheck
+    from tests import test_patch_set as tp
+    from tests.test_invariants import LEVELS
+    old_rules(tmp_path, monkeypatch)
+    root, job_id, _ = tp.job(tmp_path)
+    noted = {**LEVELS, 'lit-marker-cost': {'overlap': 'distinct',
+                                           'notes': [{'category': 'minor', 'text': '没写明一个标记占几个字'}]}}
+    inner, asked = tp.reviewer(levels=noted), []
+
+    def review(task):
+        if not notecheck.is_slot(task.chunk):
+            return inner(task)
+        asked.append(task.chunk)
+        yes = len(asked) == 1
+        return {'answers': [{'id': n['id'], 'answer': 'yes' if yes else 'no', 'category': 'unreadable' if yes else None,
+                             'reason': 'the card does not give the size'} for c in task.packet['cards']
+                            for n in c['notes']]}
+    return root, job_id, lambda: tp.run(root, job_id, review)
+
+
 FLOWS = {'ingest': ingest_flow, 'export': export_flow, **{k: maintenance_flow(k) for k in MAINTENANCE}}
 #: More flows of a kind, for the marks one flow does not reach: a merge check and a split card, merge-check rounds,
 #: a split repair round, the packets a host asks for, a write resumed, a classification repair child, a repair round
-#: of a maintenance producer.
+#: of a maintenance producer, the check of a review's minor notes.
 MORE = {'ingest-split': ingest_split_flow, 'ingest-merge-rounds': ingest_merge_rounds_flow,
+        'ingest-note-check': ingest_note_check_flow,
         'ingest-split-rounds': ingest_split_rounds_flow, 'ingest-packets': ingest_packets_flow,
         'ingest-diagram-packets': ingest_diagram_packets_flow,
         'ingest-resume': ingest_resume_flow, 'curation-resume': curation_resume_flow,

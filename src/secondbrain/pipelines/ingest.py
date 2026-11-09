@@ -44,7 +44,7 @@ from ..textnorm import plain, same_text
 from ..vault import Card, append_list_items, parse_note, read_snapshot
 from .. import retrieval
 from . import amend as amends
-from . import answerfix, cardlint, card_diagrams, chunking, notes, source_check, split
+from . import answerfix, cardlint, card_diagrams, chunking, notecheck, notes, source_check, split
 from .chunking import chunk_text
 from .routing import route
 
@@ -432,7 +432,7 @@ def _reviewed_domains(root: Path, state: dict, packet: dict, base: str, items: l
     named, last = [], {}
     for slot, info in _slots(state, base):
         if info.get('review'):
-            named += _domains_named(packet, _findings(jobs.artifact(root, state, 'review', slot)))
+            named += _domains_named(packet, _findings(_review(root, state, slot)))
         if info.get('candidate'):
             for card in jobs.artifact(root, state, 'candidate', slot).get('cards', []):
                 if isinstance(card, dict) and card.get('slug') in open_slugs:
@@ -467,7 +467,7 @@ def _settled_rows(root: Path, state: dict, base: str, upto_round: int | None = N
                 skipped.append({'source_quote': row.get('source_quote')})
         if not info.get('review'):
             continue
-        reviewed = {r.get('slug'): r for r in jobs.artifact(root, state, 'review', slot).get('cards', [])
+        reviewed = {r.get('slug'): r for r in _review(root, state, slot).get('cards', [])
                     if isinstance(r, dict)}
         for card in cand.get('cards') or []:
             if not isinstance(card, dict) or card.get('slug') not in reviewed:
@@ -491,7 +491,7 @@ def _held_slugs(root: Path, state: dict, base: str, upto_round: int) -> set:
     latest = {}
     for slot, info in _slots(state, base)[:upto_round]:
         if info.get('review'):
-            for row in jobs.artifact(root, state, 'review', slot).get('cards', []):
+            for row in _review(root, state, slot).get('cards', []):
                 if isinstance(row, dict):
                     latest[row.get('slug')] = _held_by(row) is not None
     return {slug for slug, held in latest.items() if held}
@@ -760,9 +760,10 @@ def named_titles(cards) -> set:
 
 
 def _aux_slot(name: str) -> bool:
-    """True for a slot that is not a chunk's: diagrams, the merge check, a dispute, a split card, a model note."""
+    """True for a slot that is not a chunk's: diagrams, the merge check, a dispute, a split card, a model note, the
+    check of a review's notes."""
     return card_diagrams.is_slot(name) or source_check.is_slot(name) or _is_rejudge(name) or \
-        split.is_slot(_base(name)) or notes.is_slot(name)
+        split.is_slot(_base(name)) or notes.is_slot(name) or notecheck.is_slot(name)
 
 
 def _note_due(state: dict, packet: dict, base: str) -> str | None:
@@ -811,6 +812,102 @@ def _note_step(root: Path, job_id: str, state: dict, packet: dict, slot: str, pr
         _failed_answer(root, job_id, slot, 'producer', failure)
 
 
+# --------------------------------------------------------------------------
+# The check of a review's minor notes (notecheck)
+# --------------------------------------------------------------------------
+def _note_check(state: dict, slot: str) -> dict:
+    """The job state of the check of the minor notes of the review in chunk slot ``slot``, when it checks the review
+    the slot holds now; else empty (no check, or one made for a review the program set aside since)."""
+    chunks = state.get('chunks') or {}
+    info = chunks.get(notecheck.slot_for(slot)) or {}
+    review = (chunks.get(slot) or {}).get('review') or {}
+    return info if info and review and info.get('of_review') == review.get('sha256') else {}
+
+
+def _note_check_due(root: Path, state: dict, slot: str) -> bool:
+    """Whether the review of chunk slot ``slot`` waits for the check of its minor notes: a note to ask about, and the
+    check neither answered nor given up. A check made for a review set aside since is not asked again."""
+    info = _note_check(state, slot)
+    if info:
+        return not (info.get('review') or info.get('skipped'))
+    if notecheck.slot_for(slot) in (state.get('chunks') or {}):
+        return False
+    return bool(notecheck.items(jobs.artifact(root, state, 'review', slot)))
+
+
+def _review(root: Path, state: dict, slot: str) -> dict:
+    """The review of chunk slot ``slot`` as every step reads it (:func:`_with_check`)."""
+    return _with_check(root, state, slot, jobs.artifact(root, state, 'review', slot))
+
+
+def _with_check(root: Path, state: dict, slot: str, review: dict) -> dict:
+    """``review``, the reviewer's answer in chunk slot ``slot``, with the cards the check of its minor notes sent back
+    put in (:func:`notecheck.applied`)."""
+    if not _note_check(state, slot).get('review'):
+        return review
+    return notecheck.applied(review, jobs.artifact(root, state, 'review', notecheck.slot_for(slot)))
+
+
+def _note_answers(root: Path, state: dict, slot: str) -> list[dict]:
+    """The reviewer's answers about the minor notes of the review of chunk slot ``slot``, each with its card and
+    note."""
+    if not _note_check(state, slot).get('review'):
+        return []
+    asked = {i['id']: i for i in notecheck.items(jobs.artifact(root, state, 'review', slot))}
+    check = jobs.artifact(root, state, 'review', notecheck.slot_for(slot))
+    return [{'chunk': _base(slot), 'slot': slot, 'slug': asked[a['id']]['slug'], 'note': asked[a['id']]['note'], **a}
+            for a in check.get('answers') or [] if a.get('id') in asked]
+
+
+def _note_check_input(root: Path, state: dict, packet: dict, reviewed: str) -> dict:
+    """What the reviewer answers the check on: each card asked about as accepted (its mechanical fixes made), the
+    notes asked about, the chunk and its note, and the cards of the source the cards name."""
+    from ..runner import withhold_reasons
+    review = jobs.artifact(root, state, 'review', reviewed)
+    rows = {r['slug']: r for r in review.get('cards') or []}
+    cards = {c['slug']: c for c in jobs.artifact(root, state, 'candidate', reviewed).get('cards') or []}
+    asked = notecheck.items(review)
+    withhold = jobs.policy_of(packet).withhold_producer_reasons
+    shown = []
+    for slug in dict.fromkeys(i['slug'] for i in asked):
+        card = {k: v for k, v in amends.apply(cards[slug], rows[slug].get('amend')).items() if not k.startswith('_')}
+        shown.append({'slug': slug, 'card': withhold_reasons(card) if withhold else card,
+                      'notes': [{'id': i['id'], 'text': i['note']} for i in asked if i['slug'] == slug]})
+    base = _base(reviewed)
+    return {'chunk': {'id': base, 'text': _chunk_text(packet, base)}, **_note_part(root, state, packet, base),
+            'cards': shown,
+            'other_chunks_cards': _other_cards(root, state, packet, base, named_titles([c['card'] for c in shown]))}
+
+
+def note_check_prompt(job_id: str) -> str:
+    """The instructions of the check of a review's minor notes."""
+    return _prompt('note_check.md', {'job_id': job_id})
+
+
+def _note_check_step(root: Path, job_id: str, state: dict, packet: dict, slot: str, reviewer) -> None:
+    """Ask the chunk's reviewer about the minor notes of its review that may name a blocking problem; the check's
+    input is made once, from the review the chunk slot holds (``of_review``, marked before the input is stored)."""
+    from ..runner import call_executor
+    reviewed = notecheck.reviewed(slot)
+    if not _note_check(state, reviewed).get('candidate'):
+        with jobs.reading('note_check_packet', (reviewed, 'reviewer')):  # made from that review
+            made = _note_check_input(root, state, packet, reviewed)
+        _mark_slot(root, job_id, slot, of_review=state['chunks'][reviewed]['review']['sha256'])
+        jobs.put_program_candidate(root, job_id, slot, made)
+        state = jobs.load(root, job_id)
+    text = note_check_prompt(job_id)
+    feedback = state['chunks'][slot].get('last_review_error')
+    if feedback:
+        text += '\n## Your previous answer was rejected by the validator\n\n' + feedback + '\n'
+    with jobs.reading('note_check_packet'):  # the program's own input: no answer to set aside
+        shown = jobs.artifact(root, state, 'candidate', slot)
+    try:
+        call_executor(root, job_id, reviewer, role='reviewer', step='review', prompt_text=text, packet=shown,
+                      output_schema=notecheck.SCHEMA, chunk=slot)
+    except ExecutorFailure as failure:
+        _failed_answer(root, job_id, slot, 'reviewer', failure)
+
+
 def producer_packet(root: Path, state: dict, packet: dict, slot: str) -> dict:
     base, rnd = _base(slot), _round(slot)
     chunk = _chunk(packet, base)
@@ -834,7 +931,7 @@ def producer_packet(root: Path, state: dict, packet: dict, slot: str) -> dict:
     if rnd:
         prev_slot = _slot_name(base, rnd - 1)
         previous = jobs.artifact(root, state, 'candidate', prev_slot)
-        findings = _findings(jobs.artifact(root, state, 'review', prev_slot))
+        findings = _findings(_review(root, state, prev_slot))
         held = _held_slugs(root, state, base, rnd)  # accepted as the same as existing cards: settled, not kept
         kept = {s: c for s, c in _accepted_so_far(root, state, base, rnd).items() if s not in held}
         out['previous_candidate'] = jobs.as_given(previous)  # what the program wrote into it is not shown back
@@ -1023,7 +1120,7 @@ def review_packet(root: Path, state: dict, packet: dict, slot: str) -> dict:
                                          if s not in refiled and s not in held]
         out['already_settled'] = _settled_rows(root, state, base, rnd)
         if jobs.policy_of(packet).focused_review:  # what the round before sent back, to be judged fixed or not
-            out['previous_findings'] = _findings(jobs.artifact(root, state, 'review', _slot_name(base, rnd - 1)))
+            out['previous_findings'] = _findings(_review(root, state, _slot_name(base, rnd - 1)))
     if packet.get('retry'):
         out['retry'] = _retry_view(packet, base, reviewer=True)
     return out
@@ -1545,6 +1642,10 @@ ANSWER_ROLES = (
                repairs=_repair_rounds),
     AnswerRole('dispute re-judge', 'reviewer', lambda s: _is_rejudge(s), lambda s: REJUDGE_SCHEMA,
                count='invalid_reviews', error='last_review_error'),
+    # the chunk reviewer asked once about its minor notes that may name a blocking problem; no repair round
+    AnswerRole('note check', 'reviewer', lambda s: notecheck.is_slot(s), lambda s: notecheck.SCHEMA,
+               count='invalid_reviews', error='last_review_error', used_up='without',
+               skip='its cards stay as the review accepted them'),
     # a split card's check does not refuse two links to one card and asks for a typed link to the card it narrows,
     # which a relation repair could drop: its text and quotes are repaired, its relations left to the check
     AnswerRole('split producer', 'producer', lambda s: split.is_slot(_base(s)), lambda s: split.CARD_SCHEMA,
@@ -1690,6 +1791,8 @@ def _validate_submission(packet: dict, payload: dict, *, role: str, candidate=No
             return saved
     if _is_rejudge(chunk):
         return _validate_rejudge(candidate, payload, _vault_ids_titles(root)[0])
+    if notecheck.is_slot(chunk):
+        return notecheck.validate(candidate, payload, jobs.artifact(root, state, 'review', notecheck.reviewed(chunk)))
     if notes.is_slot(chunk):
         if chunk == notes.CONCEPTS_SLOT:
             return notes.validate_concepts(payload, [c['chunk_id'] for c in effective_chunks(packet, state)])
@@ -1861,6 +1964,7 @@ class _Facts:
 
     def reappears(self, obj: str, earlier_slot: str, slot: str) -> bool:
         """``obj`` (a card, a chunk's coverage, a topic proposal) is judged again in a later round of its chunk."""
+        earlier_slot = _judged_in(earlier_slot)
         if _base(earlier_slot) != _base(slot) or _round(slot) <= _round(earlier_slot):
             return False
         if split.is_slot(slot):  # a split slot rewrites one card, its plan's
@@ -1871,11 +1975,24 @@ class _Facts:
         """``obj`` is filed again after its review refused the new topic it was filed under."""
         if not self.reappears(obj, earlier_slot, slot):
             return False
+        earlier_slot = _judged_in(earlier_slot)
         cards = {c.get('slug'): c for c in jobs.artifact(self.root, self.state, 'candidate', earlier_slot)
                  .get('cards') or [] if isinstance(c, dict)}
         card = cards.get(obj)
         refused = _unaccepted_topics(self.root, self.state, _base(slot), _round(slot))
         return card is not None and (card.get('domain'), card.get('pillar'), card.get('topic')) in refused
+
+    def checked(self, obj: str, earlier_slot: str, slot: str) -> bool:
+        """``slot`` is the check of the notes of the review ``earlier_slot`` gave, and it asked about card ``obj``."""
+        if not notecheck.is_slot(slot) or notecheck.reviewed(slot) != earlier_slot:
+            return False
+        review = jobs.artifact(self.root, self.state, 'review', earlier_slot)
+        return obj in {i['slug'] for i in notecheck.items(review)}
+
+
+def _judged_in(slot: str) -> str:
+    """The chunk slot a verdict recorded in ``slot`` belongs to: the reviewed slot for the check of its notes."""
+    return notecheck.reviewed(slot) if notecheck.is_slot(slot) else slot
 
 
 def _topic_object(base: str, topic: dict) -> str:
@@ -1884,7 +2001,8 @@ def _topic_object(base: str, topic: dict) -> str:
 
 
 def _again(entries: list, value: str, obj: str, slot: str, facts: _Facts, *, chain: bool = False) -> str | None:
-    """Why ``slot`` judges ``obj`` again (``refile`` or ``repair_round``), or None when nothing is there to supersede."""
+    """Why ``slot`` judges ``obj`` again (``refile``, ``repair_round``, or ``note_check`` for the check of a review's
+    notes), or None when nothing is there to supersede."""
     if chain:
         live = decisions.chain(entries, value, obj)
         earlier = live[-1] if live else None
@@ -1892,6 +2010,8 @@ def _again(entries: list, value: str, obj: str, slot: str, facts: _Facts, *, cha
         earlier = decisions.current(entries, value, obj)
     if earlier is None:
         return None
+    if notecheck.is_slot(slot):
+        return 'note_check'
     return 'refile' if facts.refiled(obj, earlier['slot'], slot) else 'repair_round'
 
 
@@ -1913,6 +2033,15 @@ def record_decisions(packet: dict, payload: dict, *, role: str, candidate, root,
         return
     if source_check.is_slot(chunk):
         source_check.record(candidate, payload, entries, slot=chunk, run=run['run_id'])
+        return
+    if notecheck.is_slot(chunk):  # a card the check of a minor note sent back: its verdict is a revise now
+        reviewed, facts = notecheck.reviewed(chunk), _Facts(root, state)
+        for row in payload.get('turned') or []:
+            decisions.record(entries, 'verdict', row['slug'],
+                             {'decision': row['decision'], 'chunk': _base(reviewed), 'reason': row['reason'],
+                              'turned': row['turned']},
+                             role='reviewer', slot=chunk, run=run['run_id'],
+                             reason=_again(entries, 'verdict', row['slug'], chunk, facts), facts=facts)
         return
     if _is_rejudge(chunk):  # the chunk reviewer's level again, after the merge check disputed it
         decisions.record(entries, 'overlap.existing', payload['slug'],
@@ -2048,7 +2177,7 @@ def _unaccepted_topics(root, state, base: str, upto_round: int) -> dict:
     for slot, info in _slots(state, base)[:upto_round]:
         if not (info.get('candidate') and info.get('review')):
             break
-        review = jobs.artifact(root, state, 'review', slot)
+        review = _review(root, state, slot)
         for t in jobs.artifact(root, state, 'candidate', slot).get('new_topics', []):
             key = (t['domain'], t['pillar'], t['name'])
             row = next((r for r in review.get('new_topics') or []
@@ -2068,7 +2197,7 @@ def _accepted_so_far(root, state, base: str, upto_round: int) -> dict:
         if not (info.get('candidate') and info.get('review')):
             break
         cand = jobs.artifact(root, state, 'candidate', slot)
-        review = jobs.artifact(root, state, 'review', slot)
+        review = _review(root, state, slot)
         decisions = {r['slug']: r for r in review.get('cards', [])}
         for c in cand.get('cards', []):
             if decisions.get(c['slug'], {}).get('decision') == 'accept':
@@ -2083,6 +2212,8 @@ def _newest(base: str):
     def newest(state: dict):
         for slot, info in reversed(_slots(state, base)):
             if info.get('candidate'):
+                if info.get('review') and _note_check(state, slot).get('review'):
+                    return notecheck.slot_for(slot), 'reviewer'
                 return slot, 'reviewer' if info.get('review') else 'producer'
         return None
     return newest
@@ -2116,6 +2247,7 @@ def chunk_outcome(root: Path, state: dict, packet: dict, base: str) -> dict:
     conflicts: dict = {}
     notes: list = []
     turned: list = []  # accepted cards the program sent back for a blocking note (D-18 3)
+    checked: list = []  # the reviewer's answers about its minor notes (notecheck)
     unreviewed = None
     merged_rounds = 0
     for slot, info in slots:
@@ -2131,8 +2263,12 @@ def chunk_outcome(root: Path, state: dict, packet: dict, base: str) -> dict:
                 return out
             unreviewed = (slot, info)  # its review kept failing the checks: its cards stay pending
             break
+        if _note_check_due(root, state, slot):  # a minor note that may name a blocking problem: asked about first
+            out['next'] = ('notecheck', notecheck.slot_for(slot))
+            return out
         merged_rounds += 1
-        review = jobs.require_independent_review(root, state, slot)
+        review = _with_check(root, state, slot, jobs.require_independent_review(root, state, slot))
+        checked += _note_answers(root, state, slot)
         cand = jobs.artifact(root, state, 'candidate', slot)
         decisions = {r['slug']: r for r in review.get('cards', [])}
         # A rejected card this round does not repeat was split, merged or dropped by the repair;
@@ -2152,7 +2288,8 @@ def chunk_outcome(root: Path, state: dict, packet: dict, base: str) -> dict:
                       for n in d.get('notes') or []]
             if d.get('turned'):
                 turned.append({'chunk': base, 'slot': slot, 'round': _round(slot), 'slug': c['slug'],
-                               'category': d['turned']['note']['category'], 'note': d['turned']['note']['text']})
+                               'category': d['turned']['note']['category'], 'note': d['turned']['note']['text'],
+                               **({'check': d['turned']['check']} if d['turned'].get('check') else {})})
             if d['decision'] == 'accept':  # whether it is written is the outcome of its level (secondbrain.overlap)
                 accepted[c['slug']] = {**amends.apply(c, d.get('amend')), '_slot': slot,
                                        **({'_amend': d['amend'], '_amended': amends.changes(c, d['amend'])}
@@ -2224,6 +2361,7 @@ def chunk_outcome(root: Path, state: dict, packet: dict, base: str) -> dict:
                       for row in c.get('_amended') or []]
     out['notes'] = notes
     out['turned'] = turned
+    out['notes_checked'] = checked
     out.update(settled=True, accepted=accepted, pending=pending, duplicates=list(dups.values()),
                topics={k: v for k, v in topic_state.items() if v['decision'] == 'accept'},
                needs_taxonomy=needs_tax, skipped=skipped, conflicts=list(conflicts.values()))
@@ -2245,6 +2383,9 @@ def _step(root: Path, job_id: str, action: tuple, producer, reviewer) -> None:
     packet = jobs.read_input(root, job_id)
     if kind == 'note':
         _note_step(root, job_id, state, packet, slot, producer)
+        return
+    if kind == 'notecheck':
+        _note_check_step(root, job_id, state, packet, slot, reviewer)
         return
     if kind == 'review':
         rules = jobs.policy_of(packet)
@@ -3584,6 +3725,8 @@ def _apply_job(root: Path, job_id: str, settled: list[dict] | None = None) -> di
               'review_notes': [n for o in settled for n in o.get('notes') or []],
               # cards accepted with a note of a blocking kind, sent back by the program: which note, card, round
               'notes_turned': [t for o in settled for t in o.get('turned') or []] + _split_turned(root, job_id),
+              # the reviewer's answers about its minor notes that may name a blocking problem (notecheck)
+              'notes_checked': [a for o in settled for a in o.get('notes_checked') or []],
               # split cards sent back because a proposition says what the existing card says (D-22)
               'split_restated': _split_turned(root, job_id, 'matches'),
               'refused_topics': [t for o in settled for t in o.get('refused_topics') or []],
@@ -3880,7 +4023,7 @@ def _packet_for(root: Path, job_id: str, *, role: str, chunk: str | None, execut
                 continue
             if chunk and _base(chunk) != c['chunk_id'] and out['next'][1] != chunk:
                 continue
-            wants = 'reviewer' if out['next'][0] == 'review' else 'producer'
+            wants = 'reviewer' if out['next'][0] in ('review', 'notecheck') else 'producer'
             if wants != role:
                 continue
             try:

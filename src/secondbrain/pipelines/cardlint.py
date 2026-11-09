@@ -11,8 +11,11 @@ cards at the base rate):
   never says what it stands for.
 
 The reviewer answers each question yes or no with a reason (``answers`` in the review row, :data:`secondbrain.schemas.REVIEW_CARDS`); a yes sends an accepted card back as
-``unreadable`` (:func:`turned`), a no leaves it as it is. The pattern tables are Chinese, the language the checks were
-measured on; this module is one of the language tables.
+``unreadable`` (:func:`turned`), a no leaves it as it is.
+
+One more table reads a reviewer's own words: the cue words of a ``minor`` note that may name a blocking problem
+(:func:`cued`; :mod:`.notecheck` asks the reviewer about such a note). The pattern tables are Chinese, the language
+the checks were measured on; this module is one of the language tables.
 """
 from __future__ import annotations
 
@@ -150,6 +153,19 @@ def symbols(card: dict) -> list[str]:
     skip = _labels(text) | _function_letters(text)
     return sorted(x for x in used if x not in skip and not _defined(x, text)
                   and re.search(_PARAM.format(s=re.escape(x)), text))
+
+
+# --- a minor note that may name a blocking problem ------------------------------------------------------------------
+#: Words of a reviewer's ``minor`` note that say the card leaves something out, says more than the chunk, or points
+#: at the source. On the accepted cards of one arm of a blind judging they marked 11 of 105, 5 of them problem cards;
+#: a note about wording alone ("could be clearer") has none of them.
+CUES = re.compile(r'没说|没写明|没交代|没有交代|没说明|没有说明|没给|没有给|未给|没有引入|没引入|块文没有|原文没有|chunk 没|原文不|'
+                  r'省了|省去|去掉了|丢了|漏了|指向|是哪个|指代|挂错|不清|说得宽|说得比|更宽|过于|绝对|没有出处|无出处')
+
+
+def cued(text) -> bool:
+    """Whether a note's ``text`` has a cue word (:data:`CUES`)."""
+    return isinstance(text, str) and CUES.search(text) is not None
 
 
 # --- the questions, and the answers ---------------------------------------------------------------------------------

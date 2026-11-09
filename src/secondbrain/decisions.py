@@ -16,7 +16,9 @@ second value is an error, raised, never a silent overwrite:
    *supersedes* the earlier one, and only for a reason that happened, which
    the caller's facts must confirm: ``repair_round`` (the card is in a later
    round's candidate), ``refile`` (it was filed under a new topic its review
-   refused and is filed again), ``dispute`` (the merge check disputed it).
+   refused and is filed again), ``dispute`` (the merge check disputed it);
+   a verdict also ``note_check`` (the reviewer, asked about a ``minor`` note
+   of its review, said it names a blocking problem: the accept is a revise).
    A merge check run again after a dispute supersedes the whole earlier
    round (:func:`supersede_round`): every value and step that round gave,
    also the ones the new round does not give again.
@@ -60,7 +62,7 @@ class Step:
 
 #: Single values: value -> its final role, the reasons it may be judged again for, what it is.
 FINAL = {
-    'verdict': Final('reviewer', ('repair_round', 'refile', 'dispute'),
+    'verdict': Final('reviewer', ('repair_round', 'refile', 'dispute', 'note_check'),
                      'a proposed card: accept (its content is right) or revise'),
     'overlap.existing': Final('reviewer', ('repair_round', 'refile', 'dispute'),
                               'an accepted card against the vault cards (in a retry also the written cards): '
@@ -125,6 +127,8 @@ class Facts(Protocol):
 
     def refiled(self, obj: str, earlier_slot: str, slot: str) -> bool: ...
 
+    def checked(self, obj: str, earlier_slot: str, slot: str) -> bool: ...
+
 
 class NoFacts:
     """Facts of nothing: no reason can be shown (a record built without the job behind it)."""
@@ -133,6 +137,9 @@ class NoFacts:
         return False
 
     def refiled(self, obj, earlier_slot, slot):
+        return False
+
+    def checked(self, obj, earlier_slot, slot):
         return False
 
 
@@ -203,6 +210,8 @@ def _proved(entries: list, reason: str, obj: str, earlier: dict, slot: str, fact
         return facts.reappears(obj, earlier['slot'], slot)
     if reason == 'refile':
         return facts.refiled(obj, earlier['slot'], slot)
+    if reason == 'note_check':  # the check of the notes of the review that gave the entry asked about this card
+        return facts.checked(obj, earlier['slot'], slot)
     if reason == 'dispute':  # the merge check disputed this card after the entry it supersedes
         return any(e['kind'] == 'value' and e['value'] == 'dispute' and e['object'] == obj and e['n'] > earlier['n']
                    for e in entries)

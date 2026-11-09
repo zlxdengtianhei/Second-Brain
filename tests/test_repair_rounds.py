@@ -31,7 +31,7 @@ ROUNDS = ReviewPolicy().max_repair_rounds
 #: role name -> its budget of content repair rounds (``max_repair_rounds``, or none: it is never sent back to answer
 #: again with a reason; a dispute's judgement again is itself one of the merge check's rounds)
 REPAIRS = {'chunk producer': ROUNDS, 'chunk reviewer': ROUNDS, 'merge check': ROUNDS, 'split producer': ROUNDS,
-           'split reviewer': ROUNDS, 'dispute re-judge': 0, 'context note': 0, 'diagram': 0}
+           'split reviewer': ROUNDS, 'dispute re-judge': 0, 'context note': 0, 'diagram': 0, 'note check': 0}
 
 
 def test_every_role_has_its_repair_budget_in_the_role_table():

@@ -47,6 +47,9 @@ def disputes_lantern_queue(packet):
 
 #: lantern-queue (a concept card, which gets a diagram) written as a card of its own
 DISTINCT = {k: v for k, v in LEVELS.items() if k != 'lantern-queue'}
+#: lit-marker-cost accepted with a minor note whose words may name a blocking problem: its note is checked
+NOTED = {**LEVELS, 'lit-marker-cost': {'overlap': 'distinct',
+                                       'notes': [{'category': 'minor', 'text': '没写明一个标记占几个字'}]}}
 
 #: role name -> (job fields, chunk reviewer's levels, the merge check's answer, which of the role's slots answer badly)
 SCENARIOS = {
@@ -54,6 +57,7 @@ SCENARIOS = {
     'chunk reviewer': ({}, LEVELS, None, lambda slot: ingest._base(slot) == 'c01'),
     'merge check': ({}, LEVELS, None, None),
     'dispute re-judge': ({}, LEVELS, disputes_lantern_queue, None),
+    'note check': ({}, NOTED, None, None),
     'split producer': ({'n_props': 11}, LEVELS, None, None),
     'split reviewer': ({'n_props': 11}, LEVELS, None, None),
     'context note': ({'context_note': 'summary'}, LEVELS, None, None),
@@ -64,7 +68,8 @@ SCENARIOS = {
 def test_every_role_that_asks_a_model_is_in_this_test():
     assert sorted(SCENARIOS) == sorted(r.name for r in ingest.ANSWER_ROLES)
     for slot, role in (('c01', 'producer'), ('c01.r1', 'reviewer'), ('xc01.r1', 'reviewer'), ('xr1-a-b', 'reviewer'),
-                       ('sp01.r1', 'producer'), ('sp02', 'reviewer'), ('nt-concepts', 'producer'), ('dg01.r1', 'producer')):
+                       ('sp01.r1', 'producer'), ('sp02', 'reviewer'), ('nt-concepts', 'producer'),
+                       ('dg01.r1', 'producer'), ('nc-c01.r1', 'reviewer')):
         assert ingest.answer_role(slot, role) in ingest.ANSWER_ROLES  # one role per slot and executor role
     with pytest.raises(ingest.IngestError):
         ingest.answer_role('dg01', 'reviewer')
