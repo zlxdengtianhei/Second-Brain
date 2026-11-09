@@ -81,10 +81,11 @@ FINAL = {
                         'checks in the last answer the merge check may give: it is written as a card of its own, '
                         'marked as a possible repeat, and the problems'),
     'outcome.program': Final('program', (),
-                             'where the program sends a card its levels would put elsewhere: a card of the patch set '
-                             'written next to its existing card (the job does not merge, the card cannot take a '
-                             'patch, the merge check was given up, its patch was held), or left out because the '
-                             'existing card says all of it; the reason'),
+                             'what became of a card that goes into another (of the patch set, or of the source and '
+                             'too large to merge): patched, split, written next to its existing card (the job does '
+                             'not merge, the card cannot take a patch, the merge check was given up, its patch was '
+                             'held), left out because the existing card says all of it, or pending for the owner; '
+                             'the outcome and the reason'),
     'overlap.split': Final('split_reviewer', ('repair_round',), 'a split card against its existing card'),
     'split.verdict': Final('split_reviewer', ('repair_round',), 'a split card: accept or revise'),
 }

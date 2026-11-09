@@ -313,7 +313,7 @@ sb ingest <file> --domain <slug> --pillar "<pillar>"   # 把卡片放到这里�
 
 | 字段 | 内容 |
 |---|---|
-| `outcomes` | 每张接受的卡的结局：`write`、`patch`、`drop`、`merge_carry` 或 `merge`；写在已有卡旁边的卡是 `write`，已有卡全都说过的卡是 `drop`，与 `patch_set` 一致 |
+| `outcomes` | 每张接受的卡的结局：`write`、`patch`、`drop`、`merge_carry`、`merge` 或 `pending`；写在已有卡旁边的卡是 `write`，已有卡全都说过的卡是 `drop`，等你处理的卡是 `pending`。并进别的卡的每张卡，程序都把它的去处记进决定记录（`outcome.program`，附理由），`outcomes`、`patch_set`、`merge_set` 和 `pending` 都从这份记录读出，所以总是一致 |
 | `decision_record` | 任务的每个值，附给出它的角色、槽位和运行 |
 | `duplicates` | 已有卡片已经含有的卡和段落，附 `with` 和 `by`（`reviewer` 或 `producer`） |
 | `merged_into_existing` | 接受了补丁的每张已有卡：补进它的卡、新命题的编号、被替换的命题与问答（`replaced`，以及带替换前后原文的 `replacements`）、新问答的组数、移过来的关系，以及合并核对的 `already` 行 |

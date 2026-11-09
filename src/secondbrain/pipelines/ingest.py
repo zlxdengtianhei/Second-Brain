@@ -2843,14 +2843,15 @@ def _apply_job(root: Path, job_id: str, settled: list[dict] | None = None) -> di
     snapshot = read_snapshot(root)
     writable_snapshot(snapshot)
     fates = _repeat_fates(root, state, packet, settled, check, snapshot)
-    # a card of the patch set written next to its existing card (the merge check was skipped, its patch was held,
-    # the job does not merge, or the card cannot take a patch) is a written card: the outcome says so, as patch_set
-    outcomes = {**outcomes, **{s: 'write' for s, f in fates.items() if f['how'] == 'written'}}
-    outcomes = {**outcomes, **{s: 'drop' for s, f in fates.items() if f['how'] == 'covered'}}  # its card holds it
-    for s, f in sorted(fates.items()):  # and the record says so, so the two never differ
-        if f['how'] in ('written', 'covered'):
-            decisions.record(entries, 'outcome.program', s, {'outcome': outcomes[s], 'reason': f['reason']},
-                             role='program', slot='write')
+    # every fate of a card of the patch set (or of a card of the source too large to merge) goes into the decision
+    # record, with why; the outcomes, patch_set, merge_set and the pending list are read back from there, so they
+    # never differ (a card written next to its existing card: write; one its card already holds: drop; one waiting
+    # for the owner: pending)
+    for s, f in sorted(fates.items()):
+        decisions.record(entries, 'outcome.program', s, _fate_record(f, outcomes[s]), role='program', slot='write')
+    ran = bool(check) and check.get('status') == 'checked'
+    outcomes = {**outcomes, **{s: overlap.outcome(entries, s, checked=ran)['outcome'] for s in fates}}
+    recorded_fates = {s: e['data'] for s, e in decisions.values(entries, 'outcome.program').items() if s in fates}
     accepted = [(o['chunk'], s, _final_card(entries, s, c)) for o in settled for s, c in o['accepted'].items()]
     accepted += [(o['chunk'], s, {**_final_card(entries, s, c), '_not_merged': fates[s]['reason']})
                  for o in settled for s, c in o.get('repeats', {}).items() if fates[s]['how'] == 'written']
@@ -2859,8 +2860,8 @@ def _apply_job(root: Path, job_id: str, settled: list[dict] | None = None) -> di
                  for s, f in fates.items() if f['how'] == 'split']
     pending = [p for o in settled for p in o['pending']]
     held = {x: c for o in settled for x, c in [*o.get('repeats', {}).items(), *o.get('split_merges', {}).items()]}
-    pending += [{'slug': s, 'title': held[s]['title'], 'chunk': f['chunk'], 'reason': f['reason']}
-                for s, f in fates.items() if f['how'] == 'pending']
+    pending += [{'slug': s, 'title': held[s]['title'], 'chunk': r['chunk'], 'reason': r.get('reason')}
+                for s, r in sorted(recorded_fates.items()) if r['how'] == 'pending']
     # a link to a card that went into its existing card goes there; to one rewritten as a split card, to that card
     into_existing = {s: f['target'] for s, f in fates.items() if f['how'] in ('patched', 'covered')}  # links to it go there
     alias = {s: f['card']['slug'] for s, f in fates.items() if f['how'] == 'split'}
@@ -3298,8 +3299,8 @@ def _apply_job(root: Path, job_id: str, settled: list[dict] | None = None) -> di
               'replacements_not_made': replacements_not_made,
               'split': [{'slug': f['card']['slug'], 'id': ids.get(f['card']['slug']), 'from': s, 'of': ids.get(f['target'], f['target']),
                          'slot': f['slot']} for s, f in fates.items() if f['how'] == 'split'],
-              'patch_set': {s: f['how'] for s, f in fates.items() if not f.get('of_source')},
-              'merge_set': {s: f['how'] for s, f in fates.items() if f.get('of_source')},
+              'patch_set': {s: r['how'] for s, r in recorded_fates.items() if not r.get('of_source')},
+              'merge_set': {s: r['how'] for s, r in recorded_fates.items() if r.get('of_source')},
               # D-20: the merge check's last answer, kept patch by patch: the cards that took it, the ones held
               'patches_held': [{'target': t, 'cards': h['cards'], 'problems': h['problems']}
                                for t, h in sorted(((check or {}).get('held') or {}).items())]
@@ -3394,6 +3395,19 @@ def _repeat_fates(root: Path, state: dict, packet: dict, settled: list[dict], ch
                 fate.update(how='pending', reason=done['pending'] or 'its split card is not finished')
             out[slug] = fate
     return out
+
+
+#: The outcome a fate of :func:`_repeat_fates` records: written next to its existing card, held by it already, or
+#: waiting for the owner; a card patched or split keeps the outcome its levels give.
+FATE_OUTCOMES = {'written': 'write', 'covered': 'drop', 'pending': 'pending'}
+
+
+def _fate_record(fate: dict, levels_say: str) -> dict:
+    """The ``outcome.program`` value of one fate: the outcome (``levels_say`` unless :data:`FATE_OUTCOMES` names
+    another), what became of the card (``how``), its existing card or card of the source, its chunk, and why."""
+    return {'outcome': FATE_OUTCOMES.get(fate['how'], levels_say), 'how': fate['how'], 'target': fate['target'],
+            'chunk': fate['chunk'], **({'of_source': True} if fate.get('of_source') else {}),
+            **({'reason': fate['reason']} if fate.get('reason') else {})}
 
 
 def _final_card(entries: list, slug: str, card: dict) -> dict:

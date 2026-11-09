@@ -313,7 +313,7 @@ Besides `produced`, `pending`, `needs_taxonomy`, `out_of_scope`, `new_topics`, `
 
 | Field | Holds |
 |---|---|
-| `outcomes` | the outcome of each accepted card: `write`, `patch`, `drop`, `merge_carry` or `merge`; a card written next to its existing card has `write`, one its existing card already covers has `drop`, as `patch_set` says |
+| `outcomes` | the outcome of each accepted card: `write`, `patch`, `drop`, `merge_carry`, `merge` or `pending`; a card written next to its existing card has `write`, one its existing card already covers has `drop`, one that waits for you has `pending`. The program records what became of each card that goes into another (`outcome.program` in the decision record, with the reason), and `outcomes`, `patch_set`, `merge_set` and `pending` are read from that record, so they always agree |
 | `decision_record` | every value of the job, with the role, slot and run that gave it |
 | `duplicates` | the cards and passages that existing cards hold already, with `with` and `by` (`reviewer` or `producer`) |
 | `merged_into_existing` | each existing card that took a patch: the cards that went into it, the new proposition numbers, the replaced propositions and review cards (`replaced`, and `replacements` with the words before and after), the number of new review cards, the moved relations and the merge check's `already` rows |

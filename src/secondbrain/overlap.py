@@ -90,7 +90,9 @@ class KnownIds(frozenset):
 #: What becomes of an accepted card, by the comparison and its level. Against the vault: ``decide`` sends the
 #: card to the merge check's decision set, ``patch`` to the patch set of its existing card, ``drop`` removes
 #: it (not written; listed under ``duplicates``). Against the source: ``write``, ``merge_carry`` (its carried
-#: propositions and review cards go to the card in ``with``), ``merge`` (nothing carried).
+#: propositions and review cards go to the card in ``with``), ``merge`` (nothing carried). The program records the
+#: fate of a card that goes into another (``outcome.program``), which may be ``write``, ``drop`` or ``pending`` (it
+#: waits for the owner: a dispute not settled, a judgement again that kept failing the checks, a split card not done).
 OUTCOMES = {
     ('existing', 'distinct'): 'decide', ('existing', 'extends'): 'patch', ('existing', 'same'): 'drop',
     ('source', 'distinct'): 'write', ('source', 'extends'): 'merge_carry', ('source', 'same'): 'merge',

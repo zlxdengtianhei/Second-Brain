@@ -28,7 +28,7 @@ def check(p):
                     **{'filler-note': {'overlap': 'same', 'with': ['queue-order'], 'reason': 'the same point'}})
 
 
-@pytest.mark.parametrize('again, lantern', [('same', 'drop'), ('distinct', 'write'), ('broken', 'patch')])
+@pytest.mark.parametrize('again, lantern', [('same', 'drop'), ('distinct', 'write'), ('broken', 'pending')])
 def test_a_round_after_a_dispute_keeps_the_merge_of_round_0_and_the_record_agrees(tmp_path, again, lantern):
     root, job_id, _ = job(tmp_path)
 
