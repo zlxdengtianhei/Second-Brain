@@ -354,7 +354,9 @@ def _record_fault(state: dict, run: dict, fault: dict) -> str:
            'at': now()}
     run['program_error'] = row
     state['program_errors'] = list(state.get('program_errors') or []) + [row]
-    return (f'the program failed while checking this answer ({fault["type"]}: {fault["message"]}); this is an error '
+    when = 'checking this answer' if fault.get('stage') in (None, *RECEIVE_STEPS) else \
+        'reading this answer after it was taken'
+    return (f'the program failed while {when} ({fault["type"]}: {fault["message"]}); this is an error '
             'of the program, not of the answer, and it is listed for the owner; the answer is counted as refused')
 
 
@@ -683,6 +685,39 @@ def _refuse_received(root: Path, job_id: str, run_id: str, exc: BaseException, s
         exc.error = {'code': 'INVALID_OUTPUT', 'message': message[:4000], 'retryable': True, 'counted': True}
         raise exc
     raise Refused(message, given_up=given_up, fault=fault) from exc
+
+
+#: Where the program reads an answer after it was taken (:func:`set_aside`): a chunk's outcome, the packet of its
+#: review.
+AFTER_STEPS = ('outcome', 'review_packet')
+
+
+def set_aside(root: Path, job_id: str, chunk: str, role: str, exc: BaseException, *, stage: str) -> bool:
+    """The same gate as :func:`receive`, for an answer the program fails to read after it was taken (``stage``, one of
+    :data:`AFTER_STEPS`; ``exc`` one of :data:`schemas.SHAPE_SLIPS`, a value of a shape the reader did not expect,
+    while a check that stops the job on purpose, the independence of a review say, still stops it): the slot ``chunk``
+    no longer holds ``role``'s answer (a producer's answer takes its review
+    with it), the answer's run is failed, the fault is kept for the owner (``program_errors``), and the answer is
+    counted against the slot's budget, so the step is asked again until the budget is spent. False when the slot
+    holds no answer of ``role`` (nothing to set aside: the caller raises ``exc``)."""
+    with vault_lock(root):
+        state = load(root, job_id)
+        slot = ((state.get('chunks') or {}).get(chunk)) if chunk is not None else None
+        field = 'review' if role == 'reviewer' else 'candidate'
+        ref = (slot or {}).get(field) or {}
+        if not ref.get('run_id'):
+            return False
+        run = load_run(root, job_id, ref['run_id'])
+        message = _record_fault(state, run, {**fault_of(exc), 'stage': stage})
+        slot[field] = None
+        if role == 'producer':
+            slot['review'] = None
+        slot['status'] = 'proposed' if role == 'reviewer' else 'prepared'
+        run.update(status='failed', ended_at=now(), set_aside=stage, error={
+            'code': 'INVALID_OUTPUT', 'message': message[:4000], 'retryable': True, 'counted': True,
+            'program_error': run['program_error']})
+        _refused_answer(root, job_id, state, run, message)
+        return True
 
 
 def submit(root: Path, job_id: str, payload, *, role: str, run_id: str, model_reported: str | None = None,

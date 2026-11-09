@@ -2008,6 +2008,16 @@ def _accepted_so_far(root, state, base: str, upto_round: int) -> dict:
     return accepted
 
 
+def _set_aside_newest(root: Path, job_id: str, state: dict, base: str, exc: BaseException) -> bool:
+    """The outcome of chunk ``base`` met a value of a shape it did not expect (``exc``): set the chunk's newest answer
+    aside, counted (:func:`jobs.set_aside`); False when the chunk holds no answer."""
+    for slot, info in reversed(_slots(state, base)):
+        if info.get('candidate'):
+            role = 'reviewer' if info.get('review') else 'producer'
+            return jobs.set_aside(root, job_id, slot, role, exc, stage='outcome')
+    return False
+
+
 def chunk_outcome(root: Path, state: dict, packet: dict, base: str) -> dict:
     """Merge rounds of one chunk; ``next`` names the step still needed, if any."""
     slots = _slots(state, base)
@@ -2185,6 +2195,10 @@ def _step(root: Path, job_id: str, action: tuple, producer, reviewer) -> None:
                 _record_split(root, job_id, slot, str(exc))
                 return
             raise
+        except schemas.SHAPE_SLIPS as exc:  # the candidate taken earlier cannot be read for its review
+            if jobs.set_aside(root, job_id, slot, 'producer', exc, stage='review_packet'):
+                return
+            raise
         try:
             call_executor(root, job_id, reviewer, role='reviewer', step='review', prompt_text=text,
                           packet=shown, output_schema=schemas.REVIEW_CARDS, chunk=slot)
@@ -2285,7 +2299,12 @@ def _advance(root: Path, job_id: str, *, producer, reviewer, apply: bool = True)
             if not todo:
                 break
             base = todo[0]
-            out = chunk_outcome(root, state, packet, base)
+            try:
+                out = chunk_outcome(root, state, packet, base)
+            except schemas.SHAPE_SLIPS as exc:  # an answer taken earlier the program cannot read: the gate
+                if not _set_aside_newest(root, job_id, state, base, exc):
+                    raise
+                continue
             if out['settled'] or out['next'][1] in {h['chunk'] for h in handoffs}:  # one note serves many chunks
                 visited.add(base)
                 continue
@@ -2677,10 +2696,14 @@ def _split_stage(root: Path, job_id: str, packet: dict, settled: list[dict], pro
                 if feedback:
                     text += '\n## Your previous answer was rejected by the validator\n\n' + feedback + '\n'
                 try:
+                    body = {**shown, 'card': withhold_reasons(cand['card']), **_program_view(root, state, slot, cand)}
+                except schemas.SHAPE_SLIPS as exc:  # the split card taken earlier cannot be read for its review
+                    if jobs.set_aside(root, job_id, slot, 'producer', exc, stage='review_packet'):
+                        continue
+                    raise
+                try:
                     call_executor(root, job_id, reviewer, role='reviewer', step='review', prompt_text=text,
-                                  packet={**shown, 'card': withhold_reasons(cand['card']),
-                                          **_program_view(root, state, slot, cand)},
-                                  output_schema=split.REVIEW_SCHEMA, chunk=slot)
+                                  packet=body, output_schema=split.REVIEW_SCHEMA, chunk=slot)
                 except ExecutorFailure as failure:
                     _failed_answer(root, job_id, slot, 'reviewer', failure)
             else:
