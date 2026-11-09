@@ -77,7 +77,7 @@ MACROS = [
     "phi", "chi", "psi", "omega",
     "Gamma", "Delta", "Theta", "Lambda", "Sigma", "Phi", "Psi", "Omega",
     "sum", "prod", "int", "oint", "log", "ln", "exp", "max", "min",
-    "sin", "cos", "tan", "tanh", "sinh", "cosh", "sigmoid", "relu",
+    "sin", "cos", "tan", "tanh", "sinh", "cosh",
     "sqrt", "frac", "infty", "approx", "cdot", "times", "neq", "leq", "geq",
     "sim", "propto", "partial", "nabla", "mathbb", "text",
     # Symbol commands: as bare words they render as italic letters (`bullet` → b·u·l·l·e·t).
@@ -86,11 +86,18 @@ MACROS = [
     "emptyset", "forall", "exists", "equiv", "parallel", "perp",
     "langle", "rangle", "mapsto", "subseteq", "supseteq", "bigl", "bigr",
 ]
-# softmax, argmax and argmin are not MathJax commands: \softmax renders as a red
-# undefined control sequence, so they become \operatorname{}.
-OPERATORS = ["softmax", "argmax", "argmin"]
+# softmax, argmax, argmin, sigmoid and relu are not MathJax commands: \softmax renders as a
+# red undefined control sequence, so they become \operatorname{}.
+OPERATORS = ["softmax", "argmax", "argmin", "sigmoid", "relu"]
+# Names of relation and operator symbols that a text also uses as function names: `sim(q, d)`
+# is a similarity function, but `\sim(` renders the relation ∼ (and `\approx(` renders ≈). A
+# bare one directly followed by `(` is a function name and becomes \operatorname{}; `X \sim p`,
+# with its backslash or with no `(` right after, stays the symbol.
+SYMBOL_FUNCTIONS = ["sim", "approx", "equiv", "propto", "neq", "leq", "geq", "perp", "parallel",
+                    "circ", "bullet", "oplus", "otimes", "times", "cdot"]
 MACRO_RE = re.compile(r"(?<![\\A-Za-z])(" + "|".join(MACROS) + r")(?![A-Za-z])")
 OPERATOR_RE = re.compile(r"(?<![\\A-Za-z{])(" + "|".join(OPERATORS) + r")(?![A-Za-z}])")
+FUNCTION_RE = re.compile(r"(?<![\\A-Za-z{])(" + "|".join(SYMBOL_FUNCTIONS) + r")(?=\()")
 MACRO_WORDS = set(MACROS) | set(OPERATORS)
 
 # Identifier shapes (front matter fields, relation types, paths) are never math
@@ -253,6 +260,8 @@ def _latexify(expr: str) -> str:
     span a group still work: `\\sqrt(\\text{d}_k)` → `\\sqrt{\\text{d}_k}`.
     """
     as_tex = bool(WRITTEN_AS_TEX.search(expr))
+    # a symbol's name used as a function name (`sim(`) is a name argument too, hidden like the others
+    expr = FUNCTION_RE.sub(lambda m: "\\operatorname{" + m.group(1) + "}", expr)
     hidden: list[str] = []
     if not HIDDEN.search(expr):
         def hide(m: re.Match) -> str:
