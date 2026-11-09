@@ -49,8 +49,8 @@ CARD_SCHEMA = {
                        'reason': _NSTR}}}}
 REVIEW_SCHEMA = {
     'type': 'object', 'required': ['decision', 'restates', 'reason'],
-    'properties': {'decision': {'type': 'string', 'enum': ['accept', 'revise']},
-                   'restates': {'type': 'boolean'}, 'reason': _STR, 'notes': review_notes.NOTES,
+    'properties': {'question': _NSTR, 'decision': {'type': 'string', 'enum': ['accept', 'revise']},
+                   'restates': {'type': 'boolean'}, 'reason': _STR, 'notes': review_notes.CARD_NOTES,
                    # each proposition of the card, and the proposition of the existing card that says it (D-22)
                    'matches': {'type': 'array', 'items': {
                        'type': 'object', 'required': ['proposition', 'existing'],
@@ -136,7 +136,7 @@ def validate_review(payload, *, card: dict | None = None, existing: int | None =
         raise AnswerError('the review must be {"decision": "accept"|"revise", "restates": true|false, "reason": "..."}')
     if payload['decision'] == 'accept' and payload['restates']:
         raise AnswerError('a card that restates the propositions of the card it narrows is not accepted; revise it')
-    wrong = review_notes.problems(payload.get('notes'), 'review')
+    wrong = review_notes.problems(payload.get('notes'), 'review', review_notes.CARD_CATEGORIES)
     matched = []
     if card is not None:
         want = [f'P{i}' for i in range(1, len(card.get('propositions') or []) + 1)]

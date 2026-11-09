@@ -28,20 +28,23 @@ COVERAGE = ('card', 'same', 'out_of_scope', 'needs_taxonomy')
 RETIRED = ('keep', 'duplicate', 'needs_review', 'duplicate_of', 'overlap_with')
 
 _MEANING = {
-    'distinct': ('the card is about another object or another question: merged into the card in `with`, that card '
-                 'would no longer answer one question (it would stop being one unit). `with` may be empty or name '
-                 'related cards.'),
-    'extends': ('the card is about the same object or question as the one card in `with`, or one of its '
-                'sub-questions, and has details, examples, cases or the answer to a sub-question that card lacks; '
-                'merged into it, that card still answers one question. A card that only answers a narrower '
-                'sub-question of that card is `extends` too. `with` names exactly one card.'),
+    'distinct': ('the card answers another question than the cards in `with`, also when it is about the same '
+                 'things (which tools there are, and how to choose among them, are two questions): merged into the '
+                 'card in `with`, that card would no longer answer one question (it would stop being one unit). '
+                 '`with` may be empty or name related cards.'),
+    'extends': ('the card answers the same question as the one card in `with` (the question its title names), or one '
+                'of its sub-questions, and has details, examples, cases or the answer to a sub-question that card '
+                'lacks; merged into it, that card still answers one question, and every proposition it adds answers '
+                'that question. A card that only answers a narrower sub-question of that card is `extends` too. '
+                '`with` names exactly one card.'),
     'same': ('the card holds nothing that the cards in `with` do not hold; its knowledge may be spread over several '
              'of them. `with` names at least one card.'),
 }
 #: The line every judge of a repeat reads after the definition (design D-09): what is a unit of its own.
-UNIT_RULE = ('More examples, cases or sub-questions on the same object or question are not a unit of their own (they '
-             'are `extends`); only a card about another object or question, which would leave the other card no '
-             'longer answering one question if merged into it, is a unit of its own (`distinct`).')
+UNIT_RULE = ('More examples, cases or sub-questions on the same question are not a unit of their own (they are '
+             '`extends`); only a card that answers another question, which would leave the other card no longer '
+             'answering one question if merged into it, is a unit of its own (`distinct`), even when it is about the '
+             'same object.')
 
 
 def definition() -> str:

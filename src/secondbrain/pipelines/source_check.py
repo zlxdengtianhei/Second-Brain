@@ -103,7 +103,7 @@ SCHEMA = {
                            'with': _NSTR, 'reason': _NSTR}}},
         'patches': {'type': 'array', 'items': {
             'type': 'object', 'required': ['target'],
-            'properties': {'target': _STR,
+            'properties': {'target': _STR, 'question': _NSTR,
                            'propositions': {'type': 'array', 'items': _STR},
                            'flashcards': {'type': 'array', 'items': _FLASHCARD},
                            'replace': {'type': 'array', 'items': {
@@ -173,6 +173,7 @@ def frozen_input(settled: list[dict], source: dict, *, relation_views: dict,
                       'relations': relations, 'linked_from': sorted(linked_from.get(slug, [])),
                       'isolated': not relations and not linked_from.get(slug),
                       'candidates': list(candidates.get(slug) or []),
+                      **({'question': c['_question']} if c.get('_question') else {}),
                       **({'amended': c['_amended']} if c.get('_amended') else {}),
                       **({'review_notes': notes_of[slug]} if notes_of.get(slug) else {})})
     cards.sort(key=lambda c: (c['domain'], c['pillar'], c['topic'], c['chunk'], c['slug']))
@@ -187,7 +188,9 @@ def frozen_input(settled: list[dict], source: dict, *, relation_views: dict,
             target = c['_with']
             group = patch_set.setdefault(target, {'target': target, 'card': existing(target) if existing else None,
                                                   'from': []})
-            group['from'].append({'slug': slug, 'chunk': o['chunk'], 'title': c['title'], 'essence': c.get('essence'),
+            group['from'].append({'slug': slug, 'chunk': o['chunk'], 'title': c['title'],
+                                  **({'question': c['_question']} if c.get('_question') else {}),
+                                  'essence': c.get('essence'),
                                   'propositions': list(c.get('propositions') or []),
                                   'flashcards': [{'q': f.get('q'), 'a': f.get('a')}
                                                  for f in c.get('flashcards') or [] if isinstance(f, dict)]})

@@ -11,18 +11,40 @@ recorded for the owner.
 
 Every reviewer prompt that asks for notes takes the same definition (:func:`definition`, put in for
 :data:`PLACEHOLDER` by :func:`secondbrain.runner.prompt`).
+
+A reviewer of a card reads more (:func:`card_part`, for :data:`CARD_PLACEHOLDER`): a sixth kind, ``repeats`` (the
+card says one thing twice), which sends an accepted card back as the first four do; the card's one question
+(:mod:`secondbrain.unit`), written in the review row's ``question`` before each proposition and review card is
+checked against it; and that an example gives on the card the premises it uses. A reviewer of an article's
+paragraphs reads none of it: its notes keep the five kinds.
 """
 from __future__ import annotations
+
+from . import unit
 
 CATEGORIES = ('fact', 'unreadable', 'quote', 'not_a_unit', 'minor')
 #: The kinds that send an accepted item back; the same four a focused repair round may revise a card for.
 BLOCKING = CATEGORIES[:4]
+#: The kinds only a reviewer of a card writes; each sends an accepted card back.
+CARD_ONLY = ('repeats',)
+CARD_CATEGORIES = BLOCKING + CARD_ONLY + ('minor',)
+CARD_BLOCKING = BLOCKING + CARD_ONLY
 
-NOTE = {'type': 'object', 'required': ['category', 'text'],
-        'properties': {'category': {'type': 'string', 'enum': list(CATEGORIES)}, 'text': {'type': 'string'}}}
-NOTES = {'type': ['array', 'null'], 'items': NOTE}
+
+def _notes(categories) -> dict:
+    return {'type': ['array', 'null'], 'items': {
+        'type': 'object', 'required': ['category', 'text'],
+        'properties': {'category': {'type': 'string', 'enum': list(categories)}, 'text': {'type': 'string'}}}}
+
+
+NOTES = _notes(CATEGORIES)
+NOTE = NOTES['items']
+#: The notes of a reviewer of a card (a chunk's cards, a split card).
+CARD_NOTES = _notes(CARD_CATEGORIES)
 
 PLACEHOLDER = '<!-- notes.definition -->'
+#: Where a card reviewer's prompt takes :func:`card_part`, right after the definition.
+CARD_PLACEHOLDER = '<!-- notes.cards -->'
 
 #: The rule of D-18 4: in a replay of H4 reviewers noted a condition a proposition had dropped and called it minor,
 #: as the essence or a review card still had it; 8 of the 10 should have been sent back.
@@ -47,22 +69,48 @@ def definition() -> str:
     return _DEFINITION
 
 
-def problems(notes, where: str) -> list[str]:
-    """What is wrong with the notes of one item (``where`` names it): each needs a known kind and a text."""
+#: A card that says one thing twice. What an essence, an intuition or a confusion says again is left out: judges did
+#: not agree on it.
+REPEATS = ('- `repeats`: the card says one thing twice: two of its propositions, or two of its review cards, make the '
+           'same point in other words. An essence, an intuition or a confusion that says again what a proposition '
+           'says is not `repeats`.')
+#: The question a reviewer writes first, and checks every item against.
+QUESTION = ('Write that question in `question` first, in one sentence in the card\'s language, as a reader would ask '
+            'it. Then check each proposition (P1 is the first) and each review card (Q1 is the first) against it. '
+            'When some of them answer another question, revise, with a `not_a_unit` note that names them and the '
+            'question they answer: they are to be split off into a card of their own, or moved.')
+#: An example needs its premises on the card.
+PREMISES = ('Readable without the source: an example or a worked calculation gives, on the card, the premises it uses '
+            '(the rule, the coordinates, the code book, the input values); one that relies on premises only the source '
+            'gives is `unreadable`.')
+
+
+def card_part() -> str:
+    """What a reviewer of a card reads after :func:`definition`: the kind only a card has, its one question, and the
+    premises of its examples."""
+    return '\n'.join([
+        'On a card, one more kind of note:', REPEATS,
+        'A `repeats` note is a reason to revise as well: when you accept with one, the card is sent back.', '',
+        unit.definition(), QUESTION, '', PREMISES])
+
+
+def problems(notes, where: str, categories=CATEGORIES) -> list[str]:
+    """What is wrong with the notes of one item (``where`` names it): each needs a known kind (of ``categories``: a
+    card's reviewer has :data:`CARD_CATEGORIES`) and a text."""
     out = []
     for i, note in enumerate(notes or []):
         if not isinstance(note, dict):
             continue  # the shape check names it
-        if note.get('category') not in CATEGORIES:
-            out.append(f'{where}.notes[{i}].category must be one of {", ".join(CATEGORIES)}')
+        if note.get('category') not in categories:
+            out.append(f'{where}.notes[{i}].category must be one of {", ".join(categories)}')
         if not isinstance(note.get('text'), str) or not note['text'].strip():
             out.append(f'{where}.notes[{i}].text must say what is wrong and where')
     return out
 
 
 def blocking_note(notes) -> dict | None:
-    """The first note of a blocking kind, if any."""
-    return next((n for n in notes or [] if isinstance(n, dict) and n.get('category') in BLOCKING), None)
+    """The first note of a blocking kind, if any (a card's ``repeats`` too: notes of other items cannot have it)."""
+    return next((n for n in notes or [] if isinstance(n, dict) and n.get('category') in CARD_BLOCKING), None)
 
 
 def turned(row: dict) -> dict:

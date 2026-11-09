@@ -1397,7 +1397,7 @@ def validate_review(candidate: dict, review: dict, existing_ids: set, domains=()
                                   'and ask for the link')
         # a revised card's level is not read: it is judged again once the card is right
         errors += _conflict_errors(row['slug'], row.get('conflicts'), existing_ids)
-        errors += review_notes.problems(row.get('notes'), row['slug'])
+        errors += review_notes.problems(row.get('notes'), row['slug'], review_notes.CARD_CATEGORIES)
     if sorted(seen) != sorted(slugs):
         errors.append('the review must judge every candidate card exactly once')
     keys = [(t.get('domain'), t.get('pillar'), t.get('name')) for t in candidate.get('new_topics', [])]
@@ -1925,6 +1925,13 @@ def record_decisions(packet: dict, payload: dict, *, role: str, candidate, root,
                          reason=_again(entries, 'topic.verdict', key, chunk, facts), facts=facts)
 
 
+def _question_of(row: dict) -> dict:
+    """The question a reviewer found an accepted card answers (``_question``, shown to the merge check), when it
+    wrote one."""
+    q = row.get('question')
+    return {'_question': q.strip()} if isinstance(q, str) and q.strip() else {}
+
+
 def _routed(state: dict, settled: list[dict]) -> list[dict]:
     """The settled chunks with each accepted card sent where the chunk reviewer's level against the vault puts it.
 
@@ -2091,7 +2098,8 @@ def chunk_outcome(root: Path, state: dict, packet: dict, base: str) -> dict:
             if d['decision'] == 'accept':  # whether it is written is the outcome of its level (secondbrain.overlap)
                 accepted[c['slug']] = {**amends.apply(c, d.get('amend')), '_slot': slot,
                                        **({'_amend': d['amend'], '_amended': amends.changes(c, d['amend'])}
-                                          if d.get('amend') else {})}
+                                          if d.get('amend') else {}),
+                                       **_question_of(d)}
                 held.discard(c['slug'])
                 if _held_by(d) is not None:  # not written: its taxonomy place does not matter
                     held.add(c['slug'])

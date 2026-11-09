@@ -106,8 +106,8 @@ def _amend_schema() -> dict:
 
 
 #: The problems a focused repair-round review sends a card back for, beyond an earlier finding not fixed; the same
-#: four kinds of a reviewer's note send an accepted card back (secondbrain.review_notes, decision D-18 3).
-BLOCKING = review_notes.BLOCKING
+#: kinds of a card reviewer's note send an accepted card back (secondbrain.review_notes, decision D-18 3).
+BLOCKING = review_notes.CARD_BLOCKING
 AMEND = _amend_schema()
 
 REVIEW_CARDS = {
@@ -115,10 +115,11 @@ REVIEW_CARDS = {
     'properties': {
         'cards': {'type': 'array', 'items': {
             'type': 'object', 'required': ['slug', 'decision', 'reason'],
-            'properties': {'slug': _STR, 'decision': _DECISION, 'suggested_domain': _NSTR, 'reason': _STR,
+            'properties': {'slug': _STR, 'question': _NSTR, 'decision': _DECISION, 'suggested_domain': _NSTR,
+                           'reason': _STR,
                            'overlap': {'type': ['string', 'null'], 'enum': [*_LEVELS, None]},
                            'with': {'type': ['array', 'null'], 'items': _STR}, 'conflicts': _CONFLICTS,
-                           'amend': AMEND, 'notes': review_notes.NOTES,
+                           'amend': AMEND, 'notes': review_notes.CARD_NOTES,
                            'fixed': {'type': ['array', 'null'], 'items': {
                                'type': 'object', 'required': ['finding', 'fixed'],
                                'properties': {'finding': _STR, 'fixed': {'type': 'boolean'}}}},

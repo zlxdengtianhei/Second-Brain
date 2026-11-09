@@ -9,6 +9,8 @@ Write one card, in `card`:
 - `source_quotes`: passages copied character for character from `chunk.text`; the first one locates the card in the source.
 - `propositions`: 1–12; `flashcards`: 2–4 `{q, a}` pairs without `::`; `slug`: a new slug for this source; `kind`, `essence` and, when the chunk supports them, `intuition` and `confusions` as for any card. Refer to other cards only by `[[Title]]`.
 
+<!-- unit.definition -->
+
 When `previous_candidate` and `review_findings` are present, an independent review rejected your previous card; fix what it names.
 
 `context_note`, when present, is the program's note on where the chunk sits in the source: the headings it is under, the end of the chunk before, the source's outline (in some runs a short summary of what came before, or the source's concepts by chunk). Use it only to understand `chunk.text`, for instance what "the three kinds above" are: it is not part of the chunk, so do not quote it, do not write cards from it, and it covers no passage.
