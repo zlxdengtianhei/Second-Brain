@@ -36,6 +36,22 @@ STATUSES = ('confirmed', 'needs-review')
 #: Characters that break Obsidian file names or wiki links.
 TITLE_FORBIDDEN = set('/\\:*?"<>|#^[]')
 MAX_TITLE = 120
+#: The longest title in UTF-8 bytes. A card's file is ``{title}.md``, and a file name holds 255 bytes on the common
+#: file systems; what is left is room for the extension and for a suffix a sync tool or a rename may add. A Chinese or
+#: Japanese character takes 3 bytes, so such a title holds 66 of them.
+MAX_TITLE_BYTES = 200
+
+
+def title_length_problem(title: str) -> str | None:
+    """Why ``title`` is too long for a card's file name, or None: more than :data:`MAX_TITLE` characters, or more
+    than :data:`MAX_TITLE_BYTES` bytes in UTF-8."""
+    if len(title) > MAX_TITLE:
+        return f'title is longer than {MAX_TITLE} characters'
+    size = len(title.encode('utf-8'))
+    if size > MAX_TITLE_BYTES:
+        return (f'title takes {size} bytes as a file name (UTF-8), more than {MAX_TITLE_BYTES}: shorten it '
+                f'(at most {MAX_TITLE_BYTES // 3} Chinese or Japanese characters)')
+    return None
 
 
 def title_problem(title: object) -> str | None:
@@ -46,8 +62,9 @@ def title_problem(title: object) -> str | None:
         return 'title has leading or trailing spaces'
     if '\n' in title or '\r' in title or '\t' in title:
         return 'title contains a line break or tab'
-    if len(title) > MAX_TITLE:
-        return f'title is longer than {MAX_TITLE} characters'
+    too_long = title_length_problem(title)
+    if too_long:
+        return too_long
     bad = sorted(set(title) & TITLE_FORBIDDEN)
     if bad:
         return f'title contains characters not allowed in file names or links: {"".join(bad)}'

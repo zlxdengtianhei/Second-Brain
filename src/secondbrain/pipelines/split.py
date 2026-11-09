@@ -19,7 +19,7 @@ from __future__ import annotations
 import re
 
 from .. import decisions, review_notes
-from ..cards import KINDS
+from ..cards import KINDS, title_length_problem
 from ..evidence import check_verbatim
 from ..schemas import AnswerError, shape_checked
 from ..textnorm import near_same, same_text
@@ -91,6 +91,9 @@ def validate_card(item: dict, payload, *, text: str, taken: set, catalog_types, 
     for key in ('title', 'essence'):
         if not isinstance(card.get(key), str) or not card[key].strip():
             errors.append(f'card.{key} must be a non-empty string')
+    too_long = title_length_problem(card['title']) if isinstance(card.get('title'), str) else None
+    if too_long:  # the split card is written as a file named after its title
+        errors.append(f'card.{too_long}')
     if card.get('kind') not in KINDS:
         errors.append(f'card.kind must be one of {", ".join(KINDS)}')
     quotes = card.get('source_quotes')
