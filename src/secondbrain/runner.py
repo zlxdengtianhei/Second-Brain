@@ -264,8 +264,9 @@ def _run_locked(root: Path, job_id: str, *, producer: Executor, reviewer: Execut
     if state.get('commit_intent') and not apply:
         # Proposal mode must not resume an interrupted knowledge transaction.
         return state
-    if jobs.resume_transaction(root, job_id) is not None or \
-            state['status'] in {'applied', 'partial', 'published', 'superseded'}:
+    with jobs.reading('resume'):  # a write under way: no one answer to blame
+        resumed = jobs.resume_transaction(root, job_id)
+    if resumed is not None or state['status'] in {'applied', 'partial', 'published', 'superseded'}:
         if state.get('repair_child'):
             run_job(root, state['repair_child'], producer=producer, reviewer=reviewer, apply=apply)
         return jobs.load(root, job_id)

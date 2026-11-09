@@ -2292,7 +2292,8 @@ def _advance(root: Path, job_id: str, *, producer, reviewer, apply: bool = True)
         if state.get('commit_intent'):
             if not apply:
                 return state
-            return jobs.resume_transaction(root, job_id) or jobs.load(root, job_id)
+            with jobs.reading('resume'):  # a write under way: no one answer to blame
+                return jobs.resume_transaction(root, job_id) or jobs.load(root, job_id)
         if state['status'] in {'applied', 'partial', 'published', 'rolled_back', 'failed'}:
             return state
         packet = jobs.read_input(root, job_id)
@@ -3683,9 +3684,12 @@ def _maybe_commit(root: Path, job_id: str, state: dict) -> dict:
 # Host mode: explicit packet for one role/chunk
 # --------------------------------------------------------------------------
 def packet_for(root: Path, job_id: str, *, role: str, chunk: str | None, executor) -> dict:
-    """Create the next run for ``role`` (optionally a specific chunk) via ``executor``."""
-    with _frozen_run(root, jobs.read_input(root, job_id)):
-        return _packet_for(root, job_id, role=role, chunk=chunk, executor=executor)
+    """Create the next run for ``role`` (optionally a specific chunk) via ``executor``. It reads the answers the job
+    took as ``advance`` does, behind the same guard (:func:`secondbrain.jobs.guarded`)."""
+    def once():
+        with _frozen_run(root, jobs.read_input(root, job_id)):
+            return _packet_for(root, job_id, role=role, chunk=chunk, executor=executor)
+    return jobs.guarded(root, job_id, once)
 
 
 def _packet_for(root: Path, job_id: str, *, role: str, chunk: str | None, executor) -> dict:
@@ -3694,7 +3698,8 @@ def _packet_for(root: Path, job_id: str, *, role: str, chunk: str | None, execut
         state = jobs.load(root, job_id)
         packet = jobs.read_input(root, job_id)
         for c in effective_chunks(packet, state):
-            out = chunk_outcome(root, state, packet, c['chunk_id'])
+            with jobs.reading('outcome', _newest(c['chunk_id'])):
+                out = chunk_outcome(root, state, packet, c['chunk_id'])
             if out['settled'] or out['next'] is None:
                 continue
             if chunk and _base(chunk) != c['chunk_id'] and out['next'][1] != chunk:
@@ -3710,20 +3715,30 @@ def _packet_for(root: Path, job_id: str, *, role: str, chunk: str | None, execut
                 raise ValueError(f'{c["chunk_id"]} was split in halves (its named cards are too many for one '
                                  'reviewer packet); ask for the producer packets of its halves')
             raise ValueError('The executor finished the step directly; use `sb job advance` instead')
-        settled = [chunk_outcome(root, state, packet, c['chunk_id']) for c in effective_chunks(packet, state)]
+        settled = []
+        for c in effective_chunks(packet, state):
+            with jobs.reading('outcome', _newest(c['chunk_id'])):
+                settled.append(chunk_outcome(root, state, packet, c['chunk_id']))
         if role == 'reviewer' and all(o['settled'] for o in settled) and (
                 not chunk or source_check.is_slot(chunk) or _is_rejudge(chunk) or split.is_slot(chunk)):
-            handoffs = _source_check_stage(root, job_id, packet, settled, executor) or \
-                _split_stage(root, job_id, packet, settled, executor, executor, role='reviewer')
+            with jobs.reading('merge_check'):
+                handoffs = _source_check_stage(root, job_id, packet, settled, executor)
+            if not handoffs:
+                with jobs.reading('split'):
+                    handoffs = _split_stage(root, job_id, packet, settled, executor, executor, role='reviewer')
             if handoffs:
                 return handoffs[0]
         if role == 'producer' and all(o['settled'] for o in settled) and (not chunk or split.is_slot(chunk)):
-            handoffs = _split_stage(root, job_id, packet, settled, executor, executor, role='producer', only=chunk)
+            with jobs.reading('split'):
+                handoffs = _split_stage(root, job_id, packet, settled, executor, executor, role='producer',
+                                        only=chunk)
             if handoffs:
                 return handoffs[0]
         if role == 'producer' and all(o['settled'] for o in settled) and (not chunk or card_diagrams.is_slot(chunk)):
-            checked, _ = _checked(root, jobs.load(root, job_id), packet, settled)
-            _, handoffs = _diagram_stage(root, job_id, packet, checked, executor, only=chunk)
+            with jobs.reading('checked'):
+                checked, _ = _checked(root, jobs.load(root, job_id), packet, settled)
+            with jobs.reading('diagrams'):
+                _, handoffs = _diagram_stage(root, job_id, packet, checked, executor, only=chunk)
             if handoffs:
                 return handoffs[0]
         raise ValueError(f'No {role} step is due' + (f' for {chunk}' if chunk else ''))

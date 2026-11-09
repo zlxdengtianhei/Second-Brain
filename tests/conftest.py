@@ -15,6 +15,7 @@ def secondbrain_state_tmp(monkeypatch, tmp_path):
     monkeypatch.setenv("SECONDBRAIN_STATE_DIR", str(state))
     monkeypatch.setenv("SECONDBRAIN_CONFIG", str(tmp_path.parent / f"{tmp_path.name}-no-config.toml"))
     monkeypatch.setenv("SECONDBRAIN_LOCK_WAIT", "2")
+    monkeypatch.setenv("SECONDBRAIN_STRICT_MARKS", "1")  # a mark of the guard reached outside it fails the test
     monkeypatch.delenv("SECONDBRAIN_VAULT", raising=False)
     config.activate(None)
     layout.unregister_all()

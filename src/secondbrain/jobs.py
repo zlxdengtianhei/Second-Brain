@@ -15,11 +15,12 @@ the vault. Knowledge files stay in the real vault and are written only through
 """
 from __future__ import annotations
 
-import contextlib
+import contextvars
 import importlib
 import json
 import os
 import re
+import sys
 import uuid
 from base64 import b64decode, b64encode
 from dataclasses import fields
@@ -703,17 +704,37 @@ def _mark(exc: BaseException, where) -> BaseException:
     return exc
 
 
-@contextlib.contextmanager
-def reading(stage: str, aside=None):
+#: Whether the code running now is inside :func:`guarded` (a mark outside it has no guard to take its errors).
+_GUARDED = contextvars.ContextVar('secondbrain_guarded', default=False)
+
+
+class MarkOutsideGuard(RuntimeError):
+    """A :func:`reading` mark was reached outside :func:`guarded` while ``SECONDBRAIN_STRICT_MARKS`` is set (the
+    tests set it): every way into code that reads taken answers must go through the guard."""
+
+
+class reading:
     """Mark code of an ``advance`` that reads answers the job took. It catches nothing: an error that passes the
     mark (the innermost one) is the guard's (:func:`guarded`). ``aside`` names the answer to set aside for it,
     ``(slot, role)`` (``slot`` None for the job's own), or a function of the job state that returns that or None;
-    without one the job is parked."""
-    try:
-        yield
-    except Exception as exc:
-        _mark(exc, (stage, aside))
-        raise
+    without one the job is parked. A mark has effect only inside the guard; reached outside it, the mark leaves an
+    error to its caller as plain code would, and with ``SECONDBRAIN_STRICT_MARKS`` set it raises
+    :class:`MarkOutsideGuard` at once. ``at`` is where the mark stands (file and line), for the tests' count of the
+    marks a flow reached."""
+
+    def __init__(self, stage: str, aside=None):
+        caller = sys._getframe(1)
+        self.stage, self.aside, self.at = stage, aside, (caller.f_code.co_filename, caller.f_lineno)
+        if not _GUARDED.get() and os.environ.get('SECONDBRAIN_STRICT_MARKS'):
+            raise MarkOutsideGuard(f'the mark {stage!r} at {self.at[0]}:{self.at[1]} was reached outside the guard')
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, kind, exc, tb):
+        if isinstance(exc, Exception):
+            _mark(exc, (self.stage, self.aside, self.at))
+        return False
 
 
 def from_model_call(exc: BaseException) -> BaseException:
@@ -729,36 +750,52 @@ def guarded(root: Path, job_id: str, advance_once):
     (:func:`set_aside`) and the advance runs again, so the step is asked again until the budget is spent; when it
     names none (a stage that reads many answers), the job is parked (:func:`park`) and the advance returns. A
     :class:`~secondbrain.store.Halt` still stops the job, listed for the owner (:func:`note_halt`). Any other error
-    (one of a model call, or met before any answer is read) is raised as it is."""
+    (one of a model call, or met before any answer is read) is raised as it is. An error of the same stage, type and
+    message as one that already set an answer aside is not that answer's: the job is parked, and no further answer
+    is set aside for it. Once an advance runs through, a parking that is over is cleared, from the job, from what
+    the advance returns and from the owner's list."""
     from .store import Halt
-    for _ in range(GUARD_LIMIT):
-        try:
-            out = advance_once()
-        except Halt as exc:
-            note_halt(root, job_id, exc)
-            raise
-        except Exception as exc:
-            where = getattr(exc, _TAKEN, None)
-            if not where:
+    token = _GUARDED.set(True)
+    try:
+        for _ in range(GUARD_LIMIT):
+            try:
+                out = advance_once()
+            except Halt as exc:
+                note_halt(root, job_id, exc)
                 raise
-            stage, aside = where
-            target = aside(load(root, job_id)) if callable(aside) else aside
-            if target and set_aside(root, job_id, target[0], target[1], exc, stage=stage):
-                continue
-            return park(root, job_id, exc, stage)
-        if isinstance(out, dict) and load(root, job_id).get('parked'):
-            update_parked(root, job_id, None)  # the stage that parked it passed this time
-        return out
-    return park(root, job_id, RuntimeError(f'more than {GUARD_LIMIT} answers set aside in one advance'), 'guard')
+            except Exception as exc:
+                where = getattr(exc, _TAKEN, None)
+                if not where:
+                    raise
+                stage, aside = where[0], where[1]
+                if _set_aside_before(load(root, job_id), stage, exc):
+                    return park(root, job_id, exc, stage)
+                target = aside(load(root, job_id)) if callable(aside) else aside
+                if target and set_aside(root, job_id, target[0], target[1], exc, stage=stage):
+                    continue
+                return park(root, job_id, exc, stage)
+            if isinstance(out, dict) and load(root, job_id).get('parked'):
+                _unpark(root, job_id)  # the stage that parked it passed this time
+                out = {k: v for k, v in out.items() if k != 'parked'}
+            return out
+        return park(root, job_id, RuntimeError(f'more than {GUARD_LIMIT} answers set aside in one advance'), 'guard')
+    finally:
+        _GUARDED.reset(token)
 
 
-def update_parked(root: Path, job_id: str, parked: dict | None) -> None:
+def _set_aside_before(state: dict, stage: str, exc: BaseException) -> bool:
+    """Whether an error of this stage, type and message already set an answer of the job aside."""
+    fault = {**fault_of(exc), 'stage': stage}
+    return any(row.get('set_aside') and (row.get('stage'), row.get('type'), row.get('message')) ==
+               (stage, fault['type'], fault['message']) for row in state.get('program_errors') or [])
+
+
+def _unpark(root: Path, job_id: str) -> None:
+    """The job is parked no more: its parking and the owner's item for it go."""
     with vault_lock(root):
         state = load(root, job_id)
-        if parked is None:
-            state.pop('parked', None)
-        else:
-            state['parked'] = parked
+        state.pop('parked', None)
+        state['program_errors'] = [r for r in state.get('program_errors') or [] if not r.get('parked')]
         write_json(root, location(job_id), state)
 
 
@@ -774,7 +811,7 @@ def park(root: Path, job_id: str, exc: BaseException, stage: str) -> dict:
             (stage, fault['type'], fault['message'])
         if not same:
             state['program_errors'] = list(state.get('program_errors') or []) + [
-                {**fault, 'slot': None, 'role': None, 'step': stage, 'run_id': None, 'at': now()}]
+                {**fault, 'slot': None, 'role': None, 'step': stage, 'run_id': None, 'at': now(), 'parked': True}]
         state['parked'] = {**fault, 'at': now(), 'times': int(before.get('times', 0)) + 1 if same else 1}
         write_json(root, location(job_id), state)
     return load(root, job_id)
@@ -817,6 +854,7 @@ def set_aside(root: Path, job_id: str, chunk: str | None, role: str, exc: BaseEx
             return False
         run = load_run(root, job_id, ref['run_id'])
         message = _record_fault(state, run, {**fault_of(exc), 'stage': stage})
+        state['program_errors'][-1]['set_aside'] = True
         review = (slot.get('review') or {}).get('run_id') if role == 'producer' else None
         _void_recorded(root, job_id, state, chunk, [run] + ([load_run(root, job_id, review)] if review else []))
         slot[field] = None
