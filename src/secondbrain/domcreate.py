@@ -157,6 +157,15 @@ def _catalog_after(catalog: dict, packet: dict, proposal: dict) -> dict:
     return validate_catalog(data)
 
 
+def check_review(packet: dict, candidate: dict, review: dict) -> dict:
+    """A review covers this domain exactly once, as :func:`apply` reads it."""
+    items = review.get('items')
+    if not isinstance(items, list) or len(items) != 1 or not isinstance(items[0], dict) \
+            or items[0].get('domain') != packet['domain']:
+        raise AnswerError(f'The review must cover this domain exactly once: {packet["domain"]}')
+    return review
+
+
 def apply(root: Path, job_id: str) -> dict:
     from .moc import build_mocs
     state = jobs.load(root, job_id)

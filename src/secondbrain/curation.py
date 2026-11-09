@@ -299,19 +299,24 @@ def validate(packet: dict, proposal: dict) -> list[dict]:
 def review_rows(rows: list[dict], review: dict) -> dict[str, dict]:
     findings = review.get("items")
     if not isinstance(findings, list):
-        raise CurationError("A review must be {items:[{domain,decision,reason}]}")
+        raise CurationAnswerError("A review must be {items:[{domain,decision,reason}]}")
     doms = [x.get("domain") for x in findings if isinstance(x, dict)]
     if len(doms) != len(findings) or len(doms) != len(set(doms)) or \
             set(doms) != {r["domain"] for r in rows}:
-        raise CurationError("The independent review does not cover every candidate domain")
+        raise CurationAnswerError("The independent review does not cover every candidate domain")
     out = {}
     for x in findings:
         if x.get("decision") not in {"accept", "revise"}:
-            raise CurationError(f"{x.get('domain')}: the review decision must be accept or revise")
+            raise CurationAnswerError(f"{x.get('domain')}: the review decision must be accept or revise")
         if not isinstance(x.get("reason"), str) or not x["reason"].strip():
-            raise CurationError(f"{x.get('domain')}: the review reason must be specific")
+            raise CurationAnswerError(f"{x.get('domain')}: the review reason must be specific")
         out[x["domain"]] = x
     return out
+
+
+def check_review(packet: dict, candidate: dict, review: dict) -> dict:
+    """A review covers the proposal it answers, each domain once, as :func:`apply` reads it."""
+    return review_rows(validate(packet, candidate), review)
 
 
 # ---------------------------------------------------------------------------

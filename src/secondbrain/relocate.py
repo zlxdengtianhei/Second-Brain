@@ -138,6 +138,11 @@ def _packet_pairs(packet, domain):
     return {(p['name'], t) for p in body.get('pillars', []) for t in p.get('topics', [])}
 
 
+def check_review(packet: dict, candidate: dict, review: dict) -> dict:
+    """A review covers the proposal it answers, each item once, as :func:`apply` reads it."""
+    return cls.review_rows(validate(packet, candidate), review)
+
+
 def apply(root_, job_id):
     """Move only accepted, ``assigned`` cards whose move breaks no link; the rest stay pending with the files that refer to them."""
     from .moc import build_mocs

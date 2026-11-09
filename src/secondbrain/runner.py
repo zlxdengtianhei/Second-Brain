@@ -61,38 +61,45 @@ class KindSpec:
     review_schema: dict
     check: Callable[[dict, dict], object]
     apply: Callable[[Path, str], dict]
+    #: ``(packet, candidate, review)``: the review covers the candidate as the kind's apply reads it, checked when the
+    #: review is taken, so a review that is taken can be read
+    review_check: Callable[[dict, dict, dict], object]
 
 
 def _spec(kind: str) -> KindSpec:
     if kind == 'classification':
         from . import classification as m
         return KindSpec('classify.md', 'review_classify.md', schemas.CLASSIFY, schemas.REVIEW_BY_ID,
-                        lambda packet, cand: m.validate(packet, cand, check_evidence=False), m.apply)
+                        lambda packet, cand: m.validate(packet, cand, check_evidence=False), m.apply, m.check_review)
     if kind == 'curation':
         from . import curation as m
         return KindSpec('taxonomy.md', 'review_taxonomy.md', schemas.TAXONOMY, schemas.REVIEW_BY_DOMAIN,
-                        m.validate, m.apply)
+                        m.validate, m.apply, m.check_review)
     if kind == 'relocation':
         from . import relocate as m
         return KindSpec('move.md', 'review_move.md', schemas.MOVE, schemas.REVIEW_BY_ID,
-                        m.validate, m.apply)
+                        m.validate, m.apply, m.check_review)
     if kind == 'domcreate':
         from . import domcreate as m
         return KindSpec('domain_create.md', 'review_domain_create.md', schemas.DOMAIN_CREATE,
-                        schemas.REVIEW_BY_DOMAIN, m.validate, m.apply)
+                        schemas.REVIEW_BY_DOMAIN, m.validate, m.apply, m.check_review)
     raise ValueError(f'This job kind has no model steps: {kind}')
 
 
-def validate_submission(packet: dict, payload: dict, *, role: str, state: dict, **_context) -> dict:
+def validate_submission(packet: dict, payload: dict, *, role: str, state: dict, candidate=None,
+                        **_context) -> dict:
     """jobs.submit hook of the maintenance kinds without their own (curation, relocation, domain creation): the
-    answer's shape, and a proposal by the kind's own check. Before, a proposal was first checked after it was kept,
-    so one that failed stopped every later run of the job and was never counted or asked for again."""
+    answer's shape, a proposal by the kind's own check, and a review by whether it covers the proposal it answers as
+    the kind's apply reads it (each domain or item once). Before, a proposal, and later a review, was first read after
+    it was kept, so one that failed stopped every later run of the job and was never counted or asked for again."""
     spec = _spec(state['kind'])
     wrong = schemas.type_problems(payload, spec.produce_schema if role == 'producer' else spec.review_schema)
     if wrong:
         raise schemas.AnswerError('Answer rejected by validation:\n- ' + '\n- '.join(wrong))
     if role == 'producer':
         spec.check(packet, payload)
+    else:
+        spec.review_check(packet, candidate, payload)
     return payload
 
 

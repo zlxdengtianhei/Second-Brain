@@ -237,14 +237,19 @@ def require_accepted_evidence(packet, rows, findings):
 def review_rows(rows: list[dict], review: dict) -> dict[str, dict]:
     findings = review.get('items')
     if not isinstance(findings, list):
-        raise ValueError('A review must be {items:[{id,decision,reason}]}')
+        raise AnswerError('A review must be {items:[{id,decision,reason}]}')
     ids = [x.get('id') for x in findings if isinstance(x, dict)]
     if len(ids) != len(findings) or len(ids) != len(set(ids)) or set(ids) != {x['id'] for x in rows}:
-        raise ValueError('The independent review does not cover every candidate item')
+        raise AnswerError('The independent review does not cover every candidate item')
     for x in findings:
         if x.get('decision') not in {'accept', 'revise'} or not isinstance(x.get('reason'), str) or not x['reason'].strip():
-            raise ValueError('Every review item needs a decision and a specific reason')
+            raise AnswerError('Every review item needs a decision and a specific reason')
     return {x['id']: x for x in findings}
+
+
+def check_review(packet: dict, candidate: dict, review: dict) -> dict:
+    """A review covers the proposal it answers, each item once, as :func:`apply` reads it."""
+    return review_rows(validate(packet, candidate, check_evidence=False), review)
 
 
 def stage_changes(snapshot: Snapshot, packet: dict, rows: list[dict], findings: dict[str, dict]):
