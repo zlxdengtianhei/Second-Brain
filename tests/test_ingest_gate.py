@@ -9,7 +9,7 @@ import pytest
 from secondbrain import cli, config, jobs, labels
 from secondbrain import layout as layouts
 from secondbrain.executors import FakeExecutor
-from secondbrain.pipelines import ingest
+from secondbrain.pipelines import answerfix, ingest
 from secondbrain.service import Service
 from secondbrain.vault import read_snapshot
 from tests.helpers import DOMAIN, EXISTING
@@ -79,11 +79,17 @@ def test_packets_show_a_domain_only_type_only_for_its_domain(tmp_path):
 
 
 # --- one relation between two cards ------------------------------------------------------------
-def test_two_relations_between_the_same_two_cards_are_refused(tmp_path):
+def test_two_relations_between_the_same_two_cards_are_refused(tmp_path, monkeypatch):
     root = build_ingest_vault(tmp_path / 'vault')
     base = first_candidate()
     cost = base['cards'][1]  # lit-marker-cost: depends_on lantern-queue
     both = {**cost, 'relations': cost['relations'] + [{'type': 'part_of', 'target': 'lantern-queue'}]}
+    # the gate now keeps one of the two by the catalog's order of types, and says so (answerfix, rule relation_pair)
+    taken = check(root, {**base, 'cards': [base['cards'][0], both] + base['cards'][2:]})
+    assert [r['type'] for r in taken['cards'][1]['relations'] if r['target'] == 'lantern-queue'] == ['part_of']
+    assert [r['rule'] for r in taken['program_repairs']] == ['relation_pair']
+    # the check behind that repair still refuses the pair
+    monkeypatch.setattr(answerfix, 'RULES', ())
     with pytest.raises(ingest.IngestError, match="2 relations between 'lantern-queue' and 'lit-marker-cost'"):
         check(root, {**base, 'cards': [base['cards'][0], both] + base['cards'][2:]})
     # the same pair through the back link: lantern-queue part_of lit-marker-cost meets its depends_on

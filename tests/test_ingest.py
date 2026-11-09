@@ -317,8 +317,11 @@ def test_invalid_output_is_returned_with_errors_and_does_not_spend_a_repair_roun
     assert len(seen['producer']) == 3
     retry_prompt = seen['producer'][1].prompt
     assert 'rejected by the validator' in retry_prompt
-    for needle in ('not a verbatim slice', 'not allowed in file names', 'flashcards must hold 2-4'):
+    for needle in ('not a verbatim slice', 'flashcards must hold 2-4'):
         assert needle in retry_prompt
+    # the "/" in the title is not refused any more: the program writes it full width and records it (answerfix)
+    assert 'not allowed in file names' not in retry_prompt
+    assert seen['producer'][1].packet['fix']['cards'][0]['title'] == 'Bad／Title'
     runs = jobs.list_runs(root, prepared['job_id'])
     assert [r['status'] for r in runs if r['role'] == 'producer'].count('failed') == 1
 

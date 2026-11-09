@@ -164,7 +164,7 @@ def finish_call(root: Path, task: Task, result: Result) -> Result:
     try:
         jobs.submit(root, job_id, result.output, role=task.role, run_id=task.run_id,
                     model_reported=result.model_reported, attestation=result.attestation,
-                    usage=result.usage)
+                    usage=result.usage, unwrapped=result.unwrapped)
     except ValueError as exc:  # refused at the gate; ``counted``: already counted against the slot's budget there
         error = {'code': INVALID_OUTPUT, 'message': str(exc), 'retryable': True,
                  **({'counted': True} if getattr(exc, 'counted', False) else {})}
@@ -194,7 +194,7 @@ def _refusal_key(state: dict, role: str) -> str:
     return f'{role}@{int(state.get("repair_round", 0))}'
 
 
-def record_refusal(packet, *, role, root, chunk, state, run, message) -> bool:
+def record_refusal(packet, *, role, root, chunk, state, run, message, keep=None) -> bool:
     """The gate's hook (:func:`secondbrain.jobs.refuse`) for the maintenance kinds: an answer of ``role`` that failed
     the program's checks, from an API run or a host sub-agent alike, counted in the job state
     (:func:`secondbrain.budget.count`); True when the role's budget for this round is now spent."""

@@ -1,6 +1,7 @@
 """Request/response mapping for OpenAI-compatible ``/chat/completions``."""
 from __future__ import annotations
 
+from ..pipelines.answerfix import strip_fence
 from .api import parse_json_text
 
 
@@ -22,6 +23,11 @@ def unsupported_format(status: int, detail: str) -> bool:
 
 def answer_text(data: dict) -> str:
     return ((data.get('choices') or [{}])[0].get('message') or {}).get('content') or ''
+
+
+def fenced(data: dict) -> bool:
+    """Whether the answer was wrapped in one Markdown code fence (taken off before it was read)."""
+    return strip_fence(answer_text(data)) is not None
 
 
 def parse(data: dict, *, tex_backslashes: bool = False):

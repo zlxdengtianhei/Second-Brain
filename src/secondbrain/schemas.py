@@ -94,6 +94,12 @@ CARDS = {
                            'with': {'type': 'array', 'items': _STR},
                            'suggested_pillar': _NSTR, 'reason': _STR}}},
     }}
+#: The answer to a second ask after some cards failed the checks: those cards, fixed (the others are kept); the
+#: coverage table and new topics only when they change (secondbrain.pipelines.answerfix).
+CARD_FIX = {'type': 'object', 'required': ['cards'],
+            'properties': {k: CARDS['properties'][k] for k in ('cards', 'new_topics', 'coverage')}}
+
+
 def _amend_schema() -> dict:
     from .pipelines.amend import SCHEMA
     return SCHEMA

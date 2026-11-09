@@ -19,6 +19,7 @@ import time
 from urllib.parse import urlparse
 
 from ..config import EndpointConfig
+from ..pipelines.answerfix import strip_fence
 from .base import (CHUNK_TOO_LARGE, CONFIG_ERROR, HTTP_ERROR, INVALID_OUTPUT, TIMEOUT, Result, Task,
                    render_task_text)
 
@@ -34,9 +35,9 @@ def _error(code, message, retryable=False, status=None) -> dict:
 
 def _candidates(text: str) -> list[str]:
     stripped = text.strip()
-    fence = re.match(r'^```(?:json)?\s*(.*?)\s*```$', stripped, re.S)
-    if fence:
-        stripped = fence.group(1)
+    inner = strip_fence(stripped)  # one Markdown code fence around the whole answer: the one rule of both modes
+    if inner is not None:
+        stripped = inner.strip()
     out = [stripped]
     start, end = stripped.find('{'), stripped.rfind('}')
     if 0 <= start < end and (start, end) != (0, len(stripped) - 1):
@@ -201,4 +202,4 @@ class ApiExecutor:
                                        + json_problem(detail) if detail is not None
                                        else 'the answer is not a JSON object', True))
         return Result(status='completed', output=output, model_reported=model,
-                      attestation='provider_response', usage=usage)
+                      attestation='provider_response', usage=usage, unwrapped=self._adapter.fenced(data))

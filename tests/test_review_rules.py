@@ -74,7 +74,8 @@ def test_the_number_of_repair_rounds_is_the_setting(tmp_path, rounds):
 
 
 def test_an_answer_that_fails_the_checks_in_a_repair_round_is_asked_again_without_spending_a_round(tmp_path):
-    bad = {**repair_candidate(), 'cards': [{**repair_candidate()['cards'][0], 'title': 'Bad/Title'}]}
+    one = repair_candidate()['cards'][0]  # one review question: an error the program does not repair
+    bad = {**repair_candidate(), 'cards': [{**one, 'flashcards': one['flashcards'][:1]}]}
     root, job_id, done, seen = run(tmp_path, [first_candidate(), bad, bad, repair_candidate()],
                                    [first_review(), repair_review()], max_repair_rounds=1)
     assert done['status'] == 'applied', done.get('pending')

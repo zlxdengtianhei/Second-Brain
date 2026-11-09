@@ -54,6 +54,8 @@ class Result:
     error: dict | None = None
     #: Host executor: where the packet is and how to submit the answer.
     handoff: dict | None = field(default=None)
+    #: The answer was wrapped in one Markdown code fence, which the program took off (``answerfix.strip_fence``).
+    unwrapped: bool = False
 
 
 @runtime_checkable

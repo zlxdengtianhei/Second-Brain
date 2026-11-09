@@ -236,10 +236,10 @@ class Service:
         return search(self.root, self.snapshot(), query, limit=limit)
 
     def submit(self, job_id: str, payload: dict, *, role: str, run_id: str,
-               model: str | None = None):
+               model: str | None = None, unwrapped: bool = False):
         """Submit a host-mode run output; validated, never written to knowledge."""
         return jobs.submit(self.root, job_id, payload, role=role, run_id=run_id,
-                           model_reported=model, attestation='self_reported')
+                           model_reported=model, attestation='self_reported', unwrapped=unwrapped)
 
 
 def _state_size(root: Path) -> dict:

@@ -43,7 +43,7 @@ from ..textnorm import plain, same_text
 from ..vault import Card, append_list_items, parse_note, read_snapshot
 from .. import retrieval
 from . import amend as amends
-from . import card_diagrams, chunking, notes, source_check, split
+from . import answerfix, card_diagrams, chunking, notes, source_check, split
 from .chunking import chunk_text
 from .routing import route
 
@@ -924,11 +924,44 @@ def _review_candidates(root: Path, snapshot, packet: dict, cards: list, coverage
 COVERAGE_KEY = '#coverage'
 
 
+#: what the program adds to a producer's answer it passes on: the mechanical repairs it made, and the cards the
+#: slot's last answer left out because they failed the checks (see :mod:`secondbrain.pipelines.answerfix`)
+PROGRAM_FIELDS = ('program_repairs', 'held_cards')
+
+
+def _fence_record(run: dict) -> dict:
+    return {'rule': 'fence', 'run_id': run['run_id'],
+            'what': 'the answer was wrapped in one Markdown code fence; the program took it off before reading it'}
+
+
+def _program_view(root: Path, state: dict, slot: str, candidate: dict) -> dict:
+    """The program's repairs of a candidate and the cards it left out, for the reviewer: a fence taken off its
+    answer first, then the repairs of its cards."""
+    ref = ((state.get('chunks') or {}).get(slot) or {}).get('candidate') or {}
+    run = jobs.load_run(root, state['job_id'], ref['run_id']) if ref.get('run_id') else {}
+    repairs = ([_fence_record(run)] if run.get('unwrapped') else []) + list(candidate.get('program_repairs') or [])
+    return {**({'program_repairs': repairs} if repairs else {}),
+            **({'held_cards': candidate['held_cards']} if candidate.get('held_cards') else {})}
+
+
+def program_repairs(root: Path, state: dict) -> list[dict]:
+    """Every repair the program made to an answer of this job, writing no knowledge text, by slot: a code fence taken
+    off an answer (any role), and the mechanical repairs of the producers' cards (:mod:`.answerfix`)."""
+    out = [{'slot': run.get('chunk'), 'role': run['role'], **_fence_record(run)}
+           for run in jobs.list_runs(root, state['job_id']) if run.get('unwrapped')]
+    for slot, info in sorted((state.get('chunks') or {}).items()):
+        if (info.get('candidate') or {}).get('path') and not _aux_slot(slot):
+            out += [{'slot': slot, **r}
+                    for r in jobs.artifact(root, state, 'candidate', slot).get('program_repairs') or []]
+    return out
+
+
 def review_packet(root: Path, state: dict, packet: dict, slot: str) -> dict:
     from ..runner import withhold_reasons
     base, rnd = _base(slot), _round(slot)
     candidate = jobs.artifact(root, state, 'candidate', slot)
     shown = withhold_reasons(candidate) if jobs.policy_of(packet).withhold_producer_reasons else candidate
+    shown = {k: v for k, v in shown.items() if k not in PROGRAM_FIELDS}
     snapshot = read_snapshot(root)
     domains = sorted({c['domain'] for c in candidate.get('cards', []) if c.get('domain') in packet['catalog']['domains']}
                      | {t['domain'] for t in candidate.get('new_topics', []) if t.get('domain') in packet['catalog']['domains']})
@@ -943,7 +976,9 @@ def review_packet(root: Path, state: dict, packet: dict, slot: str) -> dict:
            **_relation_views(packet['catalog'], domains),
            'other_chunks_cards': _other_cards(root, state, packet, base),
            **_note_part(root, state, packet, base),
-           **({'placement': packet['placement']} if packet.get('placement') else {})}
+           **({'placement': packet['placement']} if packet.get('placement') else {}),
+           # what the program changed in the answer, writing no knowledge text, and the cards it left out
+           **_program_view(root, state, slot, candidate)}
     if rnd:
         kept = _accepted_so_far(root, state, base, rnd)
         refiled = {c.get('slug') for c in candidate.get('cards', []) if isinstance(c, dict)}
@@ -1516,13 +1551,18 @@ def _count_refusal(state: dict, packet: dict, slot: str, spec: AnswerRole, messa
     return failed
 
 
-def record_refusal(packet: dict, *, role: str, root, chunk, state: dict, run: dict, message: str) -> bool:
+def record_refusal(packet: dict, *, role: str, root, chunk, state: dict, run: dict, message: str,
+                   keep=None) -> bool:
     """jobs.submit hook: an answer the validator refused, in either mode, counted against its slot's budget
-    (:func:`_count_refusal`); True when the slot is now given up."""
+    (:func:`_count_refusal`); True when the slot is now given up. ``keep``: the cards of a chunk producer's answer
+    that passed, and the ones to ask for again (:func:`_producer_answer`), kept on the slot for the next ask."""
     try:
         spec = answer_role(chunk, role)
     except IngestError:
         return False
+    if keep is not None and role == 'producer' and not _aux_slot(chunk):
+        state.setdefault('chunks', {}).setdefault(chunk, {'candidate': None, 'review': None, 'status': 'prepared',
+                                                          'round': 0})['draft'] = keep
     return _count_refusal(state, packet, chunk, spec, message) > spec.retries(jobs.policy_of(packet))
 
 
@@ -1544,7 +1584,8 @@ def validate_submission(packet: dict, payload: dict, *, role: str, candidate=Non
     """jobs.submit hook: S4 for producers, shape checks for reviewers."""
     if chunk is None:
         raise IngestError('ingest runs are always bound to a chunk slot')
-    wrong = schemas.type_problems(payload, _answer_schema(chunk, role))
+    draft = _draft(state, chunk) if role == 'producer' else None
+    wrong = schemas.type_problems(payload, schemas.CARD_FIX if draft else _answer_schema(chunk, role))
     if wrong:  # before anything puts a value in a set or sorts it: a model may send an object for a name
         raise IngestError(('Review' if role == 'reviewer' else 'Candidate') + ' rejected by validation:\n- '
                           + '\n- '.join(wrong))
@@ -1589,9 +1630,64 @@ def validate_submission(packet: dict, payload: dict, *, role: str, candidate=Non
     others = _other_cards(root, state, packet, base)
     domains = {**existing_domains, **{s: existing_domains.get(i) for s, i in _written_slugs(packet).items()},
                **{c['slug']: c.get('domain') for c in others}, **{s: c.get('domain') for s, c in kept.items()}}
-    return validate_candidate(packet, payload, slot=chunk, other_cards=others, kept_slugs=set(kept),
-                              existing_ids=existing_ids, existing_titles=existing_titles,
-                              known_topics=_known_topics(root, state, chunk, payload, kept), target_domains=domains)
+
+    def check(answer, also=frozenset()):
+        return validate_candidate(packet, answer, slot=chunk, other_cards=others, kept_slugs=set(kept) | set(also),
+                                  existing_ids=existing_ids, existing_titles=existing_titles,
+                                  known_topics=_known_topics(root, state, chunk, answer, kept), target_domains=domains)
+    context = answerfix.Context(text=_chunk_text(packet, base), catalog=packet['catalog'],
+                                prefix=packet['settings']['id_prefix'], title_of=_existing_titles(root),
+                                targets=set(existing_ids) | {c['slug'] for c in others} | set(kept)
+                                | set(_written_slugs(packet)))
+    return _producer_answer(packet, state, chunk, payload, draft, context, check)
+
+
+def _draft(state: dict | None, slot: str):
+    """What a chunk producer's last refused answer left to keep (:func:`_producer_answer`), while the slot has no
+    candidate: the answer, the cards that failed the checks with their lines, the repairs made."""
+    info = ((state or {}).get('chunks') or {}).get(slot) or {}
+    return info.get('draft') if not info.get('candidate') and not _aux_slot(slot) else None
+
+
+def _existing_titles(root) -> dict:
+    """``{id: title}`` of the vault's cards: a card named by its id in an answer is named by this title."""
+    return {cid: c.title for cid, c in read_snapshot(root).cards.items() if c.title}
+
+
+def _producer_answer(packet: dict, state: dict, slot: str, payload: dict, draft, context, check) -> dict:
+    """The one way a chunk producer's answer is taken (decision D-34, API and host mode alike): merged into what the
+    last refused answer kept (``draft``), repaired (:func:`answerfix.repair`), then checked. What passes is the
+    candidate, with the repairs recorded (``program_repairs``). When only some cards fail, the answer is refused for
+    them alone (``keep`` carries the rest to the next ask, which asks for those cards); the last answer the slot may
+    give keeps the cards that pass, and the others wait for the owner (``held_cards``). A problem of the whole chunk
+    refuses the answer as before."""
+    whole = answerfix.merge(draft['payload'], payload) if draft else payload
+    fixed, records = answerfix.repair(whole, context)
+    records = list((draft or {}).get('repairs') or []) + records
+    try:
+        check(fixed)
+        return {**fixed, **({'program_repairs': records} if records else {})}
+    except IngestError as exc:
+        lines = answerfix.problem_lines(str(exc))
+        by_card, block = answerfix.split_problems(lines, fixed)
+        if block or not by_card:
+            raise
+        spec = answer_role(slot, 'producer')
+        if _refusals(((state or {}).get('chunks') or {}).get(slot) or {}, spec) >= spec.retries(jobs.policy_of(packet)):
+            # the last answer the slot may give: the cards that pass go on, the others wait for the owner
+            kept, dropped = answerfix.held_back(fixed, set(by_card))
+            try:
+                check(kept, set(by_card))
+            except IngestError:
+                raise exc from None
+            titles = {c.get('slug'): c.get('title') for c in fixed.get('cards') or [] if isinstance(c, dict)}
+            return {**kept, 'program_repairs': records + dropped,
+                    'held_cards': [{'slug': s, 'title': titles.get(s), 'problems': by_card[s]} for s in sorted(by_card)]}
+        refused = IngestError(f'{len(by_card)} card(s) failed the checks; the others passed and are kept. '
+                              f'Answer again with these cards only, fixed: {", ".join(sorted(by_card))}\n'
+                              + '\n'.join(f'- {line}' for line in lines))
+        refused.keep = {'payload': fixed, 'held': by_card, 'repairs': records}
+        raise refused from exc
 
 
 def _merge_check_failures(root: Path, state: dict, slot: str) -> int:
@@ -1693,8 +1789,11 @@ def record_decisions(packet: dict, payload: dict, *, role: str, candidate, root,
     verdict, and the first steps of each accepted card's relations and
     taxonomy place (the producer's, then the reviewer's acceptance). The merge
     check gives each card's level against the source, each topic's, and its
-    links. Producers give no final values.
+    links. Producers give no final values; a producer's answer taken clears the cards its slot kept from a refused
+    answer (they are in the candidate now).
     """
+    if role == 'producer' and chunk is not None:
+        ((state.get('chunks') or {}).get(chunk) or {}).pop('draft', None)
     if role != 'reviewer' or chunk is None or card_diagrams.is_slot(chunk):
         return
     if source_check.is_slot(chunk):
@@ -1959,6 +2058,14 @@ def chunk_outcome(root: Path, state: dict, packet: dict, base: str) -> dict:
         out['next'] = ('repair', _slot_name(base, len(slots)))
         return out
     pending = list(open_cards.values())
+    # a card the slot's last answer left out, failing the program's checks, while its other cards went on, is
+    # pending unless another round gave it again
+    given = [jobs.artifact(root, state, 'candidate', s) for s, i in slots if i.get('candidate')]
+    again = {c['slug'] for cand in given for c in cand.get('cards', [])}
+    left = {h['slug']: h for cand in given for h in cand.get('held_cards') or [] if h['slug'] not in again}
+    pending += [{'slug': slug, 'title': h.get('title'), 'chunk': base,
+                 'reason': 'its card failed the program\'s checks in the last answer the producer could give: '
+                           + '; '.join(h.get('problems') or [])} for slug, h in left.items()]
     if open_coverage:
         pending.append(open_coverage)
     if unreviewed:
@@ -2039,12 +2146,15 @@ def _step(root: Path, job_id: str, action: tuple, producer, reviewer) -> None:
     base = _base(slot)
     info = (state.get('chunks') or {}).get(slot) or {}
     feedback = info.get('last_validation_error') if not info.get('candidate') else None
+    shown, schema, draft = producer_packet(root, state, packet, slot), schemas.CARDS, _draft(state, slot)
     if feedback:
         text += '\n## Your previous answer was rejected by the validator\n\n' + feedback + '\n'
+    if draft:  # some cards of the last answer failed: ask for those, as they were given, with their lines
+        text += '\n' + _prompt_only('fix_cards.md')
+        shown, schema = {**shown, 'fix': answerfix.fix_packet(draft)}, schemas.CARD_FIX
     try:
         call_executor(root, job_id, producer, role='producer', step='repair' if kind == 'repair' else 'produce',
-                      prompt_text=text, packet=producer_packet(root, state, packet, slot),
-                      output_schema=schemas.CARDS, chunk=slot)
+                      prompt_text=text, packet=shown, output_schema=schema, chunk=slot)
     except ExecutorFailure as failure:
         if failure.code == CHUNK_TOO_LARGE and slot == base and not info.get('candidate') \
                 and len(_chunk_text(packet, base)) >= 2 * MIN_SPLIT_CHARS:
@@ -3278,6 +3388,8 @@ def _apply_job(root: Path, job_id: str, settled: list[dict] | None = None) -> di
               'same_family': bool(state.get('same_family')),
               'outcomes': outcomes, 'decision_record': entries,
               'amended': [r for o in settled for r in o.get('amended') or []],
+              # what the program repaired in the answers, writing no knowledge text (fence, ids, quotes, links)
+              'program_repairs': program_repairs(root, state),
               'review_notes': [n for o in settled for n in o.get('notes') or []],
               # cards accepted with a note of a blocking kind, sent back by the program: which note, card, round
               'notes_turned': [t for o in settled for t in o.get('turned') or []] + _split_turned(root, job_id),
