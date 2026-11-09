@@ -34,7 +34,7 @@ ON_ITS_OWN = ('A proposition that, read on its own, says more than the text it c
 _DEFINITION = """\
 `notes`: what you noticed beyond your decision, each as `{"category": "<kind>", "text": "<what and where, short>"}`.
 The kind says how much it matters:
-- `fact`: a statement that is wrong: the text it comes from (the chunk; for an article, the cited cards) contradicts it or does not say it (an added fact, number, example or name; a relation or comparison the wrong way round).
+- `fact`: a statement that is wrong: the text it comes from (the chunk; for an article, the cited cards) contradicts it or does not say it (an added fact, number, example or name; a relation or comparison the wrong way round). A fact in a confusion or an intuition that neither the chunk nor a card it names by `[[title]]` gives is `fact` too, however true it is.
 - `unreadable`: it cannot be understood without the source: it points at the source ("the example above", "this handout") or leaves out what it relies on.
 - `quote`: a quotation or citation that does not hold: a source quote that is not in the chunk word for word, or a card cited for what it does not say.
 - `not_a_unit`: it is not one recallable unit: two separate ideas in one card, or a fragment that does not stand on its own.

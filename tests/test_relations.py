@@ -97,7 +97,8 @@ def task_text(name):
 
 def test_the_reviewer_is_asked_to_check_examples_links_and_better_domains():
     review = task_text('review_cards.md')
-    assert 'every flashcard question and answer against the text' in review
+    assert 'every flashcard question and answer, and every sentence of the essence, the intuition and each ' \
+           'confusion against the text' in review
     assert 'Check each example on its own' in review
     assert 'name the existing card id with the relation type to add' in review
     assert 'also when it is not among `taxonomies`: `domains` lists every domain' in review
