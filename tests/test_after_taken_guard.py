@@ -45,6 +45,31 @@ def ingest_flow(tmp_path, monkeypatch):
                                                 reviewer=FakeExecutor('claude-test', responder=review))
 
 
+def ingest_split_flow(tmp_path, monkeypatch):
+    """Three chunks whose cards meet in the merge check, and a card split off an existing one (a split slot)."""
+    from types import SimpleNamespace
+
+    from secondbrain.pipelines import split
+    from tests.ingest_helpers import SOURCE_NAME, build_ingest_vault, with_diagrams
+    from tests.test_ingest import settings
+    from tests.test_invariants import SOURCE, two_chunk_producer
+    from tests.test_patch_set import SPLIT_CARD, reviewer, run, sb_existing
+    from tests.test_split_repair import BOLD, PLAIN
+    root = build_ingest_vault(tmp_path / 'vault')
+    settings(chunk_chars=1000)
+    (root / '00_Inbox' / SOURCE_NAME).write_text(SOURCE.replace(PLAIN, BOLD), encoding='utf-8')
+    job_id = ingest.prepare(root, root / '00_Inbox' / SOURCE_NAME)['job_id']
+    sb_existing(root, 11)
+
+    def produce(task):
+        if split.is_slot(task.chunk.split('.')[0]):
+            return {'card': copy.deepcopy(SPLIT_CARD)}
+        plain = {**task.packet, 'chunk': {**task.packet['chunk'], 'text': task.packet['chunk']['text'].replace(
+            BOLD, PLAIN)}}
+        return two_chunk_producer(SimpleNamespace(packet=plain))
+    return root, job_id, lambda: run(root, job_id, reviewer(), with_diagrams(produce))
+
+
 def export_flow(tmp_path, monkeypatch):
     monkeypatch.setenv('SECONDBRAIN_NO_CACHE', '1')
     config.activate(config.Settings(card_language='zh'))
@@ -65,10 +90,13 @@ def maintenance_flow(kind):
 
 
 FLOWS = {'ingest': ingest_flow, 'export': export_flow, **{k: maintenance_flow(k) for k in MAINTENANCE}}
+#: More flows of a kind, for the stages one flow does not reach (a merge check, a split card).
+MORE = {'ingest-split': ingest_split_flow}
 
 
 def test_every_kind_that_asks_a_model_has_a_flow_here():
     assert {kind for kind, asks in jobs.KINDS.items() if asks} == set(FLOWS)
+    assert {name.split('-')[0] for name in MORE} <= set(FLOWS)
 
 
 class Reads:
@@ -103,17 +131,17 @@ def run_flow(flow, tmp_path, monkeypatch, fail=None):
 
 def reads_of(kind, tmp_path, monkeypatch):
     with monkeypatch.context() as m:
-        _, _, out, reads = run_flow(FLOWS[kind], tmp_path / 'plain', m)
+        _, _, out, reads = run_flow({**FLOWS, **MORE}[kind], tmp_path / 'plain', m)
     assert reads.n > 0 and out['status'] in {'applied', 'complete', 'published', 'partial'}, out['status']
     return reads.n
 
 
-@pytest.mark.parametrize('kind', sorted(FLOWS))
+@pytest.mark.parametrize('kind', sorted({**FLOWS, **MORE}))
 def test_a_failing_read_of_a_taken_answer_at_any_stage_is_counted_or_parked_and_listed(tmp_path, monkeypatch, kind):
     total = reads_of(kind, tmp_path, monkeypatch)
     for n in range(1, total + 1):
         with monkeypatch.context() as m:
-            root, job_id, out, reads = run_flow(FLOWS[kind], tmp_path / f'r{n}', m, fail=n)  # never raises
+            root, job_id, out, reads = run_flow({**FLOWS, **MORE}[kind], tmp_path / f'r{n}', m, fail=n)  # no raise
         assert reads.failed, n
         state = jobs.load(root, job_id)
         faults = [r for r in state.get('program_errors') or [] if r.get('type') == 'RuntimeError']
