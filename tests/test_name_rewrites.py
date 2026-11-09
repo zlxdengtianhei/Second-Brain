@@ -48,6 +48,16 @@ CASES = {
         {'cards': [card('lantern', title='Lantern queue'),
                    card('order', propositions=['The field kc_lantern_size counts items; xkc_lantern too.'])]}, {},
         ('order', 'propositions', ['The field kc_lantern_size counts items; xkc_lantern too.'])),
+    # Chinese text sets no space around an id: the bounds are ASCII word characters, as before them
+    'an id with a Chinese character after it': (
+        {'cards': [card('lantern', title='Lantern queue'), card('order', propositions=['与kc_lantern不同，它不留标记。'])]},
+        {}, ('order', 'propositions', ['与[[Lantern queue]]不同，它不留标记。'])),
+    'a library id with a Chinese character after it': (
+        {'cards': [card('order', propositions=['kc_old-card说的是顺序。'])]}, {},
+        ('order', 'propositions', ['[[Old card]]说的是顺序。'])),
+    'an id between a Chinese character and a full-width stop': (
+        {'cards': [card('lantern', title='Lantern queue'), card('order', propositions=['它不同于kc_lantern。'])]},
+        {}, ('order', 'propositions', ['它不同于[[Lantern queue]]。'])),
     'renamed titles where one begins the other': (
         {'cards': [card('ab', title='A/B'), card('abc', title='A/B#C'),
                    card('order', essence='See [[A/B#C]] and [[A/B]] and [[A/B#Usage]].')]}, {},
@@ -85,3 +95,18 @@ def test_in_a_job_an_id_written_as_a_link_target_becomes_a_link_to_the_title(tmp
     cand = jobs.artifact(root, jobs.load(root, job_id), 'candidate', 'c01')
     assert next(c for c in cand['cards'] if c['slug'] == 'lantern-queue')['confusions'] == \
         [f'Unlike [[{title}]], it says nothing of memory.']
+
+
+def test_in_a_job_an_id_set_against_chinese_text_is_rewritten_and_the_answer_taken_at_once(tmp_path):
+    root, job_id, prefix = lantern_job(tmp_path)
+    answer = copy.deepcopy(first_candidate())
+    queue = next(c for c in answer['cards'] if c['slug'] == 'lantern-queue')
+    title = next(c for c in answer['cards'] if c['slug'] == 'lit-marker-cost')['title']
+    queue['confusions'] = [f'与{prefix}lit-marker-cost不同，它不讲内存。']
+    produce, review, seen = scripted([answer], [accept_all])
+    done = ingest.advance(root, job_id, producer=FakeExecutor('gpt-test', responder=produce),
+                          reviewer=FakeExecutor('claude-test', responder=review))
+    assert done['status'] == 'applied' and len(seen['producer']) == 1
+    cand = jobs.artifact(root, jobs.load(root, job_id), 'candidate', 'c01')
+    assert next(c for c in cand['cards'] if c['slug'] == 'lantern-queue')['confusions'] == \
+        [f'与[[{title}]]不同，它不讲内存。']

@@ -62,9 +62,10 @@ def _slug(card: dict):
 # --- the rules --------------------------------------------------------------------------------------------------------
 def _scanner(prefix: str) -> re.Pattern:
     """One scan of a text for what the name repairs rewrite: a link ``[[...]]`` (group 1, what is inside it), or a
-    card id standing on its own (no word character or ``[`` before it, no word character after it, so
-    ``kc_x_size`` is no id). An id inside a link is part of the link and never rewritten on its own."""
-    ident = (r'|(?<![\w\[])' + re.escape(prefix) + r'[a-z0-9][a-z0-9-]*(?![\w])') if prefix else ''
+    card id standing on its own (no ASCII letter, digit, ``_`` or ``[`` before it, none of the first three after it,
+    so ``kc_x_size`` is no id, while an id written against Chinese characters with no space around it is one). An
+    id inside a link is part of the link and never rewritten on its own."""
+    ident = (r'|(?<![A-Za-z0-9_\[])' + re.escape(prefix) + r'[a-z0-9][a-z0-9-]*(?![A-Za-z0-9_])') if prefix else ''
     return re.compile(r'\[\[([^\[\]\n]*)\]\]' + ident)
 
 
