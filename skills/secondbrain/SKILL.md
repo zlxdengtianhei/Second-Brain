@@ -42,7 +42,7 @@ This freezes the source and splits it into chunks. It prints a JSON **list** wit
 For each hand-off start a **new** sub-agent (no shared history with you or other sub-agents):
 
 - `role: producer` (steps `produce`, `repair`, `note`, `split`, `diagram`) → text from `references/subagent-producer.md`;
-- `role: reviewer` (steps `review`, `source_check`, `dispute`, `split`) → text from `references/subagent-reviewer.md`. When the host lets you choose, use a model from a different family than the producer. Choose the text by `role`, not by `step`: a `split` step comes with either role. When the host offers only one family (for example, all sub-agents run models of one vendor), still start a new sub-agent for each review: `sb` accepts it in host mode, marks the job `same_family: true`, and you report that (section 5).
+- `role: reviewer` (steps `review`, `notecheck`, `source_check`, `dispute`, `split`) → text from `references/subagent-reviewer.md`. When the host lets you choose, use a model from a different family than the producer. Choose the text by `role`, not by `step`: a `split` step comes with either role. When the host offers only one family (for example, all sub-agents run models of one vendor), still start a new sub-agent for each review: `sb` accepts it in host mode, marks the job `same_family: true`, and you report that (section 5).
 
 Fill in the three values from the hand-off (`packet_path`, `output_path`, `submit_cmd`) and nothing else. The sub-agent submits its own answer with `sb job submit`; `sb` checks the answer's form on the spot and returns errors to the sub-agent, not to you. Diagram answers are also checked card by card at the next `sb job advance`: a diagram that fails comes back as one rewrite hand-off (chunk `dg01.r1` …, section 4), which goes to a new sub-agent like any other. `submit_cmd` starts with the absolute path of the `sb` program you are running, so it works in a sub-agent shell that does not have `sb` on its `PATH`. The sub-agent must be able to read and write files and run that command on the same machine.
 
@@ -56,6 +56,7 @@ It runs every deterministic step that can run and prints **one** job object. Its
 
 - context-note calls, only when `[ingest] context_note` is `summary` or `concepts` (chunk `nt-c02` …, `nt-concepts`; step `note`);
 - reviews, and up to two repair rounds for rejected cards (chunk `c01.r1`, `c01.r2` …);
+- after a chunk's review, when an accepted card has a `minor` note that may name a blocking problem, the chunk's reviewer answers about each such note (chunk `nc-c01`, step `notecheck`);
 - the merge check (chunk `xc01`, step `source_check`), when the accepted `distinct` cards come from two or more chunks or a card extends an existing card: one reviewer looks at the cards of the source together, merges the ones that repeat each other, links cards that belong together, merges repeated new topics, and composes the patch for each existing card that a new card extends;
 - after a dispute of the merge check, the chunk reviewer judges that card again (chunk `xr1-<slug>`, step `dispute`), and then the merge check runs again (chunk `xc01.r1` …);
 - split slots (chunk `sp01`, `sp01.r1` …, step `split`), when a patch would make an existing card too long: a producer rewrites each card that extends it as a narrower one, and a reviewer checks it against the existing card;
