@@ -69,6 +69,20 @@ CASES = {
               {}, lambda out: out['cards'][0]['source_quotes'] == ['**lantern queue** keeps every item',
                                                                   'A writer lights a marker every eight items']
               and out['coverage'][0]['source_quote'] == 'a reader jumps to it'),
+    'overlap_hint': ({'cards': [card('lantern', overlap_hint={'overlap': 'extends', 'with': ['order', 'kc_old']}),
+                                card('order', overlap_hint={'overlap': 'extends', 'with': ['reader']}),
+                                card('writer', overlap_hint={'overlap': 'same', 'with': ['kc_old']})]},
+                     {'targets': {'kc_old', 'reader'}, 'title_of': {'kc_old': 'Old card'}},
+                     lambda out: out['cards'][0]['overlap_hint'] == {'overlap': 'extends', 'with': ['kc_old']}
+                     and 'overlap_hint' not in out['cards'][1]
+                     and out['cards'][2]['overlap_hint'] == {'overlap': 'same', 'with': ['kc_old']}),
+    'coverage_cards': ({'cards': [card('lantern')],
+                        'coverage': [{'source_quote': 'q', 'disposition': 'card', 'cards': ['lantern', 'reader']},
+                                     {'source_quote': 'q', 'disposition': 'card', 'cards': ['reader']},
+                                     {'source_quote': 'q', 'disposition': 'card', 'cards': ['lantern', 'ghost']}]},
+                       {'targets': {'reader'}},
+                       lambda out: [r['cards'] for r in out['coverage']] == [['lantern'], ['reader'],
+                                                                              ['lantern', 'ghost']]),
     'relation_target': ({'cards': [card('lantern', relations=[rel('similar_to', 'ghost'), rel('similar_to', 'kc_old'),
                                                               rel('part_of', 'order')]), card('order')]},
                         {'targets': {'kc_old'}},

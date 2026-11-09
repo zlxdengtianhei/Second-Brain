@@ -23,6 +23,7 @@ import copy
 import difflib
 import json
 import re
+import unicodedata
 from dataclasses import dataclass, field
 from typing import Callable
 
@@ -129,16 +130,55 @@ def _ids(payload: dict, ctx: Context) -> list:
     return out
 
 
+#: The marks a quote and the chunk are compared without, beyond bold marks and blanks (each maps to one form, or to
+#: nothing): every double quotation mark is one mark, every single one another; full-width punctuation is its ASCII
+#: form; every dash is a hyphen; backticks and ``$`` go, a doubled backslash is one; a list mark at the start of a
+#: line goes. A quote is taken only when this form of it is in this form of the chunk exactly once.
+DOUBLE_QUOTES = frozenset(map(chr, (0x22, 0x201C, 0x201D, 0x201E, 0x201F, 0xFF02, 0x301D, 0x301E, 0x300C, 0x300D,
+                                     0x300E, 0x300F)))  # straight, curly, full width, corner brackets
+SINGLE_QUOTES = frozenset(map(chr, (0x27, 0x2018, 0x2019, 0x201A, 0x201B)))
+DASHES = frozenset(map(chr, (0x2D, 0x2014, 0x2013, 0x2011, 0x2212, 0x2015)))
+DROPPED = frozenset('`$')
+_LIST_MARK = re.compile(r'(?:[-*]|\d+\.)[ \t]+')
+
+
+def _fold(ch: str) -> str:
+    if ch in DOUBLE_QUOTES:
+        return '"'
+    if ch in SINGLE_QUOTES:
+        return "'"
+    if ch in DASHES:
+        return '-'
+    if 0xFF01 <= ord(ch) <= 0xFF5E:  # a full-width form of an ASCII mark or letter
+        return unicodedata.normalize('NFKC', ch)
+    return ch
+
+
 def _normalized(text: str) -> tuple[str, list]:
-    chars, at, i = [], [], 0
+    """``text`` as a quote and the chunk are compared (bold marks, blanks and the marks of :data:`DOUBLE_QUOTES` ...
+    set aside or mapped), and for each character of it where it stands in ``text``."""
+    chars, at, i, line_start = [], [], 0, True
     while i < len(text):
+        ch = text[i]
+        if ch.isspace():
+            line_start = line_start or ch == '\n'
+            i += 1
+            continue
+        if line_start:
+            line_start = False
+            mark = _LIST_MARK.match(text, i)
+            if mark:
+                i = mark.end()
+                continue
         if text.startswith(MARKS, i):
             i += 2
             continue
-        if not text[i].isspace():
-            chars.append(text[i])
-            at.append(i)
-        i += 1
+        if ch in DROPPED:
+            i += 1
+            continue
+        chars.append(_fold(ch))
+        at.append(i)
+        i += 2 if text.startswith('\\\\', i) else 1
     return ''.join(chars), at
 
 
@@ -180,6 +220,44 @@ def _quotes(payload: dict, ctx: Context) -> list:
             if exact:
                 out.append({'rule': 'quote', 'coverage': i, 'before': row['source_quote'], 'after': exact})
                 row['source_quote'] = exact
+    return out
+
+
+def _source_card(name, ctx: Context, own: set) -> bool:
+    """Whether ``name`` is a card of this source (of this answer or another chunk), not an existing card."""
+    return isinstance(name, str) and name not in ctx.title_of and (name in own or name in ctx.targets)
+
+
+def _overlap_hints(payload: dict, ctx: Context) -> list:
+    own = {_slug(c) for c in _cards(payload)} - {None}
+    out = []
+    for c in _cards(payload):
+        hint = c.get('overlap_hint')
+        if not isinstance(hint, dict) or not isinstance(hint.get('with'), list):
+            continue
+        kept = [x for x in hint['with'] if not _source_card(x, ctx, own)]
+        if len(kept) == len(hint['with']):
+            continue
+        out.append({'rule': 'overlap_hint', 'card': _slug(c), 'before': dict(hint),
+                    'after': {**hint, 'with': kept} if kept else None})
+        if kept:
+            hint['with'] = kept
+        else:
+            del c['overlap_hint']
+    return out
+
+
+def _coverage_cards(payload: dict, ctx: Context) -> list:
+    own = {_slug(c) for c in _cards(payload)} - {None}
+    out = []
+    for i, row in enumerate(payload.get('coverage') or []):
+        if not isinstance(row, dict) or row.get('disposition') != 'card' or not isinstance(row.get('cards'), list):
+            continue
+        kept = [x for x in row['cards'] if x in own]
+        foreign = [x for x in row['cards'] if x not in own and _source_card(x, ctx, own)]
+        if kept and foreign and len(kept) + len(foreign) == len(row['cards']):
+            out.append({'rule': 'coverage_cards', 'coverage': i, 'before': list(row['cards']), 'after': kept})
+            row['cards'] = kept
     return out
 
 
@@ -270,8 +348,13 @@ def _directions(payload: dict, ctx: Context) -> list:
 RULES = (
     Rule('title', 'a character a title may not hold is written full width (links to the card follow)', _titles),
     Rule('card_id', 'a card named by its id in the text is named by [[title]]', _ids),
-    Rule('quote', 'a quote that is a slice of the chunk once bold marks and blanks are set aside, there once, '
-                  'becomes that slice', _quotes),
+    Rule('quote', 'a quote that is a slice of the chunk once bold marks, blanks, the kind of quotation mark or dash, '
+                  'full-width punctuation, backticks, `$`, a doubled backslash and a list mark at the start of a line '
+                  'are set aside, there once, becomes that slice', _quotes),
+    Rule('overlap_hint', 'a card of this source named in an overlap hint, which names existing cards, is taken out '
+                         '(the hint goes when it names none)', _overlap_hints),
+    Rule('coverage_cards', 'a card of another chunk named in a card row of the coverage, next to a card of this '
+                           'answer, is taken out', _coverage_cards),
     Rule('relation_target', 'a relation to a card that is neither an existing card nor a card of the source is '
                             'dropped', _targets),
     Rule('relation_pair', 'of two or more relations between one pair of cards (back links counted), the first in '
