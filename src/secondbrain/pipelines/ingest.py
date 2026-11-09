@@ -2327,7 +2327,10 @@ def _patch_fits(old, patch: dict) -> tuple[str | None, list, list]:
     props, flashcards = cardfmt.propositions_of(old.body), cardfmt.flashcards_of(old.body)
     replaced = {int(r['proposition'][1:]): r['by'] for r in patch.get('replace') or []}
     have = props + list(replaced.values())
-    flashcards, _ = source_check.swap_flashcards(flashcards, patch.get('flashcard_replace') or [])  # D-26
+    try:
+        flashcards, _ = source_check.swap_flashcards(flashcards, patch.get('flashcard_replace') or [])  # D-26
+    except ValueError as exc:
+        return str(exc), [], []
     add = []
     for text in patch.get('propositions') or []:
         if not any(source_check.repeat(text, x) for x in have + add):
@@ -3097,7 +3100,8 @@ def _apply_job(root: Path, job_id: str, settled: list[dict] | None = None) -> di
     for target, patch in sorted(((check or {}).get('patches') or {}).items()):
         if not patch.get('flashcard_replace') or (target in by_target and not fates[by_target[target][0]].get('patch')):
             continue
-        why = next((f['reason'] for f in fates.values() if f['target'] == target and f.get('reason')),
+        why = next((f['reason'] for f in fates.values() if f['target'] == target and f['how'] in ('written', 'pending')
+                    and f.get('reason')),
                    f'its patch would take {target} past {source_check.MAX_PROPOSITIONS} propositions or '
                    f'{source_check.MAX_FLASHCARDS} review cards, so what extends it was written as narrower cards '
                    'and it took no patch')

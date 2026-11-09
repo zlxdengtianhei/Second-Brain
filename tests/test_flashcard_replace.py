@@ -235,3 +235,15 @@ def test_a_card_whose_question_changed_keeps_its_review_schedule(tmp_path):
     _, kept = replay(old_item, old_item)
     assert mid.reps == 1 and swapped.reps == 2 and swapped.due > mid.due
     assert swapped.as_dict() == kept.as_dict()
+
+
+def test_a_swap_of_a_review_card_the_card_no_longer_has_is_refused_never_put_elsewhere(tmp_path):
+    """The merge check saw the card with two review cards; if it has fewer when the patch is written, the swap is
+    refused by name (number 0 or past the end never lands on another review card), and the card takes no patch."""
+    root, _, _ = job(tmp_path)
+    old = card_of(root, EXISTING)
+    for ref in ('Q3', 'Q0', 'P1'):
+        with pytest.raises(ValueError, match=r'a replaced review card must be one of Q1-Q2'):
+            source_check.swap_flashcards(cardfmt.flashcards_of(old.body), [{**SWAP, 'flashcard': ref}])
+    problem, add, add_f = ingest._patch_fits(old, {'flashcards': [NEW], 'flashcard_replace': [{**SWAP, 'flashcard': 'Q3'}]})
+    assert 'a replaced review card must be one of Q1-Q2' in problem and add == add_f == []

@@ -1020,6 +1020,8 @@ def swap_flashcards(flashcards: list, swaps: list) -> tuple[list, list]:
     out, done = [dict(f) if isinstance(f, dict) else f for f in flashcards], []
     for swap in swaps:
         number = _number(swap.get('flashcard'), 'Q')
+        if not 1 <= number <= len(out):  # the card changed since the merge check saw it
+            raise ValueError(f'a replaced review card must be one of Q1-Q{len(out)}, not {swap.get("flashcard")!r}')
         before = out[number - 1]
         out[number - 1] = {**before, 'q': swap['q'], 'a': swap['a']}
         done.append({'flashcard': f'Q{number}', 'before': {'q': before.get('q'), 'a': before.get('a')},
