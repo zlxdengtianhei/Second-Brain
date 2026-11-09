@@ -123,6 +123,8 @@ Folder names are relative to the vault. Folders must not overlap.
 
 ### `[executor]`, `[executor.producer]`, `[executor.reviewer]`
 
+Which producer and reviewer to choose, with what four set-ups were measured to give (problem cards, chunks passed, cost, how often the reviewer catches a problem card): [Which models to use](ingest.md#which-models-to-use). A Flash-class model is not to be the only reviewer.
+
 | Key | Default | Meaning |
 |---|---|---|
 | `default` | `api` | Executor when a command has no `--executor`. `host` hands each step to a sub-agent; `api` calls the endpoints. |

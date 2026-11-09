@@ -123,6 +123,8 @@ mode = "sequential"          # sequential | parallel
 
 ### `[executor]`、`[executor.producer]`、`[executor.reviewer]`
 
+生产者与复核者选哪种，以及四种配置的实测读数（问题卡、块次过、花费、复核者抓到问题卡的比例）：见[选哪种模型配置](ingest.zh-CN.md#选哪种模型配置)。Flash 一档的模型不要当唯一的复核者。
+
 | 配置项 | 默认值 | 含义 |
 |---|---|---|
 | `default` | `api` | 命令没有 `--executor` 时用的执行器。`host` 把每一步交给一个子代理；`api` 调用端点。 |
