@@ -16,6 +16,8 @@ from .vault import card_packet, read_snapshot
 #: Why an item waits for the owner (the design's ``owner_reason``); the first two can be on a card.
 OWNER_REASONS = ('source_unclear', 'possible_repeat', 'conflict', 'pending', 'needs_taxonomy')
 CARD_REASONS = OWNER_REASONS[:2]
+#: The job kinds of the maintenance commands (`sb classify`, `sb curate`, `sb relocate`, `sb domain create`).
+MAINTENANCE_KINDS = ('classification', 'curation', 'relocation', 'domcreate')
 
 
 class Service:
@@ -87,7 +89,8 @@ class Service:
         and from the latest job of each partly written source its pending items (``pending``) and its passages
         and refused new topics that need a place in the taxonomy (``needs_taxonomy``); and the paragraphs of the
         latest export of each article that its review or its program check still did not pass when the repair
-        rounds ran out (``pending``, ``kind: export_paragraph``; the article marks them too).
+        rounds ran out (``pending``, ``kind: export_paragraph``; the article marks them too); and the maintenance jobs
+        that stopped to wait for the owner (``pending``, ``kind: maintenance_job``).
         """
         from . import inbox
         from .pipelines.ingest import open_conflicts
@@ -121,7 +124,33 @@ class Service:
                       for row in job.get('needs_taxonomy') or []]
             items += [{'owner_reason': 'needs_taxonomy', 'kind': 'refused_topic', **where, **row}
                       for row in job.get('refused_topics') or []]
-        return items + self._export_items()
+        return items + self._export_items() + self._stopped_jobs()
+
+    def _stopped_jobs(self) -> list[dict]:
+        """The maintenance jobs that stopped to wait for the owner (``escalation_required``: an answer kept failing
+        the program's checks, or the repair rounds ran out): the job, its kind, the step that stopped and why. Only
+        the newest job of each operation counts (a later run of it replaces the one before); a classification's
+        revision job is shown through the job it revises."""
+        states = []
+        for entry in jobs.list_jobs(self.root):
+            if entry.get('kind') not in MAINTENANCE_KINDS:
+                continue
+            try:
+                states.append(jobs.load(self.root, entry['job_id']))
+            except (ValueError, OSError):
+                continue
+        children = {s.get('repair_child') for s in states}
+        newest: dict = {}
+        for s in states:
+            group = jobs._prune_group(s)
+            if s['job_id'] not in children and (s.get('created_at') or '') >= (newest.get(group) or {}).get(
+                    'created_at', ''):
+                newest[group] = s
+        return [{'owner_reason': 'pending', 'kind': 'maintenance_job', 'job_id': s['job_id'], 'job_kind': s['kind'],
+                 'step': s.get('escalation_step'), 'reason': s.get('escalation_reason'),
+                 'detail': f'sb job show {s["job_id"]} shows its answers and reasons; running the command again '
+                           'starts a new job, which takes its place here'}
+                for s in sorted(newest.values(), key=lambda s: s['job_id']) if s.get('escalation_required')]
 
     def _not_merged(self, ids: set) -> dict:
         """``{id: why}`` for the needs-review cards an ingest job wrote next to the existing card they extend: why

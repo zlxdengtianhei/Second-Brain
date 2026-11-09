@@ -210,9 +210,10 @@ def _spent(state: dict, packet: dict, role: str) -> str | None:
     return f'the {role} answer failed validation {row["count"]} times: {row.get("message", "")}'
 
 
-def _give_up(root: Path, job_id: str, why: str) -> dict:
-    """The job waits for the owner: nothing more is asked, nothing applied."""
-    return jobs.update(root, job_id, escalation_required=True, escalation_reason=why)
+def _give_up(root: Path, job_id: str, why: str, step: str) -> dict:
+    """The job waits for the owner (``sb status --owner-items``): nothing more is asked, nothing applied; ``step``
+    is the step that stopped (``produce``, ``repair``, ``review``)."""
+    return jobs.update(root, job_id, escalation_required=True, escalation_reason=why, escalation_step=step)
 
 
 def run_job(root: Path, job_id: str, *, producer: Executor, reviewer: Executor,
@@ -247,7 +248,7 @@ def _run_locked(root: Path, job_id: str, *, producer: Executor, reviewer: Execut
     if not state.get('candidate'):
         spent = _spent(state, packet, 'producer')
         if spent:
-            return _give_up(root, job_id, spent)
+            return _give_up(root, job_id, spent, 'produce')
         feedback = packet.get('repair_feedback')
         text = head + '\n' + prompt(spec.produce_prompt)
         if feedback:
@@ -260,7 +261,7 @@ def _run_locked(root: Path, job_id: str, *, producer: Executor, reviewer: Execut
     if not state.get('review'):
         spent = _spent(state, packet, 'reviewer')
         if spent:
-            return _give_up(root, job_id, spent)
+            return _give_up(root, job_id, spent, 'review')
         shown = withhold_reasons(candidate) if jobs.policy_of(packet).withhold_producer_reasons else candidate
         review_packet = {'input': {k: v for k, v in packet.items() if k != 'repair_feedback'},
                          'candidate': shown}
@@ -284,8 +285,7 @@ def _run_locked(root: Path, job_id: str, *, producer: Executor, reviewer: Execut
         _produce(root, job_id, producer, text, repair_packet, spec, packet, step='repair')
         raise _ContinueJob()
     if rejected:
-        jobs.update(root, job_id, escalation_required=True,
-                    escalation_reason='repair rounds exhausted; the review still rejects items')
+        _give_up(root, job_id, 'repair rounds exhausted; the review still rejects items', 'repair')
     if not apply:
         return jobs.load(root, job_id)
     return spec.apply(root, job_id)
@@ -313,8 +313,7 @@ def _repair_classification(root, state, packet, review, *, producer, reviewer, a
     rejected_ids = {x['id'] for x in review['items'] if x['decision'] == 'revise'}
     child_id = state.get('repair_child')
     if child_id is None and rounds_left(packet, state) <= 0:
-        jobs.update(root, state['job_id'], escalation_required=True,
-                    escalation_reason='repair rounds exhausted; the review still rejects items')
+        _give_up(root, state['job_id'], 'repair rounds exhausted; the review still rejects items', 'repair')
         return apply_classification(root, state['job_id']) if apply else jobs.load(root, state['job_id'])
     if child_id is None:
         key = digest((state['job_id'] + state['candidate']['sha256'] + state['review']['sha256']).encode())[:24]
@@ -345,4 +344,5 @@ def _repair_classification(root, state, packet, review, *, producer, reviewer, a
     if parent.get('escalation_required') or not child.get('escalation_required'):
         return parent
     return jobs.update(root, state['job_id'], escalation_required=True,
-                       escalation_reason=child.get('escalation_reason'))
+                       escalation_reason=f'in its revision job {child_id}: {child.get("escalation_reason")}',
+                       escalation_step=child.get('escalation_step'))
