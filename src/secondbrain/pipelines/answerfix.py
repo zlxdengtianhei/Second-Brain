@@ -60,6 +60,43 @@ def _slug(card: dict):
 
 
 # --- the rules --------------------------------------------------------------------------------------------------------
+def _scanner(prefix: str) -> re.Pattern:
+    """One scan of a text for what the name repairs rewrite: a link ``[[...]]`` (group 1, what is inside it), or a
+    card id standing on its own (no word character or ``[`` before it, no word character after it, so
+    ``kc_x_size`` is no id). An id inside a link is part of the link and never rewritten on its own."""
+    ident = (r'|(?<![\w\[])' + re.escape(prefix) + r'[a-z0-9][a-z0-9-]*(?![\w])') if prefix else ''
+    return re.compile(r'\[\[([^\[\]\n]*)\]\]' + ident)
+
+
+def _rewrite(text: str, scan: re.Pattern, renamed: dict, names: dict, done: list | None = None) -> str:
+    """``text`` with, in one scan (what is written is never scanned again): a link to a renamed title (the longest
+    that fits, so ``[[A/B#C]]`` goes to a card titled ``A/B#C`` before one titled ``A/B``) to the new title; a link
+    whose target is a card id that names a card, and a card id on its own, to ``[[title]]``. Each id rewritten is
+    added to ``done`` as ``(before, after)``."""
+    order = sorted(renamed, key=len, reverse=True)
+
+    def one(m: re.Match) -> str:
+        if m.group(1) is not None:  # a link
+            inside = m.group(1)
+            for t in order:
+                if inside == t or inside.startswith((t + '|', t + '#')):
+                    return '[[' + renamed[t] + inside[len(t):] + ']]'
+            cut = min([i for i in (inside.find('|'), inside.find('#')) if i >= 0] or [len(inside)])
+            title = names.get(inside[:cut])
+            if not isinstance(title, str):
+                return m.group(0)
+            if done is not None:
+                done.append((m.group(0), f'[[{title}{inside[cut:]}]]'))
+            return f'[[{title}{inside[cut:]}]]'
+        title = names.get(m.group(0))
+        if not isinstance(title, str):
+            return m.group(0)  # not a card it can name: the check says so
+        if done is not None:
+            done.append((m.group(0), f'[[{title}]]'))
+        return f'[[{title}]]'
+    return scan.sub(one, text)
+
+
 def _titles(payload: dict, ctx: Context) -> list:
     out, renamed = [], {}
     for c in _cards(payload):
@@ -68,9 +105,9 @@ def _titles(payload: dict, ctx: Context) -> list:
             c['title'] = renamed[title] = title.translate(FULL_WIDTH)
             out.append({'rule': 'title', 'card': _slug(c), 'before': title, 'after': c['title']})
     if renamed:  # links to a renamed card, in the answer's own text, follow it
-        pattern = re.compile(r'\[\[(' + '|'.join(re.escape(t) for t in renamed) + r')(?=[\]|#])')
+        scan = _scanner(ctx.prefix)
         for c in _cards(payload):
-            _each_text(c, lambda s: pattern.sub(lambda m: '[[' + renamed[m.group(1)], s))
+            _each_text(c, lambda s: _rewrite(s, scan, renamed, {}))
     return out
 
 
@@ -79,17 +116,13 @@ def _ids(payload: dict, ctx: Context) -> list:
         return []
     own = {ctx.prefix + c['slug']: c.get('title') for c in _cards(payload) if _slug(c)}
     names = {**ctx.title_of, **own}
-    pattern = re.compile(re.escape(ctx.prefix) + r'[a-z0-9][a-z0-9-]*')
-    out = []
+    scan, out = _scanner(ctx.prefix), []
     for c in _cards(payload):
         def sub(text, card=c):
-            def one(m):
-                title = names.get(m.group(0))
-                if not isinstance(title, str):
-                    return m.group(0)  # not a card it can name: the check says so
-                out.append({'rule': 'card_id', 'card': _slug(card), 'before': m.group(0), 'after': f'[[{title}]]'})
-                return f'[[{title}]]'
-            return pattern.sub(one, text)
+            done: list = []
+            text = _rewrite(text, scan, {}, names, done)
+            out.extend({'rule': 'card_id', 'card': _slug(card), 'before': b, 'after': a} for b, a in done)
+            return text
         _each_text(c, sub)
     return out
 
@@ -268,27 +301,20 @@ class RepairFault(RuntimeError):
 
 
 def _canonical(payload: dict, ctx: Context) -> Callable[[str], str]:
-    """One way to write the text a repair may change, built from the answer as given: a card id that names a card
-    becomes ``[[title]]`` (its title written full width where a title may not hold a character), and a link to a
-    card of the answer by its title as given becomes a link by that title written full width. The guard of
-    :func:`repair` writes both sides so before it compares them; nothing is ever turned back, so a card that already
-    names a card by ``[[title]]`` and also by its id compares equal once the id is repaired."""
+    """One way to write the text a repair may change, built from the answer as given, in one scan
+    (:func:`_rewrite`): a card id that names a card, on its own or as a link's target, becomes ``[[title]]`` (its
+    title written full width where a title may not hold a character), and a link to a card of the answer by its
+    title as given becomes a link by that title written full width. The guard of :func:`repair` writes both sides
+    so before it compares them; nothing is ever turned back, and what one scan writes is not scanned again, so
+    writing a text a second time changes nothing."""
     titles = {c['title']: c['title'].translate(FULL_WIDTH) for c in _cards(payload) if isinstance(c.get('title'), str)}
     names = {k: v for k, v in ctx.title_of.items() if isinstance(v, str)}
     if ctx.prefix:
         names.update({ctx.prefix + c['slug']: titles[c['title']] for c in _cards(payload)
                       if _slug(c) and isinstance(c.get('title'), str)})
-    ids = re.compile(re.escape(ctx.prefix) + r'[a-z0-9][a-z0-9-]*') if ctx.prefix else None
     renamed = {t: f for t, f in titles.items() if t != f}
-    links = re.compile(r'\[\[(' + '|'.join(re.escape(t) for t in renamed) + r')(?=[\]|#])') if renamed else None
-
-    def canon(text: str) -> str:
-        if links is not None:
-            text = links.sub(lambda m: '[[' + renamed[m.group(1)], text)
-        if ids is not None:
-            text = ids.sub(lambda m: f'[[{names[m.group(0)]}]]' if m.group(0) in names else m.group(0), text)
-        return text
-    return canon
+    scan = _scanner(ctx.prefix)
+    return lambda text: _rewrite(text, scan, renamed, names)
 
 
 def _knowledge(card: dict, canon: Callable[[str], str]) -> str:
