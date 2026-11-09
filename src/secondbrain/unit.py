@@ -13,10 +13,11 @@ from __future__ import annotations
 
 ONE_QUESTION = (
     'One question: a card answers one question, the one its title names. Each proposition and each review card '
-    'answers that question or gives what its answer needs (a condition, a case, an example, a step of it). A '
-    'proposition or a review card that answers another question, one a reader could ask and have answered by a card '
-    'of its own, does not belong on the card, even when it is about the same things: which tools there are is one '
-    'question; how they differ, or which to choose when, is another. It goes on a card of its own, linked to this one.')
+    'answers that question or gives what its answer needs (a condition, a case, an example, a step of it, the '
+    'answer to one of its sub-questions). A proposition or a review card that answers another question, one a '
+    'reader could ask and have answered by a card of its own, does not belong on the card, even when it is about '
+    'the same things: which tools there are is one question; how they differ, or which to choose when, is another. '
+    'It goes on a card of its own, linked to this one.')
 
 #: Where a prompt takes the rule: this line is replaced by :func:`definition`.
 PLACEHOLDER = '<!-- unit.definition -->'

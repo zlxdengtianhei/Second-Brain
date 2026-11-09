@@ -69,20 +69,29 @@ def definition() -> str:
     return _DEFINITION
 
 
-#: A card that says one thing twice. What an essence, an intuition or a confusion says again is left out: judges did
-#: not agree on it.
-REPEATS = ('- `repeats`: the card says one thing twice: two of its propositions, or two of its review cards, make the '
-           'same point in other words. An essence, an intuition or a confusion that says again what a proposition '
-           'says is not `repeats`.')
+#: When a card says one thing twice; producers and reviewers read the same words. Two review cards on one
+#: proposition are not (a card has 2-4 of them on its key propositions), nor is what an essence, an intuition or a
+#: confusion says again (judges did not agree on it).
+TWICE = ('two of its propositions make the same point in other words, or two of its review cards ask the same '
+         'question. Two review cards that ask about one proposition from different sides (another cue, another '
+         'part of it) do not say it twice')
+REPEATS = (f'- `repeats`: the card says one thing twice: {TWICE}. An essence, an intuition or a confusion that says '
+           'again what a proposition says is not `repeats` either.')
 #: The question a reviewer writes first, and checks every item against.
 QUESTION = ('Write that question in `question` first, in one sentence in the card\'s language, as a reader would ask '
             'it. Then check each proposition (P1 is the first) and each review card (Q1 is the first) against it. '
             'When some of them answer another question, revise, with a `not_a_unit` note that names them and the '
             'question they answer: they are to be split off into a card of their own, or moved.')
-#: An example needs its premises on the card.
-PREMISES = ('Readable without the source: an example or a worked calculation gives, on the card, the premises it uses '
-            '(the rule, the coordinates, the code book, the input values); one that relies on premises only the source '
-            'gives is `unreadable`.')
+#: An example needs its premises on the card. A premise another chunk of the source gives is written on the card
+#: and its card is named, so the card is faithful too (a card of the source named by title is a source of it).
+PREMISES = ('An example or a worked calculation gives, on the card, the premises it uses (the rule, the coordinates, '
+            'the code book, the input values). When another chunk of this source gives a premise, write it on the card '
+            'and name, by `[[title]]`, the card of this source that states it (`other_chunks_cards`): that card is '
+            'its source.')
+#: Where a producer's prompt takes :func:`producer_part`.
+PRODUCER_PLACEHOLDER = '<!-- notes.producer -->'
+#: Where a focused round's prompt lists the kinds that send a card back.
+BLOCKING_PLACEHOLDER = '<!-- notes.blocking -->'
 
 
 def card_part() -> str:
@@ -91,7 +100,19 @@ def card_part() -> str:
     return '\n'.join([
         'On a card, one more kind of note:', REPEATS,
         'A `repeats` note is a reason to revise as well: when you accept with one, the card is sent back.', '',
-        unit.definition(), QUESTION, '', PREMISES])
+        unit.definition(), QUESTION, '',
+        f'Readable without the source: {PREMISES} An example that relies on premises the card does not give is '
+        '`unreadable`.'])
+
+
+def producer_part() -> str:
+    """What a producer of a card reads of the same rules: say each thing once, and give an example's premises."""
+    return f'Say each thing once: a card says it twice when {TWICE}.\n\n{PREMISES}'
+
+
+def blocking_list() -> str:
+    """The kinds of a card reviewer's note that send a card back, as a focused round's prompt names them."""
+    return '(' + ', '.join(f'`{k}`' for k in CARD_BLOCKING) + ')'
 
 
 def problems(notes, where: str, categories=CATEGORIES) -> list[str]:

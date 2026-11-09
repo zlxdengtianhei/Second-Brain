@@ -35,8 +35,8 @@ _MEANING = {
     'extends': ('the card answers the same question as the one card in `with` (the question its title names), or one '
                 'of its sub-questions, and has details, examples, cases or the answer to a sub-question that card '
                 'lacks; merged into it, that card still answers one question, and every proposition it adds answers '
-                'that question. A card that only answers a narrower sub-question of that card is `extends` too. '
-                '`with` names exactly one card.'),
+                'that question or one of its sub-questions. A card that only answers a narrower sub-question of '
+                'that card is `extends` too. `with` names exactly one card.'),
     'same': ('the card holds nothing that the cards in `with` do not hold; its knowledge may be spread over several '
              'of them. `with` names at least one card.'),
 }

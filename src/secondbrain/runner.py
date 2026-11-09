@@ -43,7 +43,9 @@ def prompt(name: str) -> str:
     text = resources.files('secondbrain').joinpath('prompts', name).read_text(encoding='utf-8')
     return text.replace(overlap.PLACEHOLDER, overlap.definition().rstrip('\n')).replace(
         review_notes.PLACEHOLDER, review_notes.definition()).replace(
-        review_notes.CARD_PLACEHOLDER, review_notes.card_part()).replace(unit.PLACEHOLDER, unit.definition())
+        review_notes.CARD_PLACEHOLDER, review_notes.card_part()).replace(unit.PLACEHOLDER, unit.definition()).replace(
+        review_notes.PRODUCER_PLACEHOLDER, review_notes.producer_part()).replace(
+        review_notes.BLOCKING_PLACEHOLDER, review_notes.blocking_list())
 
 
 def withhold_reasons(value):

@@ -1425,6 +1425,14 @@ def _check_focused(packet: dict, state: dict, chunk: str, review: dict) -> None:
     is not fixed or for a blocking problem (:data:`secondbrain.schemas.BLOCKING`); anything else goes to ``notes``."""
     if not jobs.policy_of(packet).focused_review or not _round(chunk):
         return
+    errors = focused_problems(review)
+    if errors:
+        raise IngestAnswerError('Review rejected by validation:\n- ' + '\n- '.join(errors))
+
+
+def focused_problems(review: dict) -> list[str]:
+    """What a focused repair round's review may not do: send a card back for anything but an earlier finding that
+    is not fixed or a blocking problem (:data:`secondbrain.schemas.BLOCKING`)."""
     errors = []
     for row in review.get('cards') or []:
         if row.get('decision') != 'revise':
@@ -1434,8 +1442,7 @@ def _check_focused(packet: dict, state: dict, chunk: str, review: dict) -> None:
             errors.append(f'{row["slug"]}: in a repair round a card is revised only for an earlier finding that is '
                           f'not fixed (fixed: [{{"finding": ..., "fixed": false}}]) or a blocking problem (blocking: '
                           f'{", ".join(schemas.BLOCKING)}); put other problems in notes')
-    if errors:
-        raise IngestAnswerError('Review rejected by validation:\n- ' + '\n- '.join(errors))
+    return errors
 
 
 def _made_amends(root: Path, packet: dict, state: dict, chunk: str, candidate: dict, review: dict,
@@ -2190,13 +2197,8 @@ def _step(root: Path, job_id: str, action: tuple, producer, reviewer) -> None:
         return
     if kind == 'review':
         rules = jobs.policy_of(packet)
-        text = _prompt('review_cards.md', state)
-        if rules.amend:
-            text += '\n' + _prompt_only('review_amend.md')
-        if rules.focused_review and _round(slot):
-            text += '\n' + _prompt_only('review_focused.md')
-        if packet.get('retry'):
-            text += '\n' + _prompt_only('retry_review_cards.md')
+        text = review_prompt(state['job_id'], amend=rules.amend, focused=bool(rules.focused_review and _round(slot)),
+                             retry=bool(packet.get('retry')))
         feedback = ((state.get('chunks') or {}).get(slot) or {}).get('last_review_error')
         if feedback:
             text += '\n## Your previous answer was rejected by the validator\n\n' + feedback + '\n'
@@ -2239,6 +2241,26 @@ def _step(root: Path, job_id: str, action: tuple, producer, reviewer) -> None:
             _record_split(root, job_id, base, failure.error.get('message', ''))
             return
         _failed_answer(root, job_id, slot, 'producer', failure)
+
+
+def review_prompt(job_id: str, *, amend: bool, focused: bool, retry: bool) -> str:
+    """The instructions of a chunk's review: the review prompt, with the part on mechanical fixes, on a focused
+    repair round and on a retry when they apply (the one assembly; ``tools/review_replay.py`` uses it too)."""
+    text = _prompt('review_cards.md', {'job_id': job_id})
+    for wanted, part in ((amend, 'review_amend.md'), (focused, 'review_focused.md'), (retry, 'retry_review_cards.md')):
+        if wanted:
+            text += '\n' + _prompt_only(part)
+    return text
+
+
+def split_review_prompt(job_id: str) -> str:
+    """The instructions of a split card's review."""
+    return _prompt('review_split.md', {'job_id': job_id})
+
+
+def merge_check_prompt(job_id: str) -> str:
+    """The instructions of the merge check."""
+    return _prompt_only('source_check.md').replace('{job_id}', job_id)
 
 
 def _prompt_only(name: str) -> str:
@@ -2473,7 +2495,7 @@ def _source_check_stage(root: Path, job_id: str, packet: dict, settled: list[dic
             jobs.put_program_candidate(root, job_id, slot, _source_check_input(root, packet, routed))
             state = jobs.load(root, job_id)
             info = state['chunks'][slot]
-        text = _prompt_only('source_check.md').replace('{job_id}', job_id)
+        text = merge_check_prompt(job_id)
         if info.get('last_validation_error'):
             text += '\n## Your previous answer was rejected by the validator\n\n' + info['last_validation_error'] + '\n'
         try:
@@ -2710,7 +2732,7 @@ def _split_stage(root: Path, job_id: str, packet: dict, settled: list[dict], pro
         try:
             if kind == 'review':
                 from ..runner import withhold_reasons
-                text = _prompt('review_split.md', state)
+                text = split_review_prompt(state['job_id'])
                 feedback = ((state.get('chunks') or {}).get(slot) or {}).get('last_review_error')
                 if feedback:
                     text += '\n## Your previous answer was rejected by the validator\n\n' + feedback + '\n'

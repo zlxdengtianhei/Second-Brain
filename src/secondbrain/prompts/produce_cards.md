@@ -4,6 +4,8 @@ A card is one unit of knowledge that someone can recall on its own: it answers o
 
 <!-- unit.definition -->
 
+<!-- notes.producer -->
+
 `context_note`, when present, is the program's note on where this chunk sits in the source: the headings it is under, the end of the chunk before, the source's outline (in some runs a short summary of what came before, or the source's concepts by chunk). Use it only to understand the chunk, for instance what "the three kinds above" are: it is not part of the chunk, so do not quote it, do not write cards from it, and it covers no passage.
 
 For each card give:

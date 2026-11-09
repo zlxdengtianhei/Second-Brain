@@ -199,3 +199,52 @@ def test_the_question_is_not_written_to_a_card(tmp_path):
         assert run(root, job_id, review)['status'] == 'applied'
         return {p.relative_to(root).as_posix(): p.read_bytes() for p in (root / '10_Knowledge').rglob('*.md')}
     assert vault_after(tmp_path / 'a', True) == vault_after(tmp_path / 'b', False)
+
+
+# --- the producer reads what it is judged by; the texts agree with each other ------------------------------------------
+@pytest.mark.parametrize('name', ('produce_cards.md', 'split_card.md'))
+def test_a_producer_reads_the_rules_its_cards_are_judged_by(name):
+    text = prompt(name)
+    assert text.count(review_notes.producer_part()) == 1 and review_notes.PRODUCER_PLACEHOLDER not in text
+    assert text.count(review_notes.TWICE) == 1 and text.count(review_notes.PREMISES) == 1
+
+
+@pytest.mark.parametrize('name', CARD_REVIEWS)
+def test_a_reviewer_reads_the_same_two_rules_once(name):
+    text = prompt(name)
+    assert text.count(review_notes.TWICE) == 1 and text.count(review_notes.PREMISES) == 1
+
+
+def test_two_review_cards_on_one_proposition_are_not_repeats():
+    """A card has 2-4 review cards on its key propositions: a card of one proposition asks about it twice, from two
+    sides (the split card of the patch-set tests: "How does a reader skip ahead?" and "What does a reader follow to
+    skip?"). That is not `repeats`; two review cards that ask the same question are."""
+    from tests.test_patch_set import SPLIT_CARD
+    assert len(SPLIT_CARD['propositions']) == 1
+    assert len({f['q'] for f in SPLIT_CARD['flashcards']}) == 2
+    assert 'two of its review cards ask the same question' in review_notes.TWICE
+    assert 'Two review cards that ask about one proposition from different sides' in review_notes.TWICE
+    assert 'do not say it twice' in review_notes.TWICE
+
+
+def test_a_premise_another_chunk_gives_is_written_on_the_card_with_its_card_named():
+    assert 'When another chunk of this source gives a premise, write it on the card and name, by `[[title]]`, the ' \
+           'card of this source that states it (`other_chunks_cards`): that card is its source.' in review_notes.PREMISES
+    faithful = next(line for line in prompt('review_cards.md').splitlines() if line.lstrip().startswith('- Faithful:'))
+    assert 'the premises of an example may also come from a card of this source it names by `[[title]]` (shown in ' \
+           '`other_chunks_cards`)' in faithful
+
+
+def test_the_answer_to_a_sub_question_may_stay_on_the_card():
+    assert 'the answer to one of its sub-questions' in unit.ONE_QUESTION
+    assert 'every proposition it adds answers that question or one of its sub-questions' in overlap.definition()
+
+
+def test_the_focused_round_names_every_kind_that_sends_a_card_back():
+    text = prompt('review_focused.md')
+    assert all(f'`{kind}`' in text for kind in schemas.BLOCKING) and review_notes.BLOCKING_PLACEHOLDER not in text
+
+
+def test_the_old_meaning_of_the_levels_is_gone():
+    assert 'about another object' not in overlap.definition()
+    assert 'about the same object or question' not in overlap.definition()
