@@ -10,7 +10,9 @@ a ``revise`` or a program finding goes back to the writer while the review
 policy's repair rounds last. A unit still failing after that is kept and
 written with a marker line before each paragraph the review or the program
 did not pass (``escalated``; the paragraphs are on the owner's list, `sb status
---owner-items`), never silently dropped or passed. Then one smoothing call
+--owner-items`), never silently dropped or passed. A unit whose writer never
+gave an answer that passed the checks leaves a marker in its place: the part
+was not written, why, and the cards it was to cover. Then one smoothing call
 writes the introduction and the transitions and picks duplicate paragraphs to
 drop; the same reviewer judges the introduction and the transitions, which go
 back to the smoothing step under the same rules; the program re-checks the
@@ -604,6 +606,29 @@ FLAG_CHARS = 160
 SENTENCE_ENDS = ''.join(map(chr, (0x3002, 0xFF01, 0xFF1F))) + '!?'
 
 
+#: The longest reason the marker of a part that was not written shows (why its writer's answers were refused).
+MISSING_CHARS = 400
+
+
+def _clipped(text, limit: int) -> str:
+    text = ' '.join(str(text or '').split()).rstrip('. ' + chr(0x3002))  # the marker's sentence goes on after it
+    return text if len(text) <= limit else text[:limit - 1] + '…'
+
+
+def _missing_blocks(packet: dict, unit: dict, slot: dict) -> list[dict]:
+    """The blocks that stand in the article for a unit its writer never wrote (:func:`_given_up`): each part's
+    heading, and a marker naming why (how many answers failed the checks, and the last message) and the cards that
+    part was to cover, as links; so the reader sees what is missing where."""
+    reason = _clipped((slot.get('unresolved') or {}).get('answer'), MISSING_CHARS)
+    out = []
+    for part in unit['parts']:
+        if part['heading']:
+            out.append({'heading': part['heading']})
+        out.append({'id': f"{unit['id']}/{part['part']}", 'missing': reason,
+                    'cards': [packet['cards'][cid]['cite'] for cid in part['cards'] if cid in packet['cards']]})
+    return out
+
+
 def _one_sentence(text) -> str:
     text = ' '.join(str(text or '').split())
     for i, ch in enumerate(text):
@@ -650,10 +675,15 @@ def assemble(root, state, packet, errors_for, checker) -> tuple[dict, dict]:
     transitions = {t['section']: t['text'] for t in smooth.get('transitions') or []}
     flags = _flags(state)
     sections, rows = [], []
+    chunks = state.get('chunks') or {}
     for section in packet['sections']:
         blocks = []
-        for uid in (u for u in section['units'] if u in units):
+        for uid in section['units']:
             unit = _unit(packet, uid)
+            if uid not in units:  # its writer never wrote it: a marker in its place, never a silent gap
+                if (chunks.get(uid) or {}).get('unwritten'):
+                    blocks += _missing_blocks(packet, unit, chunks[uid])
+                continue
             heading_of = {p['part']: p['heading'] for p in unit['parts']}
             for part in units[uid]['parts']:
                 if heading_of.get(part['part']):
@@ -699,7 +729,6 @@ def assemble(root, state, packet, errors_for, checker) -> tuple[dict, dict]:
                                            'inline_math_digit_after_close', 'display_math_not_own_line',
                                            'table_math_pipe', 'stray_dollar'))
     unused = [packet['cards'][cid]['cite'] for cid in sorted(packet['cards']) if cid not in cited]
-    chunks = state.get('chunks') or {}
     length = checks.char_count('\n'.join(t for _, t, _ in rows))
     report = {
         'moc': packet['moc'], 'mode': packet['mode'], 'tag': packet.get('tag', ''),

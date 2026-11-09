@@ -246,11 +246,14 @@ PAGES = {
 EXPORT = {
     'zh': {'hint': '> Typora：偏好设置 → Markdown → 勾选“内联公式”（Inline Math），然后重开 Typora；本文的行内公式写作 `$…$`。',
            'unused': '未写进正文的卡', 'residual': '未归类的卡', 'flag': '〔此段复核未通过：{reason}〕',
+           'missing': '〔此处缺一段，没有写成：{reason}。这一段本来要写这些卡：{cards}〕', 'card_sep': '、',
            'unchecked': '〔本文的公式未经 MathJax 解析检查：{reason}〕'},
     'en': {'hint': '> Typora: Preferences → Markdown → tick "Inline Math", then reopen Typora; inline formulas here '
                    'are written `$…$`.',
            'unused': 'Cards not used in the text', 'residual': 'Unclassified cards',
            'flag': '[This paragraph did not pass review: {reason}]',
+           'missing': '[A part is missing here; it was not written: {reason}. It was to cover these cards: {cards}]',
+           'card_sep': ', ',
            'unchecked': '[The formulas of this article were not parse-checked by MathJax: {reason}]'},
 }
 

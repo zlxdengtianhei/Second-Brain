@@ -62,6 +62,9 @@ def to_markdown(article: dict) -> str:
         for block in section['blocks']:
             if 'heading' in block:
                 lines += [f"### {block['heading']}", '']
+            elif 'missing' in block:  # a part its writer never wrote: what is missing, why, and its cards
+                cards = text['card_sep'].join(f'[[{name}]]' for name in block['cards'])
+                lines += [text['missing'].format(reason=block['missing'], cards=cards), '']
             else:
                 lines += paragraph(block['text'], block.get('flag'))
     if article.get('unused'):
