@@ -326,14 +326,16 @@ def patchable(body: str) -> str | None:
     return None
 
 
-def patch(raw: bytes, *, add_props=(), replace_props=None, add_flashcards=(), add_source=None,
-          add_relations=(), title_of=None, language: str = 'en') -> bytes:
-    """``raw`` (an existing card) with propositions and review cards added, propositions replaced, a source and
-    relations added; every other byte stays.
+def patch(raw: bytes, *, add_props=(), replace_props=None, add_flashcards=(), replace_flashcards=None,
+          add_source=None, add_relations=(), title_of=None, language: str = 'en') -> bytes:
+    """``raw`` (an existing card) with propositions and review cards added, propositions and review cards replaced,
+    a source and relations added; every other byte stays.
 
-    ``replace_props`` maps a proposition number to its new wording; new
+    ``replace_props`` maps a proposition number to its new wording, and
+    ``replace_flashcards`` a review card's number to its new ``{q, a}``; new
     propositions get the next numbers and new review cards go after the old
-    ones, which are never changed (review history is keyed by the question).
+    ones. Review cards not named in ``replace_flashcards`` are never changed (the
+    review schedule is kept by card, so a swapped one keeps the card's progress).
     ``add_source`` is appended to ``sources``; ``add_relations``
     (``{type, target, note?, tier?}``) to ``relations`` and to the related
     section (:func:`add_related`, so lines in an older form stay), with
@@ -350,6 +352,10 @@ def patch(raw: bytes, *, add_props=(), replace_props=None, add_flashcards=(), ad
     replace_props = dict(replace_props or {})
     if any(not isinstance(n, int) or not 1 <= n <= len(props) for n in replace_props):
         raise PatchRefused(f'a replaced proposition must be one of P1-P{len(props)}')
+    replace_flashcards = dict(replace_flashcards or {})
+    old_cards = flashcards_of(body)
+    if any(not isinstance(n, int) or not 1 <= n <= len(old_cards) for n in replace_flashcards):
+        raise PatchRefused(f'a replaced review card must be one of Q1-Q{len(old_cards)}')
     language = next((name for name, h in HEADINGS.items() if f'## {h["propositions"]}' in body), language)
     h = HEADINGS[language]
     lines = body.split('\n')
@@ -366,8 +372,11 @@ def patch(raw: bytes, *, add_props=(), replace_props=None, add_flashcards=(), ad
         lines[numbered[number - 1]] = f'- P{number}. {_one_line(text)}'
     fresh = [f'- P{n}. {_one_line(t)}' for n, t in enumerate(add_props, len(props) + 1)]
     lines[end:end] = fresh
-    if add_flashcards:
+    if add_flashcards or replace_flashcards:
         start, end = section_range(h['flashcards'])
+        asked = [i for i in range(start + 1, end) if lines[i].strip()]  # one review card a line (patchable)
+        for number, card in replace_flashcards.items():
+            lines[asked[number - 1]] = f'{_one_line(card["q"])}::{_one_line(card["a"])}'
         lines[end:end] = [f'{_one_line(c["q"])}::{_one_line(c["a"])}' for c in add_flashcards]
     new_body = '\n'.join(lines)
     head = raw[:len(raw) - len(body.encode('utf-8'))]
@@ -385,12 +394,14 @@ def patch(raw: bytes, *, add_props=(), replace_props=None, add_flashcards=(), ad
                  if isinstance(e, dict) and isinstance(e.get('target'), str)]
         body3 = add_related(body2, shown, language=language, all_relations=whole)
         out = out[:len(out) - len(body2.encode('utf-8'))] + body3.encode('utf-8')
-    _check_patch(raw, out, fm, body, bool(add_source), bool(relations))
+    _check_patch(raw, out, fm, body, bool(add_source), bool(relations), set(replace_flashcards))
     return out
 
 
-def _check_patch(raw: bytes, out: bytes, fm: dict, body: str, sourced: bool, linked: bool) -> None:
-    """Refuse a patch that changed anything but propositions, review cards, ``sources`` and relations."""
+def _check_patch(raw: bytes, out: bytes, fm: dict, body: str, sourced: bool, linked: bool,
+                 swapped: set = frozenset()) -> None:
+    """Refuse a patch that changed anything but propositions, review cards, ``sources`` and relations, or a review
+    card the card has other than the ones it swaps (``swapped``: their numbers)."""
     from .vault import parse_note
     fm2, body2 = parse_note(out)
     allowed = ({'sources'} if sourced else set()) | ({'relations'} if linked else set())
@@ -403,7 +414,8 @@ def _check_patch(raw: bytes, out: bytes, fm: dict, body: str, sourced: bool, lin
     if before != after:
         raise PatchRefused('the patch would change another section of the card')
     old = flashcards_of(body) or []
-    if (flashcards_of(body2) or [])[:len(old)] != old:
+    new = (flashcards_of(body2) or [])[:len(old)]
+    if len(new) != len(old) or any(a != b for n, (a, b) in enumerate(zip(old, new), 1) if n not in swapped):
         raise PatchRefused('the patch would change a review card the card has')
 
 

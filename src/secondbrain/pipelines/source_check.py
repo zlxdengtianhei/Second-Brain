@@ -55,6 +55,8 @@ ROLE = 'merge_check'
 #: flashcards, so a point carried over keeps its question (J4 on the drill 3 replay: a cap of 4 left 7 points
 #: without any question in the vault).
 MAX_PROPOSITIONS, MAX_FLASHCARDS = 12, 8
+#: What a carry or a patch may hold: propositions and review cards added, propositions and review cards replaced.
+CARRIED = ('propositions', 'flashcards', 'replace', 'flashcard_replace')
 #: ``[[Title]]``, ``[[Title#heading]]`` and ``[[Title|alias]]`` in card text.
 _WIKILINK = re.compile(r'\[\[([^\[\]|#]+)((?:#[^\[\]|]*)?)((?:\|[^\[\]]*)?)\]\]')
 
@@ -69,6 +71,10 @@ _ALREADY = {'type': 'array', 'items': {'type': 'object', 'required': ['text', 'a
 #: it is another point (the program sends close wordings back otherwise; the same words always).
 _DIFFERS = {'type': 'array', 'items': {'type': 'object', 'required': ['text', 'from', 'reason'],
                                        'properties': {'text': _STR, 'from': _STR, 'reason': _STR}}}
+#: A review card of the card a patch or carry goes into (``Q2``) swapped for a fuller or clearer one: the new question
+#: and answer keep every fact of the old answer (decision D-26, design section 2.1.x).
+_FLASHCARD_REPLACE = {'type': 'array', 'items': {'type': 'object', 'required': ['flashcard', 'q', 'a'],
+                                                 'properties': {'flashcard': _STR, 'q': _STR, 'a': _STR}}}
 
 SCHEMA = {
     'type': 'object', 'required': ['cards', 'new_topics'],
@@ -84,6 +90,7 @@ SCHEMA = {
                     'replace': {'type': 'array', 'items': {
                         'type': 'object', 'required': ['proposition', 'by'],
                         'properties': {'proposition': _STR, 'by': _STR}}},
+                    'flashcard_replace': _FLASHCARD_REPLACE,
                     'already': _ALREADY, 'differs': _DIFFERS}},
                 'links': {'type': ['array', 'null'], 'items': {
                     'type': 'object', 'required': ['target', 'type'],
@@ -101,6 +108,7 @@ SCHEMA = {
                            'replace': {'type': 'array', 'items': {
                                'type': 'object', 'required': ['proposition', 'by'],
                                'properties': {'proposition': _STR, 'by': _STR}}},
+                           'flashcard_replace': _FLASHCARD_REPLACE,
                            'already': _ALREADY, 'differs': _DIFFERS}}},
         'disputes': {'type': 'array', 'items': {
             'type': 'object', 'required': ['slug', 'reason'], 'properties': {'slug': _STR, 'reason': _STR}}},
@@ -217,7 +225,8 @@ def validate_answer(frozen: dict, payload: Any, closed: Callable[[str, str, str]
                               f'name the card that stays')
     # what each kept card ends with: its own propositions and flashcards plus what extends cards carry to it
     totals = {s: [len(c['propositions']), len(c['flashcards'])] for s, c in cards.items()}  # patch set: a split
-    replaced = set()
+    replaced, swapped = set(), {}
+    existing_of = {c['slug']: g['target'] for g in frozen.get('patch_set') or [] for c in g['from']}
     for slug, into in merged.items():
         carry = rows[slug].get('carry') or {}
         props, flashcards = carry.get('propositions') or [], carry.get('flashcards') or []
@@ -242,6 +251,13 @@ def validate_answer(frozen: dict, payload: Any, closed: Callable[[str, str, str]
                 errors.append(f'{at}.by must be one of its propositions, copied exactly, and not also in '
                               'carry.propositions')
             replaced.add((into, number))
+        swaps = carry.get('flashcard_replace') or []
+        if swaps and into in cards:  # one of the review cards of the card it goes into, swapped (D-26)
+            errors += _swap_form(f'cards: {slug}.carry', into, cards[into]['flashcards'], swaps,
+                                 swapped.setdefault(into, set()))
+        elif swaps:
+            errors.append(f'cards: {slug}.carry.flashcard_replace: {into} goes into the existing card '
+                          f'{existing_of.get(into)}; replace one of its review cards in the patch for it')
         if rows[slug]['overlap'] == 'extends':
             target = cards.get(into) or patch_cards.get(into)
             errors += _incomplete(f'cards: {slug}.carry', cards[slug]['propositions'], props,
@@ -249,7 +265,7 @@ def validate_answer(frozen: dict, payload: Any, closed: Callable[[str, str, str]
                                   len(target['propositions']) if target else 0, into)
             if into in cards:  # D-21: what goes into a card of the source is checked as a patch is, never cut
                 errors += _said_twice(f'cards: {slug}.carry', into, cards[into], props, carry.get('replace') or [],
-                                      flashcards, carry.get('differs'), exact_ok=True)
+                                      flashcards, carry.get('differs'), exact_ok=True, swaps=swaps)
         if into in totals:
             totals[into][0] += len(props)
             totals[into][1] += len(flashcards)
@@ -337,7 +353,7 @@ def _check_patches(frozen: dict, payload: dict, rows: dict, merged: dict, errors
             errors.append(f'{at}: every card that extends {target} is disputed; give it no patch')
             continue
         added, flashcards = row.get('propositions') or [], row.get('flashcards') or []
-        if not (added or flashcards or row.get('replace')):
+        if not any(row.get(k) for k in CARRIED):
             errors.append(f'{at}: an empty patch; when nothing can go into {target}, dispute its cards')
         stray = [x for x in added if x not in props]
         if stray:
@@ -350,8 +366,10 @@ def _check_patches(frozen: dict, payload: dict, rows: dict, merged: dict, errors
                                                                    for p in _row_items(rows, s, 'propositions')]
         errors += _incomplete(at, list(dict.fromkeys(wanted)), added, row.get('replace') or [], row.get('already'),
                               total, target)
+        old_cards = [f for f in (groups[target]['card'] or {}).get('flashcards') or [] if isinstance(f, dict)]
+        errors += _swap_form(at, target, old_cards, row.get('flashcard_replace') or [], set())
         errors += _said_twice(at, target, groups[target]['card'] or {}, added, row.get('replace') or [],
-                              flashcards, row.get('differs'))
+                              flashcards, row.get('differs'), swaps=row.get('flashcard_replace') or [])
         swapped = set()
         for k, swap in enumerate(row.get('replace') or []):
             ref, by = (swap.get('proposition'), swap.get('by')) if isinstance(swap, dict) else (None, None)
@@ -421,8 +439,9 @@ def repeat(a, b) -> bool:
 
 
 def lost(propositions: list, flashcards: list, patch: dict) -> list[str]:
-    """What of ``patch`` (``propositions``, ``flashcards``, the ``by`` of each ``replace``) a card that took it does
-    not hold, by the rule of :func:`repeat`; each as a message naming it. Empty when every item is there.
+    """What of ``patch`` (``propositions``, ``flashcards``, the ``by`` of each ``replace``, the new question and answer
+    of each ``flashcard_replace``) a card that took it does not hold, by the rule of :func:`repeat`; each as a message
+    naming it. Empty when every item is there.
 
     The check the program runs before it writes a card that took a patch or a carry: an item is in the card, or
     the same as one of its items. It does not call :func:`repeat`, so a fault there cannot pass it.
@@ -436,11 +455,44 @@ def lost(propositions: list, flashcards: list, patch: dict) -> list[str]:
     for card in patch.get('flashcards') or []:
         if isinstance(card, dict) and _key(card) not in have:
             out.append(f'review card {card.get("q")!r} ({card.get("a")!r})')
+    for swap in patch.get('flashcard_replace') or []:
+        if isinstance(swap, dict) and _key(swap) not in have:
+            out.append(f'review card {swap.get("q")!r} ({swap.get("a")!r}), which replaces {swap.get("flashcard")}')
     return out
 
 
+def _number(ref, kind: str) -> int:
+    """The number of ``ref`` when it is ``<kind><n>`` (``P3``, ``Q2``), else 0."""
+    return int(ref[1:]) if isinstance(ref, str) and re.fullmatch(re.escape(kind) + r'[1-9]\d*', ref) else 0
+
+
+def _swap_form(at: str, target: str, flashcards: list, swaps: list, done: set) -> list[str]:
+    """The form of each ``flashcard_replace`` row (decision D-26): it names a review card of ``target`` (``Q<n>``),
+    each one once (``done`` holds the numbers already swapped, across the carries into one card), and gives a new
+    question and answer, on one line each, without ``::``, that is not the review card as it stands. What the new
+    pair may repeat is checked with the rest of the patch (:func:`_said_twice`)."""
+    errors = []
+    for k, row in enumerate(swaps):
+        here = f'{at}.flashcard_replace[{k}]'
+        ref, q, a = (row.get('flashcard'), row.get('q'), row.get('a')) if isinstance(row, dict) else (None,) * 3
+        number = _number(ref, 'Q')
+        if not 1 <= number <= len(flashcards):
+            errors.append(f'{here}.flashcard must name one of the review cards of {target} (Q1–Q{len(flashcards)})')
+            continue
+        if number in done:
+            errors.append(f'{here}: {target} Q{number} is replaced twice')
+        done.add(number)
+        if not all(isinstance(x, str) and x.strip() for x in (q, a)):
+            errors.append(f'{here}: give the new question and answer in q and a')
+        elif '::' in q + a:
+            errors.append(f'{here}: q and a must not contain "::" (it separates question and answer)')
+        elif repeat({'q': q, 'a': a}, flashcards[number - 1]):
+            errors.append(f'{here} is {target} Q{number} as it stands: leave it out')
+    return errors
+
+
 def _said_twice(at: str, target: str, old: dict, added: list, replace: list, flashcards: list, differs,
-                exact_ok: bool = False) -> list[str]:
+                exact_ok: bool = False, swaps: list = ()) -> list[str]:
     """A patch (or a carry into a card of the source) must not make ``target`` say a point twice (H7 4, decision
     D-14): each carried proposition (and each replacement, against the card's other propositions) and each carried
     question is compared with the card, and with the other ones it carries.
@@ -454,6 +506,11 @@ def _said_twice(at: str, target: str, old: dict, added: list, replace: list, fla
     and ``differs`` may keep it (for two of its own, ``from`` is the question itself). Only a :func:`repeat` is left
     out by the program: two of the same items it carries become one, and with ``exact_ok`` (a carry into a card of
     the source) an item ``target`` has is not sent back but left out when the program merges.
+
+    A review card of ``target`` swapped for a new one (``swaps``, D-26) is checked the same way: the new pair against
+    the card's other review cards, the review cards it carries and the other new pairs. A new pair that is one of
+    them, question and answer, always goes back (the card would hold it twice), except that a review card it
+    carries in the very same words is written once.
     """
     props = [str(p) for p in old.get('propositions') or []]
     old_flashcards = [f for f in old.get('flashcards') or [] if isinstance(f, dict)]
@@ -462,7 +519,10 @@ def _said_twice(at: str, target: str, old: dict, added: list, replace: list, fla
     bys = [r.get('by') for r in replace if isinstance(r, dict) and isinstance(r.get('by'), str)]
     own_cards = [f for f in flashcards if isinstance(f, dict) and isinstance(f.get('q'), str)]
     asked = [f['q'] for f in own_cards]
-    carried = set(added) | set(bys) | set(asked)
+    swap_rows = {k: row for k, row in enumerate(swaps or ()) if isinstance(row, dict) and _number(row.get('flashcard'), 'Q')
+                 and all(isinstance(row.get(x), str) for x in ('q', 'a'))}
+    asked_all = asked + [row['q'] for row in swap_rows.values()]
+    carried = set(added) | set(bys) | set(asked_all)
     for k, row in enumerate(differs or []):
         text, ref, why = (row.get('text'), row.get('from'), row.get('reason')) if isinstance(row, dict) else (None,) * 3
         kind, number = (ref[0], int(ref[1:])) if isinstance(ref, str) and re.fullmatch(r'[PQ][1-9]\d*', ref) else ('', 0)
@@ -470,7 +530,7 @@ def _said_twice(at: str, target: str, old: dict, added: list, replace: list, fla
             errors.append(f'{at}.differs[{k}].text must be a proposition, replacement or question of this patch, '
                           'copied exactly')
         elif not (1 <= number <= len(props if kind == 'P' else questions if kind == 'Q' else [])
-                  or (ref in carried and (ref != text or asked.count(text) > 1))):
+                  or (ref in carried and (ref != text or asked_all.count(text) > 1))):
             errors.append(f'{at}.differs[{k}].from must name a proposition (P1–P{len(props)}) or review card '
                           f'(Q1–Q{len(questions)}) of {target}, or another item of this patch copied exactly')
         elif not isinstance(why, str) or not why.strip():
@@ -525,6 +585,37 @@ def _said_twice(at: str, target: str, old: dict, added: list, replace: list, fla
             errors.append(f'{at}.flashcards: {question!r} {"looks the same as" if how == "same" else "may ask again what"}'
                           f' {target} Q{n}{"" if how == "same" else " asks"} ({questions[n - 1]!r}): leave it out, or '
                           f'list it in differs with "from": "Q{n}" and why it asks something else')
+    # a review card swapped for a new pair (D-26): against the card's review cards that stay, the review cards the
+    # patch adds and the other new pairs
+    swapped = {_number(row['flashcard'], 'Q') for row in swap_rows.values()}
+    stay = [(f'Q{m}', f) for m, f in enumerate(old_flashcards, 1) if m not in swapped]
+    done: list = []
+    for k, swap in swap_rows.items():
+        here, question = f'{at}.flashcard_replace[{k}]', swap['q']
+        problem = None
+        for ref, other in stay:  # the card's review cards: the same words always go back, close ones unless differs
+            if repeat(swap, other):
+                problem = f'the new pair is {target} {ref}, question and answer: the card would hold it twice'
+            else:
+                problem = _asks_again(question, swap['a'], other, ref, f'{target} {ref}', allowed, near=True)
+            if problem:
+                break
+        for other in own_cards if not problem else ():  # what the patch adds: the same pair is written once
+            if not repeat(swap, other):
+                problem = _asks_again(question, swap['a'], other, other['q'], 'a review card it carries too', allowed)
+            if problem:
+                break
+        for other in done if not problem else ():
+            if repeat(swap, other):
+                problem = 'the new pair is another new pair of this patch: the card would hold it twice'
+            else:
+                problem = _asks_again(question, swap['a'], other, other['q'], 'another new pair of this patch',
+                                      allowed)
+            if problem:
+                break
+        if problem:
+            errors.append(f'{here}: {problem}')
+        done.append(swap)
     # within what it carries: an item twice (a repeat) is carried once, by the program; two that only look the same
     # go back, as against the card (they used to be left out silently, K4''), and so does a question asked twice
     # with two answers (it was left out silently on the patch path, K4''')
@@ -547,6 +638,23 @@ def _said_twice(at: str, target: str, old: dict, added: list, replace: list, fla
                 errors.append(f'{at}.flashcards: {a!r} looks the same as {b!r}, which it carries too: carry one of '
                               f'them, or list it in differs ({{"text": {a!r}, "from": {b!r}, "reason": ...}})')
     return errors
+
+
+def _asks_again(question: str, answer, other: dict, ref: str, what: str, allowed: set, near: bool = False):
+    """Why a new review card (``question``, ``answer``) asks again what ``other`` asks (named ``what``; ``ref`` is what
+    ``differs`` names it by), or None: the same words with another answer, words the comparison finds the same, or
+    with ``near`` a close wording. ``differs`` (``allowed``) keeps it."""
+    how = 'exact' if exact(question, other.get('q')) else 'same' if same_text(question, other.get('q')) else \
+        'near' if near and near_same(question, other.get('q')) else None
+    if not how or (question, ref) in allowed:
+        return None
+    if how == 'exact':
+        return (f'{question!r} asks what {what} asks, but their answers differ ({other.get("a")!r} and {answer!r}): '
+                f'ask it once, with one complete answer, or list it in differs with "from": {ref!r} and why both '
+                'answers are needed')
+    return (f'{question!r} {"looks the same as" if how == "same" else "may ask again what"} {what}'
+            f'{"" if how == "same" else " asks"} ({other.get("q")!r}): ask it once, or list it in differs with '
+            f'"from": {ref!r} and why it asks something else')
 
 
 def _row_items(rows: dict, slug: str, key: str) -> list:
@@ -605,7 +713,7 @@ def _card_rows(items, cards: dict, errors: list, also: dict | None = None) -> di
                 errors.append(f'{at}.reason must say what the two share')
                 continue
         carry = row.get('carry') or {}
-        carried = any(carry.get(k) for k in ('propositions', 'flashcards', 'replace'))
+        carried = any(carry.get(k) for k in CARRIED)
         if level == 'extends' and not carried:
             errors.append(f'{at}: "extends" carries what the card adds: give a non-empty "carry" (or judge it "same")')
             continue
@@ -730,7 +838,7 @@ def record(frozen: dict, answer: dict, entries: list, *, slot: str, run: str | N
     for row in answer.get('patches') or []:
         decisions.record(entries, 'patch', row['target'],
                          {**{k: row.get(k) or [] for k in ('propositions', 'flashcards', 'replace')},
-                          **{k: row[k] for k in ('already', 'differs') if row.get(k)}},
+                          **{k: row[k] for k in ('flashcard_replace', 'already', 'differs') if row.get(k)}},
                          role=ROLE, slot=slot, run=run)
     for row in answer.get('disputes') or []:
         decisions.record(entries, 'dispute', row['slug'], {'reason': row['reason']}, role=ROLE, slot=slot, run=run)
@@ -752,7 +860,8 @@ def apply(settled: list[dict], frozen: dict, entries: list) -> tuple[list[dict],
 
     - ``extends``: the card is not written. Its carried propositions and
       flashcards, and its source quotes, are added to the card in ``with``;
-      ``replace`` swaps one of that card's propositions for this card's fuller one.
+      ``replace`` swaps one of that card's propositions for this card's fuller one, and ``flashcard_replace`` one of
+      its review cards for a fuller or clearer question and answer (both swaps listed, words before and after).
     - ``same``: the card is not written and nothing is carried.
     - Either way, relations to it point to the card it went to, and its own
       relations move there, except where that card already links the target
@@ -791,7 +900,7 @@ def apply(settled: list[dict], frozen: dict, entries: list) -> tuple[list[dict],
             target = dict(zip(('domain', 'pillar', 'topic'), refile[key]))
             decisions.step(entries, 'classification', slug, 'topic_merge_refile', role='program', slot=SLOT,
                            data={**target, 'from': list(key)})
-    carried, skipped_by, replacements, too_large = {}, {}, {}, {}
+    carried, skipped_by, replacements, too_large, swapped = {}, {}, {}, {}, {}
     for slug, into in merged.items():  # what an extends card adds goes to the card it extends
         carry = rows[slug].get('carry') or {}
         if into not in kept:  # a card of the patch set: what goes into its existing card is that card's patch
@@ -805,11 +914,14 @@ def apply(settled: list[dict], frozen: dict, entries: list) -> tuple[list[dict],
             too_large[slug] = {'into': into, 'carry': carry}
             carried[slug], replacements[slug] = (0, 0), 0
             continue
-        new_p, new_f, skipped = [], [], 0
+        new_p, new_f, skipped, swapped[slug] = [], [], 0, []
         for swap in carry.get('replace') or []:  # this card's fuller wording takes the place of the kept one
             number = int(swap['proposition'][1:])
+            swapped[slug].append({'proposition': f'P{number}', 'before': props[number - 1], 'after': swap['by']})
             props[number - 1] = swap['by']
             new_p.append(number)
+        flashcards, done = swap_flashcards(flashcards, carry.get('flashcard_replace') or [])  # before what is added
+        swapped[slug] += done
         # only a repeat (:func:`repeat`) is left out here; anything the comparison only finds the same went back to
         # the merge check at validation (decision D-21)
         for text in carry.get('propositions') or []:
@@ -840,7 +952,7 @@ def apply(settled: list[dict], frozen: dict, entries: list) -> tuple[list[dict],
             keep['_carried'] = list(keep.get('_carried') or []) + [
                 {'locator': own, 'propositions': new_p, 'flashcards': new_f}]
         carried[slug], skipped_by[slug] = (len(new_p), len(new_f)), skipped
-        replacements[slug] = len(carry.get('replace') or [])
+        replacements[slug] = len(swapped[slug])
     moved = _merge_relations(entries, kept, merged, repeats)
     added = [{'from': e['object'], 'type': e['data']['relation']['type'], 'target': e['data']['relation']['target']}
              for e in entries if e['kind'] == 'step' and e['value'] == 'relations' and e['role'] == ROLE
@@ -862,7 +974,8 @@ def apply(settled: list[dict], frozen: dict, entries: list) -> tuple[list[dict],
     for o in settled:
         accepted = {s: kept[s] for s in o['accepted'] if s in kept}
         topics = {k: v for k, v in o['topics'].items() if k not in refile}
-        split_merges = {s: {**original[s], '_with': too_large[s]['into'], '_carry': too_large[s]['carry']}
+        split_merges = {s: {**original[s], '_with': too_large[s]['into'],  # its swaps are listed, not made
+                            '_carry': {k: v for k, v in too_large[s]['carry'].items() if k != 'flashcard_replace'}}
                         for s in o['accepted'] if s in too_large}
         out.append({**o, 'accepted': accepted, 'topics': topics, 'split_merges': split_merges})
     by_key = {(t['domain'], t['pillar'], t['name']): t for t in frozen['new_topics']}
@@ -870,12 +983,19 @@ def apply(settled: list[dict], frozen: dict, entries: list) -> tuple[list[dict],
         'status': 'checked', 'cards': len(frozen['cards']),
         'merged': [{'slug': s, 'title': original[s]['title'], 'into': into, 'reason': rows[s]['reason'],
                     'carried': {'propositions': carried[s][0], 'flashcards': carried[s][1]},
-                    **({'replaced': replacements[s]} if replacements[s] else {}),
+                    **({'replaced': replacements[s], 'replacements': swapped[s]} if replacements[s] else {}),
                     **({'repeats_skipped': skipped_by[s]} if skipped_by.get(s) else {}),
                     **({'already': list((rows[s].get('carry') or {}).get('already') or [])}
                        if (rows[s].get('carry') or {}).get('already') else {})}
                    for s, into in merged.items() if s not in too_large],
         'too_large': {s: v['into'] for s, v in too_large.items()},
+        # a carry too large for its card goes to a split slot and its card stays as it is: its review-card swaps are
+        # not made, and are listed (D-26)
+        'replacements_not_made': [{'into': v['into'], 'from': s, **swap,
+                                   'reason': f'what {s} adds would take {v["into"]} past {MAX_PROPOSITIONS} '
+                                             f'propositions or {MAX_FLASHCARDS} review cards, so it was written as '
+                                             'a narrower card of its own and its card stays as it is'}
+                                  for s, v in too_large.items() for swap in v['carry'].get('flashcard_replace') or []],
         'rewritten_links': rewritten,
         'added_links': added,
         'alone': [{'slug': s, 'reason': rows[s]['alone']} for s in kept if rows[s].get('alone')],
@@ -891,6 +1011,20 @@ def apply(settled: list[dict], frozen: dict, entries: list) -> tuple[list[dict],
         'held': {t: e['data'] for t, e in decisions.values(entries, 'patch.held').items()},
         'held_carries': held_carries}
     return out, report
+
+
+def swap_flashcards(flashcards: list, swaps: list) -> tuple[list, list]:
+    """``(review cards, what was swapped)``: ``flashcards`` with each ``flashcard_replace`` row's ``Q<n>`` given its new
+    question and answer (D-26), and ``[{"flashcard": "Q<n>", "before": {q, a}, "after": {q, a}}]``. The one place
+    the program swaps a review card of a card of the source; :func:`lost` checks the result before it is written."""
+    out, done = [dict(f) if isinstance(f, dict) else f for f in flashcards], []
+    for swap in swaps:
+        number = _number(swap.get('flashcard'), 'Q')
+        before = out[number - 1]
+        out[number - 1] = {**before, 'q': swap['q'], 'a': swap['a']}
+        done.append({'flashcard': f'Q{number}', 'before': {'q': before.get('q'), 'a': before.get('a')},
+                     'after': {'q': swap['q'], 'a': swap['a']}})
+    return out, done
 
 
 def _spaced(text) -> str:

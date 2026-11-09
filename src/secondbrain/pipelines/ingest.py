@@ -2327,6 +2327,7 @@ def _patch_fits(old, patch: dict) -> tuple[str | None, list, list]:
     props, flashcards = cardfmt.propositions_of(old.body), cardfmt.flashcards_of(old.body)
     replaced = {int(r['proposition'][1:]): r['by'] for r in patch.get('replace') or []}
     have = props + list(replaced.values())
+    flashcards, _ = source_check.swap_flashcards(flashcards, patch.get('flashcard_replace') or [])  # D-26
     add = []
     for text in patch.get('propositions') or []:
         if not any(source_check.repeat(text, x) for x in have + add):
@@ -3034,7 +3035,9 @@ def _apply_job(root: Path, job_id: str, settled: list[dict] | None = None) -> di
         patch = fates[slugs[0]].get('patch') or check['patches'][target]
         add, add_f = fates[slugs[0]]['add'], fates[slugs[0]]['add_flashcards']
         swaps = {int(r['proposition'][1:]): r['by'] for r in patch.get('replace') or []}
-        first = len(cardfmt.propositions_of(old.body)) + 1
+        old_props = cardfmt.propositions_of(old.body)
+        _, swapped = source_check.swap_flashcards(cardfmt.flashcards_of(old.body), patch.get('flashcard_replace') or [])
+        first = len(old_props) + 1
         numbers = [f'P{n}' for n in range(first, first + len(add))] + [f'P{n}' for n in sorted(swaps)]
         present = {e.get('target') for e in old.fm.get('relations') or [] if isinstance(e, dict)}
         moved = []
@@ -3060,6 +3063,7 @@ def _apply_job(root: Path, job_id: str, settled: list[dict] | None = None) -> di
                        **({'propositions': numbers} if numbers else {})}
         try:
             raw2 = cardfmt.patch(old.raw, add_props=add, replace_props=swaps, add_flashcards=add_f,
+                                 replace_flashcards={int(w['flashcard'][1:]): w['after'] for w in swapped},
                                  add_source=source_item, add_relations=moved, title_of=title_of.get, language=language)
         except cardfmt.PatchRefused as exc:
             raise Conflict(f'{target} could not take its patch: {exc}; run `sb job advance` again') from exc
@@ -3078,11 +3082,26 @@ def _apply_job(root: Path, job_id: str, settled: list[dict] | None = None) -> di
                 patch_edges.append((m['target'], _inverse_edge(inv, target, m)))
         merged_into_existing.append({
             'id': target, 'title': old.title, 'from': slugs, 'chunks': sorted({fates[x]['chunk'] for x in slugs}),
-            'propositions': numbers[:len(add)], 'replaced': [f'P{n}' for n in sorted(swaps)],
+            'propositions': numbers[:len(add)],
+            'replaced': [f'P{n}' for n in sorted(swaps)] + [w['flashcard'] for w in swapped],
+            # the words before and after each swap, for the owner to look back on (D-26)
+            'replacements': [{'proposition': f'P{n}', 'before': old_props[n - 1], 'after': swaps[n]}
+                             for n in sorted(swaps)] + swapped,
             'flashcards': len(add_f), 'relations': moved,
             # what the merge check said the card holds already (H7 judge: each one checked against its Pn)
             'already': [{'text': a.get('text'), 'as': a.get('as')} for a in patch.get('already') or []
                         if isinstance(a, dict)]})
+    # a review-card swap goes in with its whole patch; a patch that did not go in whole (split into narrower cards,
+    # held, disputed) makes none of its swaps, and they are listed for the owner (D-26)
+    replacements_not_made = list((check or {}).get('replacements_not_made') or [])
+    for target, patch in sorted(((check or {}).get('patches') or {}).items()):
+        if not patch.get('flashcard_replace') or (target in by_target and not fates[by_target[target][0]].get('patch')):
+            continue
+        why = next((f['reason'] for f in fates.values() if f['target'] == target and f.get('reason')),
+                   f'its patch would take {target} past {source_check.MAX_PROPOSITIONS} propositions or '
+                   f'{source_check.MAX_FLASHCARDS} review cards, so what extends it was written as narrower cards '
+                   'and it took no patch')
+        replacements_not_made += [{'into': target, **swap, 'reason': why} for swap in patch['flashcard_replace']]
     for chunk, slug, card in accepted:
         cid, title = ids[slug], titles[slug]
         relations = [cardfmt.Relation(r['type'], r['target'], title_of.get(r['target'], ''), r.get('note'), r.get('tier'))
@@ -3272,6 +3291,7 @@ def _apply_job(root: Path, job_id: str, settled: list[dict] | None = None) -> di
               'split_restated': _split_turned(root, job_id, 'matches'),
               'refused_topics': [t for o in settled for t in o.get('refused_topics') or []],
               'merged_into_existing': merged_into_existing,
+              'replacements_not_made': replacements_not_made,
               'split': [{'slug': f['card']['slug'], 'id': ids.get(f['card']['slug']), 'from': s, 'of': ids.get(f['target'], f['target']),
                          'slot': f['slot']} for s, f in fates.items() if f['how'] == 'split'],
               'patch_set': {s: f['how'] for s, f in fates.items() if not f.get('of_source')},

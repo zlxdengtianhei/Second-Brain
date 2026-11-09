@@ -168,3 +168,19 @@ def test_every_field_of_a_judgement_again_in_the_wrong_type_is_refused_by_name()
     count, cases, problems = fuzz(answer, ingest.REJUDGE_SCHEMA,
                                   lambda p: ingest._validate_rejudge(frozen, p, {'card_exist'}))
     assert count == 6 and cases >= 18 and problems == []  # the answer, its four fields, one item of with
+
+
+def test_every_field_of_a_review_card_swap_in_the_wrong_type_is_refused_by_name(tmp_path):
+    """The swap of a review card (``flashcard_replace``, in a carry and in a patch) is in the fuzz too."""
+    roles = merge_and_split_roles(tmp_path)
+    answer, schema, validate = roles['merge check']
+    answer = copy.deepcopy(answer)
+    row = next(r for r in answer['cards'] if r['slug'] == 'arrival-order')
+    row['carry']['flashcard_replace'] = [{'flashcard': 'Q1', 'q': 'How often does a writer light a marker?',
+                                          'a': 'Every eight items, whatever order the items arrived in.'}]
+    answer['patches'][0]['flashcard_replace'] = [{'flashcard': 'Q2', 'q': 'Which way does a reader take past old items?',
+                                                  'a': 'Old answer 2, or a jump ahead to the next lit marker.'}]
+    count, cases, problems = fuzz(answer, schema, validate)
+    swaps = [shown(p) for p, _ in fields(answer, schema) if 'flashcard_replace' in p]
+    assert len(swaps) == 10 and cases >= 3 * count  # each list, its row, and the row's flashcard, q and a: twice
+    assert problems == []
