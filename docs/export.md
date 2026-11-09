@@ -81,14 +81,16 @@ One call sees the outline, the narrative of the map, and the first and last para
 
 ### A paragraph that never passed
 
-When the repair rounds are used up, or a step's answers keep failing the program's checks past `[review] max_invalid_retries` (counted in the job, so running the export again goes on from the count), the unit is kept as `escalated`. A review that never gave a valid answer marks each paragraph it was to judge as not reviewed; a unit whose writer never gave one is left out of the article and named on your list instead. It is not dropped, and it is not printed as if it had passed. Each paragraph that the review or the program still did not pass gets a line before it, with the first sentence of the reason:
+When the repair rounds are used up, or a step's answers keep failing the program's checks past `[review] max_invalid_retries` (counted in the job, so running the export again goes on from the count), the unit is kept as `escalated`. A review that never gave a valid answer marks each paragraph it was to judge as not reviewed; a unit whose writer never gave one leaves a marker in the article where it would stand, under each of its headings: the part was not written, why (how many answers failed the checks, and the last message), and the cards it was to cover, as links; the unit is on your list too. It is not dropped, and it is not printed as if it had passed. Each paragraph that the review or the program still did not pass gets a line before it, with the first sentence of the reason:
 
 ```text
 [This paragraph did not pass review: <reason>]
 〔此段复核未通过：<reason>〕
+[A part is missing here; it was not written: <reason>. It was to cover these cards: [[Card A]], [[Card B]]]
+〔此处缺一段，没有写成：<reason>。这一段本来要写这些卡：[[卡 A]]、[[卡 B]]〕
 ```
 
-The first form is used in an English article, the second in a Chinese one. The same holds for the introduction and the transitions. Each such paragraph is also on your list: `sb status --owner-items` shows it with `owner_reason: pending` and `kind: export_paragraph`, with the article, the file, the job and the reason, from the latest finished export of each article. The report lists these paragraphs under `flagged`, and the front matter counts escalated units and flagged paragraphs.
+The first and third forms are used in an English article, the second and fourth in a Chinese one. The same holds for the introduction and the transitions. Each such paragraph is also on your list: `sb status --owner-items` shows it with `owner_reason: pending` and `kind: export_paragraph`, with the article, the file, the job and the reason, from the latest finished export of each article. The report lists these paragraphs under `flagged`, and the front matter counts escalated units and flagged paragraphs.
 
 Why: a paragraph that is not faithful, printed like the others, misleads the reader. A paragraph left out breaks the article and hides what is missing.
 

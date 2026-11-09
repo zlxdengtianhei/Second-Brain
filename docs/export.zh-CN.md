@@ -81,14 +81,16 @@ sb export --domain <slug> --no-formula-check  # 不做 MathJax 检查，照样�
 
 ### 一直没通过的段落
 
-返修轮用完后，或某一步的答案一再没过程序校验、超过 `[review] max_invalid_retries`（计数存在任务里，导出再跑时接着计），这个单位保留下来，标为 `escalated`。复核一直没给出合格答案时，它要判的每一段都标为未复核；写作者一直没给出合格答案时，这个单位不进文章，改为在你的清单上列出它。它不会被删掉，也不会当作已通过照常印出。复核或程序检查仍没通过的每一段，前面加一行，写明理由的第一句：
+返修轮用完后，或某一步的答案一再没过程序校验、超过 `[review] max_invalid_retries`（计数存在任务里，导出再跑时接着计），这个单位保留下来，标为 `escalated`。复核一直没给出合格答案时，它要判的每一段都标为未复核；写作者一直没给出合格答案时，这个单位本来的位置（它的每个小标题下）放一个标记：这一段没写成、原因（答案几次没过检查、最后一次的校验消息）、这一段本来要写哪几张卡（卡的链接）；这个单位也列在你的清单上。它不会被删掉，也不会当作已通过照常印出。复核或程序检查仍没通过的每一段，前面加一行，写明理由的第一句：
 
 ```text
 [This paragraph did not pass review: <reason>]
 〔此段复核未通过：<reason>〕
+[A part is missing here; it was not written: <reason>. It was to cover these cards: [[Card A]], [[Card B]]]
+〔此处缺一段，没有写成：<reason>。这一段本来要写这些卡：[[卡 A]]、[[卡 B]]〕
 ```
 
-英文文章用第一种写法，中文文章用第二种。引言和过渡也一样。这样的每一段也列进待你处理的事：`sb status --owner-items` 显示它，`owner_reason: pending`、`kind: export_paragraph`，附文章、文件、任务和理由，取每篇文章最新一次完成的导出。报告在 `flagged` 下列出这些段落，front matter 里记有未通过的单位数和标出的段落数。
+英文文章用第一、三种写法，中文文章用第二、四种。引言和过渡也一样。这样的每一段也列进待你处理的事：`sb status --owner-items` 显示它，`owner_reason: pending`、`kind: export_paragraph`，附文章、文件、任务和理由，取每篇文章最新一次完成的导出。报告在 `flagged` 下列出这些段落，front matter 里记有未通过的单位数和标出的段落数。
 
 为什么：不忠实的段落如果照常印出，会误导读者；整段删掉，文章会断开，读者也不知道缺了什么。
 
