@@ -20,7 +20,8 @@ def gate(out: bytes):
 
 
 def test_a_patch_that_only_adds_passes_the_gate():
-    out = cardfmt.patch(RAW, add_props=['Three.'], add_flashcards=[{'q': 'Q2?', 'a': 'A2.'}])
+    out = cardfmt.patch(RAW, add_props=['Three.'], add_flashcards=[{'q': 'Q2?', 'a': 'A2.'}],
+                        taken={'propositions': ['Three.'], 'flashcards': [{'q': 'Q2?', 'a': 'A2.'}]})
     assert b'- P3. Three.' in out and b'Q2?::A2.' in out
     gate(out)
     # what patch() wrote, read on its own (whether or not its own gate ran): every other byte is as it was

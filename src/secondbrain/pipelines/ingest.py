@@ -3054,17 +3054,16 @@ def _apply_job(root: Path, job_id: str, settled: list[dict] | None = None) -> di
         located = repeat_cards[slugs[0]]['source_quotes'][0]
         source_item = {'path': source_rel, 'sha256': source['sha256'], 'locator': located,
                        **({'propositions': numbers} if numbers else {})}
-        try:
-            raw2 = cardfmt.patch(old.raw, add_props=add, replace_props=swaps, add_flashcards=add_f,
+        try:  # the write checks that every item of the patch is in the card (decision D-25)
+            raw2 = cardfmt.patch(old.raw, taken=patch, add_props=add, replace_props=swaps, add_flashcards=add_f,
                                  replace_flashcards={int(w['flashcard'][1:]): w['after'] for w in swapped},
                                  add_source=source_item, add_relations=moved, title_of=title_of.get, language=language)
+        except cardfmt.PatchLost as exc:  # before anything is written: no item may go missing on the way
+            raise IngestError(f'{target} would not hold what the merge check\'s patch gives it: {exc}. '
+                              'Nothing was written; this is a fault of the program, not of the answer') from exc
         except cardfmt.PatchRefused as exc:
             raise Conflict(f'{target} could not take its patch: {exc}; run `sb job advance` again') from exc
         fm2, body2 = parse_note(raw2)
-        missing = source_check.lost(cardfmt.propositions_of(body2) or [], cardfmt.flashcards_of(body2) or [], patch)
-        if missing:  # before anything is written: no item of the patch may go missing on the way (decision D-25)
-            raise IngestError(f'{target} would not hold what the merge check\'s patch gives it: {"; ".join(missing)}. '
-                              'Nothing was written; this is a fault of the program, not of the answer')
         changes.append(Change(old.path, old.sha256, raw2))
         updated[target] = replace(old, raw=raw2, fm=fm2, body=body2, sha256=digest(raw2))
         for m in moved:  # back links: on a new card of this job before it is written, else on the existing card

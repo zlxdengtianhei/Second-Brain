@@ -953,34 +953,13 @@ def apply(settled: list[dict], frozen: dict, entries: list) -> tuple[list[dict],
             too_large[slug] = {'into': into, 'carry': carry}
             carried[slug], replacements[slug] = (0, 0), 0
             continue
-        new_p, new_f, skipped, swapped[slug] = [], [], 0, []
-        for swap in carry.get('replace') or []:  # this card's fuller wording takes the place of the kept one
-            number = int(swap['proposition'][1:])
-            swapped[slug].append({'proposition': f'P{number}', 'before': props[number - 1], 'after': swap['by']})
-            props[number - 1] = swap['by']
-            new_p.append(number)
-        flashcards, done = swap_flashcards(flashcards, carry.get('flashcard_replace') or [])  # before what is added
-        swapped[slug] += done
-        # only a repeat (:func:`repeat`) is left out here; anything the comparison only finds the same went back to
-        # the merge check at validation (decision D-21)
-        for text in carry.get('propositions') or []:
-            if any(repeat(text, x) for x in props):  # the kept card says it already, word for word
-                skipped += 1
-                continue
-            props.append(text)
-            new_p.append(len(props))
-        for f in original[slug].get('flashcards') or []:
-            if {'q': f.get('q'), 'a': f.get('a')} not in (carry.get('flashcards') or []):
-                continue
-            if any(repeat(f, x) for x in flashcards):
-                skipped += 1
-                continue
-            flashcards.append(f)
-            new_f.append(len(flashcards))
-        missing = lost(props, flashcards, carry)
-        if missing:  # before the card is written: nothing a carry holds may go missing on the way (decision D-25)
-            raise ValueError(f'{slug} carries into {into} what {into} would not hold once merged: '
-                             f'{"; ".join(missing)}; nothing was written')
+        try:  # the merge checks that every item of the carry is in the card (decision D-25)
+            took = take(props, flashcards, carry, original[slug].get('flashcards') or [])
+        except Lost as exc:
+            raise ValueError(f'{slug} carries into {into} what {into} would not hold once merged: {exc}; '
+                             'nothing was written') from exc
+        props, flashcards, new_p, new_f = took['propositions'], took['flashcards'], took['new_p'], took['new_f']
+        skipped, swapped[slug] = took['skipped'], took['swapped']
         keep['propositions'], keep['flashcards'] = props, flashcards
         own = (original[slug].get('source_quotes') or [None])[0]
         keep['source_quotes'] = list(dict.fromkeys(list(keep.get('source_quotes') or [])
@@ -1050,6 +1029,53 @@ def apply(settled: list[dict], frozen: dict, entries: list) -> tuple[list[dict],
         'held': {t: e['data'] for t, e in decisions.values(entries, 'patch.held').items()},
         'held_carries': held_carries}
     return out, report
+
+
+class Lost(ValueError):
+    """A card that took a carry would not hold an item of it (``missing``: each named)."""
+
+    def __init__(self, missing: list[str]):
+        self.missing = list(missing)
+        super().__init__('; '.join(self.missing))
+
+
+def take(propositions: list, flashcards: list, carry: dict, offered: list) -> dict:
+    """What a card of the source holds once it takes ``carry`` from another card of the source, whose review cards
+    are ``offered`` (the ones ``carry`` names are taken): ``{"propositions", "flashcards", "new_p", "new_f",
+    "skipped", "swapped"}``. A replacement takes the place of its proposition, a review-card swap of its review card;
+    a carried item is added unless it is a :func:`repeat` of one the card holds (``skipped`` counts those). The one
+    function that merges a carry into a card: before it returns, every item of ``carry`` must be in the result
+    (:func:`lost`), else :class:`Lost`, so no caller can leave the check out.
+    """
+    props, new_p, new_f, skipped, swapped = list(propositions), [], [], 0, []
+    for swap in carry.get('replace') or []:  # the fuller wording takes the place of the kept one
+        number = int(swap['proposition'][1:])
+        swapped.append({'proposition': f'P{number}', 'before': props[number - 1], 'after': swap['by']})
+        props[number - 1] = swap['by']
+        new_p.append(number)
+    cards, done = swap_flashcards(flashcards, carry.get('flashcard_replace') or [])  # before what is added
+    swapped += done
+    # only a repeat (:func:`repeat`) is left out here; anything the comparison only finds the same went back to
+    # the merge check at validation (decision D-21)
+    for text in carry.get('propositions') or []:
+        if any(repeat(text, x) for x in props):  # the kept card says it already, word for word
+            skipped += 1
+            continue
+        props.append(text)
+        new_p.append(len(props))
+    for f in offered:
+        if {'q': f.get('q'), 'a': f.get('a')} not in (carry.get('flashcards') or []):
+            continue
+        if any(repeat(f, x) for x in cards):
+            skipped += 1
+            continue
+        cards.append(f)
+        new_f.append(len(cards))
+    missing = lost(props, cards, carry)
+    if missing:
+        raise Lost(missing)
+    return {'propositions': props, 'flashcards': cards, 'new_p': new_p, 'new_f': new_f, 'skipped': skipped,
+            'swapped': swapped}
 
 
 def swap_flashcards(flashcards: list, swaps: list) -> tuple[list, list]:

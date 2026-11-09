@@ -18,7 +18,10 @@ TITLES = {'demo_queue': 'Lantern queue', 'demo_cost': 'Marker cost'}
 
 
 def patched(**fields):
-    return cardfmt.patch(OLD.encode(), title_of=TITLES.get, **fields)
+    """The card with ``fields`` patched in; the patch it takes is what the fields add and replace."""
+    taken = {'propositions': list(fields.get('add_props') or []), 'flashcards': list(fields.get('add_flashcards') or []),
+             'replace': [{'proposition': f'P{n}', 'by': t} for n, t in (fields.get('replace_props') or {}).items()]}
+    return cardfmt.patch(OLD.encode(), taken=taken, title_of=TITLES.get, **fields)
 
 
 def test_a_patch_adds_numbered_propositions_review_cards_a_source_and_a_relation_and_keeps_the_rest():
@@ -45,7 +48,8 @@ def test_a_patch_adds_numbered_propositions_review_cards_a_source_and_a_relation
 ])
 def test_a_card_out_of_sb_format_is_refused(body, reason):
     with pytest.raises(cardfmt.PatchRefused, match=reason):
-        cardfmt.patch(f'---\nid: demo_x\ntitle: X\n---\n{body}'.encode(), add_props=['new'])
+        cardfmt.patch(f'---\nid: demo_x\ntitle: X\n---\n{body}'.encode(), add_props=['new'],
+                      taken={'propositions': ['new']})
 
 
 def test_a_replacement_outside_the_cards_propositions_is_refused():

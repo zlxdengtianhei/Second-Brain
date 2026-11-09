@@ -308,6 +308,14 @@ class PatchRefused(ValueError):
     sources and relations."""
 
 
+class PatchLost(PatchRefused):
+    """The patched card would not hold an item of the patch it takes (``missing``: each named); nothing is written."""
+
+    def __init__(self, missing: list[str]):
+        self.missing = list(missing)
+        super().__init__('; '.join(self.missing))
+
+
 def patchable(body: str) -> str | None:
     """Why an existing card cannot take propositions and review cards, or None.
 
@@ -326,7 +334,7 @@ def patchable(body: str) -> str | None:
     return None
 
 
-def patch(raw: bytes, *, add_props=(), replace_props=None, add_flashcards=(), replace_flashcards=None,
+def patch(raw: bytes, *, taken: dict, add_props=(), replace_props=None, add_flashcards=(), replace_flashcards=None,
           add_source=None, add_relations=(), title_of=None, language: str = 'en') -> bytes:
     """``raw`` (an existing card) with propositions and review cards added, propositions and review cards replaced,
     a source and relations added; every other byte stays.
@@ -342,6 +350,13 @@ def patch(raw: bytes, *, add_props=(), replace_props=None, add_flashcards=(), re
     ``title_of(id)`` naming each target. Raises :class:`PatchRefused` when the
     card is not in sb format (:func:`patchable`) or the result would change
     anything else.
+
+    ``taken`` is the patch the card takes, as it was given (``propositions``,
+    ``flashcards``, ``replace``, ``flashcard_replace``): before the bytes are
+    returned, every item of it must be in the patched card, or be the same as one
+    of its items (:func:`secondbrain.pipelines.source_check.lost`); else
+    :class:`PatchLost`. The one function that writes an existing card's knowledge
+    sections checks its own result, so no caller can leave the check out.
     """
     from .vault import append_list_items, parse_note
     fm, body = parse_note(raw)
@@ -395,6 +410,11 @@ def patch(raw: bytes, *, add_props=(), replace_props=None, add_flashcards=(), re
         body3 = add_related(body2, shown, language=language, all_relations=whole)
         out = out[:len(out) - len(body2.encode('utf-8'))] + body3.encode('utf-8')
     _check_patch(raw, out, fm, body, bool(add_source), bool(relations), set(replace_flashcards))
+    from .pipelines.source_check import lost
+    _, body2 = parse_note(out)
+    missing = lost(propositions_of(body2) or [], flashcards_of(body2) or [], taken)
+    if missing:
+        raise PatchLost(missing)
     return out
 
 
