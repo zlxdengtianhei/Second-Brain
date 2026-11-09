@@ -46,10 +46,16 @@ KINDS = {'ingest': True, 'export': True, 'classification': True, 'curation': Tru
 #: Kind -> "module:function" validating a submission before it is persisted.
 #: Signature: ``fn(packet, payload, *, role, candidate, root, chunk, state) -> payload``;
 #: the returned payload (possibly normalized) is what gets stored.
+#: Every kind that asks a model has one, so each answer is checked here, at the gate, before it is kept: an answer it
+#: refuses is counted against its slot's budget, and any other error while it checks is a fault of the program,
+#: counted the same and kept for the owner (:class:`ProgramFault`).
 SUBMISSION_VALIDATORS = {
     'classification': 'secondbrain.classification:validate_submission',
     'ingest': 'secondbrain.pipelines.ingest:validate_submission',
     'export': 'secondbrain.export.pipeline:validate_submission',
+    'curation': 'secondbrain.runner:validate_submission',
+    'relocation': 'secondbrain.runner:validate_submission',
+    'domcreate': 'secondbrain.runner:validate_submission',
 }
 
 TERMINAL_STATUSES = {'applying', 'applied', 'partial', 'published', 'rolled_back', 'superseded'}
@@ -335,10 +341,33 @@ def abandon_run(root: Path, job_id: str, run_id: str, *, reason: str) -> dict:
         return run
 
 
-def refuse(root: Path, job_id: str, run_id: str, *, role: str, message: str) -> bool:
+class ProgramFault(ValueError):
+    """The program failed while it read or checked an answer (an error of the program, not of the answer). The answer
+    is refused and counted like any other (:func:`_refused_answer`), and the fault is kept for the owner
+    (``program_errors`` in the job state, listed by ``sb status --owner-items``)."""
+
+
+def fault_of(exc: BaseException) -> dict:
+    """What the owner is shown of a program fault: the exception type and its message."""
+    return {'type': type(exc).__name__, 'message': str(exc)[:500]}
+
+
+def _record_fault(state: dict, run: dict, fault: dict) -> str:
+    """Keep ``fault`` on the run and in the job state (with the run's slot, role and step); returns the refusal
+    message the run and the sub-agent are given."""
+    row = {**fault, 'slot': run.get('chunk'), 'role': run['role'], 'step': run.get('step'), 'run_id': run['run_id'],
+           'at': now()}
+    run['program_error'] = row
+    state['program_errors'] = list(state.get('program_errors') or []) + [row]
+    return (f'the program failed while checking this answer ({fault["type"]}: {fault["message"]}); this is an error '
+            'of the program, not of the answer, and it is listed for the owner; the answer is counted as refused')
+
+
+def refuse(root: Path, job_id: str, run_id: str, *, role: str, message: str, fault: dict | None = None) -> bool:
     """Count an answer of ``run_id`` that never reached the validator: a file that is not JSON (``sb job submit``),
-    or an executor's answer that is no JSON object. The same count as a refusal by the validator
-    (:func:`submit`); True when the slot is now given up (a host run is then closed)."""
+    or an executor's answer that is no JSON object, or one the program failed to read (``fault``, kept for the
+    owner). The same count as a refusal by the validator (:func:`submit`); True when the slot is now given up (a
+    host run is then closed)."""
     with vault_lock(root):
         state = load(root, job_id)
         run = load_run(root, job_id, run_id)
@@ -346,6 +375,8 @@ def refuse(root: Path, job_id: str, run_id: str, *, role: str, message: str) -> 
             raise Conflict('RUN_ROLE_MISMATCH')
         if run['status'] not in {'started', 'submitted'}:
             raise Conflict(f'TERMINAL_RUN: {run["status"]}')
+        if fault is not None:
+            message = _record_fault(state, run, fault) + f' ({message})'
         return _refused_answer(root, job_id, state, run, message)
 
 
@@ -456,6 +487,13 @@ def submit(root: Path, job_id: str, payload: dict, *, role: str, run_id: str,
                 _refused_answer(root, job_id, state, run, str(exc), getattr(exc, 'keep', None))
                 exc.counted = True
                 raise
+            except Exception as exc:  # noqa: BLE001 - any error while an answer is checked goes through the gate
+                # the program failed on this answer: refused and counted the same, never taken; kept for the owner
+                message = _record_fault(state, run, fault_of(exc))
+                _refused_answer(root, job_id, state, run, message)
+                refused = ProgramFault(message)
+                refused.counted = True
+                raise refused from exc
             payload = checked if isinstance(checked, dict) else payload
         raw = encoded(payload)
         if len(raw) > 8_000_000:

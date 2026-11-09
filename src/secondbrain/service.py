@@ -89,8 +89,9 @@ class Service:
         and from the latest job of each partly written source its pending items (``pending``) and its passages
         and refused new topics that need a place in the taxonomy (``needs_taxonomy``); and the paragraphs of the
         latest export of each article that its review or its program check still did not pass when the repair
-        rounds ran out (``pending``, ``kind: export_paragraph``; the article marks them too); and the maintenance jobs
-        that stopped to wait for the owner (``pending``, ``kind: maintenance_job``).
+        rounds ran out (``pending``, ``kind: export_paragraph``; the article marks them too); the maintenance jobs
+        that stopped to wait for the owner (``pending``, ``kind: maintenance_job``); and the errors of the program
+        while it read or checked an answer (``pending``, ``kind: program_error``).
         """
         from . import inbox
         from .pipelines.ingest import open_conflicts
@@ -124,7 +125,7 @@ class Service:
                       for row in job.get('needs_taxonomy') or []]
             items += [{'owner_reason': 'needs_taxonomy', 'kind': 'refused_topic', **where, **row}
                       for row in job.get('refused_topics') or []]
-        return items + self._export_items() + self._stopped_jobs()
+        return items + self._export_items() + self._stopped_jobs() + self._program_errors()
 
     def _stopped_jobs(self) -> list[dict]:
         """The maintenance jobs that stopped to wait for the owner (``escalation_required``: an answer kept failing
@@ -151,6 +152,37 @@ class Service:
                  'detail': f'sb job show {s["job_id"]} shows its answers and reasons; running the command again '
                            'starts a new job, which takes its place here'}
                 for s in sorted(newest.values(), key=lambda s: s['job_id']) if s.get('escalation_required')]
+
+    def _program_errors(self) -> list[dict]:
+        """The errors of the program while it read or checked an answer (``program_errors`` of a job, kept by the
+        gate in :mod:`secondbrain.jobs`), one item per job, slot, role and step with how many times and the last
+        error: the answer was counted as refused, and asking again will not help until the program is fixed. Only
+        the newest job of each source or operation counts."""
+        newest: dict = {}
+        for entry in jobs.list_jobs(self.root):
+            if entry.get('status') in (None, 'unreadable', 'archived') or entry.get('kind') == 'transaction':
+                continue
+            try:
+                state = jobs.load(self.root, entry['job_id'])
+            except (ValueError, OSError):
+                continue
+            group = jobs._prune_group(state)
+            if (state.get('created_at') or '') >= (newest.get(group) or {}).get('created_at', ''):
+                newest[group] = state
+        items = []
+        for state in sorted(newest.values(), key=lambda s: s['job_id']):
+            seen: dict = {}
+            for row in state.get('program_errors') or []:
+                key = (row.get('slot'), row.get('role'), row.get('step'))
+                seen[key] = {'owner_reason': 'pending', 'kind': 'program_error', 'job_id': state['job_id'],
+                             'job_kind': state.get('kind'), 'slot': key[0], 'role': key[1], 'step': key[2],
+                             'error': row.get('type'), 'message': row.get('message'), 'run_id': row.get('run_id'),
+                             'times': seen.get(key, {}).get('times', 0) + 1,
+                             'detail': 'the program failed while it read or checked an answer; the answer was '
+                                       'counted as refused, and asking again will not help until the program is '
+                                       'fixed'}
+            items += list(seen.values())
+        return items
 
     def _not_merged(self, ids: set) -> dict:
         """``{id: why}`` for the needs-review cards an ingest job wrote next to the existing card they extend: why

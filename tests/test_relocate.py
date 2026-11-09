@@ -244,8 +244,9 @@ def test_gap_or_unbound_domain_not_written(tmp_path):
     assert result['pending'][0]['disposition'] == 'taxonomy_gap'
     assert (root / f'10_Knowledge/{SRC}/{CARD}.md').read_bytes() == before
     r.prepare(root, source_jobs=['src-cls'], job_id='relo2')
-    relocation_proposal(root, job_id='relo2', domain='newdomain')
-    with pytest.raises(ValueError, match='target domain bound at prepare'):
+    with pytest.raises(ValueError, match='target domain bound at prepare'):  # refused when it is submitted
+        relocation_proposal(root, job_id='relo2', domain='newdomain')
+    with pytest.raises(ValueError):  # and never applied
         r.apply(root, 'relo2')
     assert not (root / f'10_Knowledge/{DST}/{CARD}.md').exists()
 

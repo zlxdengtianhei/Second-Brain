@@ -257,7 +257,13 @@ def _job(args, root: Path):
         return service.job_show(args.id)
     if args.job_command == 'submit':
         from .pipelines.answerfix import strip_fence
-        text, unwrapped = args.file.read_text(encoding='utf-8'), False
+        raw, unwrapped = args.file.read_bytes(), False
+        try:
+            text = raw.decode('utf-8')
+        except UnicodeDecodeError as exc:  # read like any answer: refused and counted at the gate
+            message = f'the answer file is not UTF-8 text: {exc}'
+            jobs.refuse(root, args.id, args.run_id, role=args.role, message=message)
+            raise ValueError(message) from exc
         try:
             payload = json.loads(text)
         except json.JSONDecodeError as exc:  # counted like any refused answer, against the run's slot

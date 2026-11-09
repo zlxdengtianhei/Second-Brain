@@ -190,6 +190,15 @@ class ApiExecutor:
         except ValueError:
             return Result(status='failed', attestation='provider_response',
                           error=_error(INVALID_OUTPUT, 'response body is not JSON', True))
+        try:
+            return self._read(data, task)
+        except Exception as exc:  # noqa: BLE001 - reading the answer failed: counted at the gate, kept for the owner
+            return Result(status='failed', attestation='provider_response',
+                          error={**_error(INVALID_OUTPUT, f'the program failed while reading the answer: '
+                                          f'{type(exc).__name__}: {exc}', True),
+                                 'program_error': {'type': type(exc).__name__, 'message': str(exc)[:500]}})
+
+    def _read(self, data, task: Task) -> Result:
         output, model, usage, truncated = self._adapter.parse(data, tex_backslashes=task.tex_backslashes)
         if truncated:
             return Result(status='failed', model_reported=model, attestation='provider_response', usage=usage,

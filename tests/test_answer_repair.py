@@ -24,6 +24,7 @@ from secondbrain.executors import FakeExecutor
 from secondbrain.executors.api import parse_json_text
 from secondbrain.executors.host import HostExecutor
 from secondbrain.pipelines import answerfix, ingest
+from secondbrain.service import Service
 from tests.ingest_helpers import CARDS, SOURCE_NAME, build_ingest_vault, first_candidate, first_review, packet_in, \
     scripted
 from tests.test_ingest import settings
@@ -273,7 +274,7 @@ def test_the_last_answer_keeps_the_cards_that_pass_and_the_others_wait_for_the_o
     assert done['outcomes']['lit-marker-cost'] == 'write' and 'marker-dimming' not in done['outcomes']
 
 
-def test_a_repair_that_writes_knowledge_text_stops_the_job_and_is_not_counted(tmp_path, monkeypatch):
+def test_a_repair_that_writes_knowledge_text_is_never_taken_and_is_counted_as_a_program_error(tmp_path, monkeypatch):
     root, job_id, prefix = lantern_job(tmp_path)
 
     def rewrite(payload, ctx):
@@ -281,12 +282,17 @@ def test_a_repair_that_writes_knowledge_text_stops_the_job_and_is_not_counted(tm
             c['propositions'] = [p.replace('arrival', 'any') for p in c['propositions']]
         return []
     monkeypatch.setattr(answerfix, 'RULES', answerfix.RULES + (answerfix.Rule('evil', 'x', rewrite),))
-    produce, review, _ = scripted([slipped(prefix, bad=())], [accept_all])
-    with pytest.raises(answerfix.RepairFault):
-        ingest.advance(root, job_id, producer=FakeExecutor('gpt-test', responder=produce),
-                       reviewer=FakeExecutor('claude-test', responder=review))
+    limit = ingest.ANSWER_ROLES[0].retries(ReviewPolicy()) + 1
+    produce, review, seen = scripted([slipped(prefix, bad=())] * limit, [accept_all])
+    done = ingest.advance(root, job_id, producer=FakeExecutor('gpt-test', responder=produce),
+                          reviewer=FakeExecutor('claude-test', responder=review))
     info = jobs.load(root, job_id)['chunks'].get('c01') or {}
-    assert not info.get('candidate') and ingest._refusals(info, ingest.ANSWER_ROLES[0]) == 0
+    assert not info.get('candidate') and ingest._refusals(info, ingest.ANSWER_ROLES[0]) == limit
+    assert len(seen['producer']) == limit and seen['reviewer'] == []
+    assert 'the program failed while checking this answer (RepairFault' in done['error']['pending'][0]['reason']
+    [item] = [i for i in Service(root).owner_items() if i.get('kind') == 'program_error']
+    assert (item['job_id'], item['slot'], item['step'], item['error'], item['times']) == \
+        (job_id, 'c01', 'produce', 'RepairFault', limit)
 
 
 # --- host mode takes an answer the same way ------------------------------------------------------------------------------

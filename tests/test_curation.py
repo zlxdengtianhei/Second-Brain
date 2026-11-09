@@ -185,8 +185,9 @@ def test_nested_pillar_extension_cannot_be_silently_deleted(tmp_path):
                        cards={EXISTING: ('已有卡', DOM, PILLAR, TOPIC)},
                        taxonomies={MOC: current})
     curation.prepare(root, [DOM], job_id='nested')
-    submit_reviewed(root, 'nested', proposal([item(DOM, single_taxonomy(), [EXISTING])]), review_for([DOM]))
-    with pytest.raises(curation.CurationError, match='unknown field pillars'):
+    with pytest.raises(curation.CurationError, match='unknown field pillars'):  # refused when it is submitted
+        submit_reviewed(root, 'nested', proposal([item(DOM, single_taxonomy(), [EXISTING])]), review_for([DOM]))
+    with pytest.raises(ValueError):  # and never applied
         curation.apply(root, 'nested')
 
 
@@ -219,8 +220,9 @@ def test_shared_moc_divergent_taxonomy_rejected(tmp_path):
     a = single_taxonomy()
     b = single_taxonomy(narrative="不同叙事")  # divergent for same MOC
     proposal_data = proposal([item(DOM, a, [EXISTING]), item(DOM_T, b, [EXISTING])])
-    submit_reviewed(root, "jobD", proposal_data, review_for([DOM, DOM_T]))
-    with pytest.raises(curation.CurationError):
+    with pytest.raises(curation.CurationError):  # refused when it is submitted
+        submit_reviewed(root, "jobD", proposal_data, review_for([DOM, DOM_T]))
+    with pytest.raises(ValueError):  # and never applied
         curation.apply(root, "jobD")
 
 
@@ -232,7 +234,8 @@ def test_proposal_missing_shared_domain_rejected(tmp_path):
     curation.prepare(root, [DOM], job_id="jobE")
     proposal_data = proposal([item(DOM, single_taxonomy(), [EXISTING])])  # transformer missing
     from tests.helpers import submit_as
-    submit_as(root, "jobE", proposal_data, "producer")
+    with pytest.raises(curation.CurationError):  # refused when it is submitted
+        submit_as(root, "jobE", proposal_data, "producer")
     with pytest.raises(curation.CurationError):
         curation.validate(
             jobs.read_input(root, "jobE"),
@@ -249,7 +252,8 @@ def test_new_domain_proposal_rejected(tmp_path):
         item(DOM, single_taxonomy(), [EXISTING]),
         item("brand-new-domain", single_taxonomy(), [EXISTING])])
     from tests.helpers import submit_as
-    submit_as(root, "jobF", proposal_data, "producer")
+    with pytest.raises(curation.CurationError):  # refused when it is submitted
+        submit_as(root, "jobF", proposal_data, "producer")
     with pytest.raises(curation.CurationError):
         curation.validate(
             jobs.read_input(root, "jobF"),

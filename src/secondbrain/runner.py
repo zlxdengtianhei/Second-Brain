@@ -83,6 +83,19 @@ def _spec(kind: str) -> KindSpec:
     raise ValueError(f'This job kind has no model steps: {kind}')
 
 
+def validate_submission(packet: dict, payload: dict, *, role: str, state: dict, **_context) -> dict:
+    """jobs.submit hook of the maintenance kinds without their own (curation, relocation, domain creation): the
+    answer's shape, and a proposal by the kind's own check. Before, a proposal was first checked after it was kept,
+    so one that failed stopped every later run of the job and was never counted or asked for again."""
+    spec = _spec(state['kind'])
+    wrong = schemas.type_problems(payload, spec.produce_schema if role == 'producer' else spec.review_schema)
+    if wrong:
+        raise ValueError('Answer rejected by validation:\n- ' + '\n- '.join(wrong))
+    if role == 'producer':
+        spec.check(packet, payload)
+    return payload
+
+
 def _open_run(root: Path, state: dict, role: str, chunk: str | None) -> dict | None:
     for run_id in reversed(state.get('runs', [])):
         run = jobs.load_run(root, state['job_id'], run_id)
@@ -157,7 +170,8 @@ def finish_call(root: Path, task: Task, result: Result) -> Result:
         error = dict(result.error or {'code': INVALID_OUTPUT, 'message': 'executor returned no JSON object',
                                       'retryable': True})
         if error.get('code') == INVALID_OUTPUT:  # an answer of the wrong shape: counted at the gate, like a refusal
-            jobs.refuse(root, job_id, task.run_id, role=task.role, message=str(error.get('message', '')))
+            jobs.refuse(root, job_id, task.run_id, role=task.role, message=str(error.get('message', '')),
+                        fault=error.get('program_error'))
             error['counted'] = True
         jobs.fail_run(root, job_id, task.run_id, error=error)
         raise ExecutorFailure(error)
