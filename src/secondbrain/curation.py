@@ -155,45 +155,45 @@ def prepare(root: Path, domains: list[str], *, job_id: str,
 
 def _normalise_taxonomy(tx, domain, moc_title):
     if not isinstance(tx, dict):
-        raise CurationError(f"{domain}: the taxonomy must be a mapping")
+        raise CurationAnswerError(f"{domain}: the taxonomy must be a mapping")
     title = tx.get("title")
     if title != moc_title:
-        raise CurationError(
+        raise CurationAnswerError(
             f"{domain}: taxonomy.title={title!r} must equal the catalog map name {moc_title!r}")
     narrative = tx.get("narrative")
     if not isinstance(narrative, str) or not narrative.strip():
-        raise CurationError(f"{domain}: the taxonomy has no narrative")
+        raise CurationAnswerError(f"{domain}: the taxonomy has no narrative")
     bridges = tx.get("bridges")
     if bridges is not None and not isinstance(bridges, list):
-        raise CurationError(f"{domain}: bridges must be a list")
+        raise CurationAnswerError(f"{domain}: bridges must be a list")
     pillars = tx.get("pillars")
     if not isinstance(pillars, list) or not pillars:
-        raise CurationError(f"{domain}: the taxonomy needs at least one pillar")
+        raise CurationAnswerError(f"{domain}: the taxonomy needs at least one pillar")
     seen_names = set()
     seen_orders = set()
     for p in pillars:
         name = p.get("name") if isinstance(p, dict) else None
         if not isinstance(name, str) or not name.strip():
-            raise CurationError(f"{domain}: a pillar has no name")
+            raise CurationAnswerError(f"{domain}: a pillar has no name")
         if name in seen_names:
-            raise CurationError(f"{domain}: pillar name repeated: {name!r}")
+            raise CurationAnswerError(f"{domain}: pillar name repeated: {name!r}")
         seen_names.add(name)
         why = p.get("why")
         if not isinstance(why, str) or not why.strip():
-            raise CurationError(f"{domain}: pillar {name!r} has no why")
+            raise CurationAnswerError(f"{domain}: pillar {name!r} has no why")
         order = p.get("order")
         if not isinstance(order, int) or isinstance(order, bool) or order <= 0:
-            raise CurationError(f"{domain}: the order of pillar {name!r} must be a positive integer")
+            raise CurationAnswerError(f"{domain}: the order of pillar {name!r} must be a positive integer")
         if order in seen_orders:
-            raise CurationError(f"{domain}: pillar order repeated: {order}")
+            raise CurationAnswerError(f"{domain}: pillar order repeated: {order}")
         seen_orders.add(order)
         topics = p.get("topics")
         if not isinstance(topics, list) or not topics:
-            raise CurationError(f"{domain}: pillar {name!r} needs topics")
+            raise CurationAnswerError(f"{domain}: pillar {name!r} needs topics")
         if any(not isinstance(t, str) or not t.strip() for t in topics):
-            raise CurationError(f"{domain}: the topics of pillar {name!r} must be non-empty strings")
+            raise CurationAnswerError(f"{domain}: the topics of pillar {name!r} must be non-empty strings")
         if len({t for t in topics}) != len(topics):
-            raise CurationError(f"{domain}: pillar {name!r} repeats a topic name")
+            raise CurationAnswerError(f"{domain}: pillar {name!r} repeats a topic name")
 
 
 def _deep_keys_equal_preserved(current, proposed, domain):

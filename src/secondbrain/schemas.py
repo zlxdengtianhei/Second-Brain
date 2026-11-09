@@ -205,6 +205,26 @@ class ShapeError(AnswerError):
 SHAPE_SLIPS = (TypeError, AttributeError, KeyError, IndexError)
 
 
+class ProgramInputError(KeyError):
+    """A field the program's own input to a check lacks (a candidate it made, a packet): a fault of the program,
+    never the answer's, though it is a ``KeyError``."""
+
+
+class _Given(dict):
+    """A program input of a check (:func:`shape_checked`): reading a field it lacks raises
+    :class:`ProgramInputError`, not the answer's :class:`ShapeError`. A shallow copy, read as the dict it copies."""
+
+    def __getitem__(self, key):
+        try:
+            return dict.__getitem__(self, key)
+        except KeyError:
+            raise ProgramInputError(key) from None
+
+
+def _given(value):
+    return _Given(value) if type(value) is dict else value
+
+
 def shape_checked(schema, *, payload: int = 1, what: str = 'answer'):
     """Decorate the validator of one kind of model answer so that it never raises anything but a ``ValueError``.
 
@@ -212,7 +232,8 @@ def shape_checked(schema, *, payload: int = 1, what: str = 'answer'):
     dict, or a function that returns it): every value of another JSON type, a null included where the schema
     allows none, is named and the answer refused (:class:`ShapeError`). Should the validator still meet a shape
     it does not expect (one of :data:`SHAPE_SLIPS`), that is a refusal too, naming the exception: the run asks
-    again instead of stopping.
+    again instead of stopping. The validator's other dict arguments are the program's own input (a candidate it
+    made, a packet): a field missing at their top raises :class:`ProgramInputError`, which stays the program's.
     """
     import functools
 
@@ -223,8 +244,12 @@ def shape_checked(schema, *, payload: int = 1, what: str = 'answer'):
             wrong = type_problems(answer, schema() if callable(schema) else schema, null=False)
             if wrong:
                 raise ShapeError(f'The {what} was rejected by validation:\n- ' + '\n- '.join(wrong))
+            args = tuple(a if i == payload else _given(a) for i, a in enumerate(args))
+            kwargs = {k: v if k in ('payload', 'review') else _given(v) for k, v in kwargs.items()}
             try:
                 return fn(*args, **kwargs)
+            except ProgramInputError:
+                raise
             except SHAPE_SLIPS as exc:
                 raise ShapeError(f'The {what} was rejected by validation: a value of an unexpected shape '
                                  f'({type(exc).__name__}: {exc}); follow the schema') from exc
