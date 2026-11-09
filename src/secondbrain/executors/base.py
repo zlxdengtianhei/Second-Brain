@@ -57,6 +57,8 @@ class Result:
     #: What the program set aside to read the answer (:func:`secondbrain.executors.api.read_answer`): ``fence``, one
     #: Markdown code fence around the whole of it, or ``around``, words before or after its JSON object.
     unwrapped: str | None = None
+    #: The model's reply as it came, before it was read (an answer the program refuses is kept with it).
+    text: str | None = None
 
 
 @runtime_checkable

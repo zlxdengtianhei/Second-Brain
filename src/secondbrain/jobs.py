@@ -494,6 +494,58 @@ def as_given(candidate: dict) -> dict:
     return _without_program_fields(candidate)[0] if isinstance(candidate, dict) else candidate
 
 
+def _reply_text(raw, answer, result) -> str | None:
+    """The reply as it came, before it was read: a host's file as text, an executor's reply text, an object as JSON.
+    Never raises: it only serves the record of a refused answer."""
+    try:
+        if raw is not None:
+            return raw.decode('utf-8', errors='replace')
+        if result is not None:
+            text = getattr(result, 'text', None)
+            return text if isinstance(text, str) else None if result.output is None else \
+                json.dumps(result.output, ensure_ascii=False)
+        return json.dumps(answer, ensure_ascii=False)
+    except Exception:  # noqa: BLE001 - an object that is not JSON: its repr
+        try:
+            return repr(answer)
+        except Exception:  # noqa: BLE001
+            return None
+
+
+#: Where a refused producer answer is kept, under the job's state (never in the vault, never in an export).
+REJECTED = 'rejected'
+
+
+def _keep_rejected(root: Path, job_id: str, state: dict, run: dict, exc: BaseException, step: str, message: str,
+                   seen: dict) -> None:
+    """Keep a refused producer answer whole, for reading why it was refused: who gave it (run, slot, attempt,
+    models, the task's and the job input's hashes), the reply as it came, the answer as read, the refusal, and what
+    the kind's check reported (``exc.rejected``: the answer before and after the program's repairs, the repairs,
+    each error line with its field path and kind, a quote's own text and where it comes closest in the chunk, the
+    coverage rows as given). The run's ``output_sha256`` is the reply's."""
+    try:
+        _write_rejected(root, job_id, state, run, exc, step, message, seen)
+    except Exception as fault:  # noqa: BLE001 - keeping the record never stops the count; the run says it failed
+        run['rejected_not_kept'] = f'{type(fault).__name__}: {fault}'[:500]
+
+
+def _write_rejected(root: Path, job_id: str, state: dict, run: dict, exc: BaseException, step: str, message: str,
+                    seen: dict) -> None:
+    text = seen.get('text')
+    attempt = int(run.get('rejected_submits', 0)) + 1
+    record = {'schema': 'secondbrain-rejected/1', 'job_id': job_id, 'run_id': run['run_id'], 'chunk': run.get('chunk'),
+              'attempt': attempt, 'step': step, 'model_requested': run.get('model_requested'),
+              'model_reported': seen.get('model_reported') or run.get('model_reported'),
+              'task_sha256': run.get('task_sha256'), 'input_sha256': state.get('input_sha256'),
+              'reply_text': text, 'reply_sha256': digest(text.encode('utf-8')) if isinstance(text, str) else None,
+              'payload': seen.get('payload'), 'refusal': message[:20000],
+              **(getattr(exc, 'rejected', None) or {})}
+    where = location(job_id, REJECTED, f"{run['run_id']}-{attempt}.json")
+    write_json(root, where, record)
+    run['output_sha256'] = record['reply_sha256']
+    run['rejected_answers'] = list(run.get('rejected_answers') or []) + [where]
+
+
 def _read(state: dict, raw, answer, result) -> tuple:
     """``(payload, what was set aside, model_reported, attestation, usage)`` of an answer from one of the three
     sources: a host's file bytes, an object (MCP, a test), an API executor's result."""
@@ -565,8 +617,10 @@ def receive(root: Path, job_id: str, run_id: str, *, role: str, answer=_NO_ANSWE
         packet = json.loads(input_raw)
         frozen = frozen_settings(root, packet)
         step, how, written, path = 'read', None, False, location(job_id, 'out', f'{role}-{run_id}.json')
+        seen = {'text': _reply_text(raw, answer, result)}  # what a refused producer answer is kept with
         try:
             payload, how, reported, given, used = _read(state, raw, answer, result)
+            seen.update(payload=payload, model_reported=reported or model_reported)
             model_reported, attestation, usage = reported or model_reported, given or attestation, used or usage
             if how:
                 run['unwrapped'] = how
@@ -650,11 +704,12 @@ def receive(root: Path, job_id: str, run_id: str, *, role: str, answer=_NO_ANSWE
         except _NotAVerdict as conflict:
             raise conflict.conflict from None
         except Exception as exc:  # noqa: BLE001 - the one gate: every error while an answer is taken is counted
-            return _refuse_received(root, job_id, run_id, exc, step, how, written and path, result is not None)
+            return _refuse_received(root, job_id, run_id, exc, step, how, written and path, result is not None,
+                                    seen)
 
 
 def _refuse_received(root: Path, job_id: str, run_id: str, exc: BaseException, step: str, how, written,
-                     executor: bool):
+                     executor: bool, seen: dict | None = None):
     """The answer of ``run_id`` failed at ``step`` of :func:`receive` with ``exc``: count it, from the state as it
     was before this answer (what the failed steps changed is dropped, the stored file too), and raise
     :class:`Refused`. An :class:`~secondbrain.schemas.AnswerError` is the refusal it is; any other error is kept as a
@@ -670,6 +725,8 @@ def _refuse_received(root: Path, job_id: str, run_id: str, exc: BaseException, s
     message = str(exc) if fault is None else _record_fault(state, run, fault)
     if fault is not None and isinstance(exc, _Unread):
         message += f' ({exc})'
+    if run['role'] == 'producer':
+        _keep_rejected(root, job_id, state, run, exc, step, message, seen or {})
     given_up = _refused_answer(root, job_id, state, run, message,
                                getattr(exc, 'keep', None) if fault is None else None)
     if executor and run['status'] == 'started':  # an API run takes one answer: refused, it is over

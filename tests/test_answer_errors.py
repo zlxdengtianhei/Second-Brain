@@ -37,7 +37,7 @@ PROGRAM_STATE = {
     ('secondbrain.pipelines.chunking', 'chunk_text'): 'a chunk size the settings got wrong',
     ('secondbrain.pipelines.ingest', '_chunk'): 'a chunk the job does not have',
     ('secondbrain.pipelines.ingest', 'answer_role'): 'a slot no role answers in',
-    ('secondbrain.pipelines.ingest', 'validate_submission'): 'an ingest run not bound to a chunk',
+    ('secondbrain.pipelines.ingest', '_validate_submission'): 'an ingest run not bound to a chunk',
     ('secondbrain.runner', '_spec'): 'a job kind with no model steps',
 }
 

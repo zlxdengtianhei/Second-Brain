@@ -1,6 +1,8 @@
 """Request/response mapping for Anthropic ``/v1/messages`` (tool-forced JSON)."""
 from __future__ import annotations
 
+import json
+
 from .api import read_answer
 
 TOOL = 'submit_result'
@@ -26,6 +28,14 @@ def unsupported_format(status: int, detail: str) -> bool:
 
 def _text(data: dict) -> str:
     return ''.join(b.get('text', '') for b in data.get('content') or [] if b.get('type') == 'text')
+
+
+def answer_text(data: dict) -> str:
+    """The reply as it came: the text blocks, or the tool call's input written as JSON."""
+    for block in data.get('content') or []:
+        if block.get('type') == 'tool_use' and block.get('name') == TOOL:
+            return json.dumps(block.get('input'), ensure_ascii=False)
+    return _text(data)
 
 
 def parse(data: dict, *, tex_backslashes: bool = False):

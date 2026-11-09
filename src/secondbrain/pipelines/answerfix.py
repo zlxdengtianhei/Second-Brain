@@ -20,6 +20,7 @@ wrote everything again and made other slips. Now, for every producer answer of a
 from __future__ import annotations
 
 import copy
+import difflib
 import json
 import re
 from dataclasses import dataclass, field
@@ -364,6 +365,38 @@ def split_problems(lines: list[str], payload: dict) -> tuple[dict, list]:
             slug = slugs[int(name)] if name.isdigit() and int(name) < len(slugs) else name
             by.setdefault(slug or name, []).append(line)
     return by, block
+
+
+#: The kind of an error line, by the field it names (the first that fits).
+_KINDS = (('source_quote', 'quote'), ('overlap_hint', 'overlap'), ('coverage', 'coverage'), ('relations', 'relation'),
+          ('conflicts', 'conflict'), ('flashcards', 'flashcards'), ('title', 'title'), ('topic', 'taxonomy'),
+          ('domain', 'taxonomy'), ('pillar', 'taxonomy'))
+
+
+def error_rows(message: str, payload, text) -> list[dict]:
+    """The lines of a refusal as rows: ``path`` (the field it names), ``kind``, ``line``. A quote that is not a slice
+    of the chunk gets a row of its own, at its index: the quote as the model wrote it, ``k`` (the longest stretch of
+    it the chunk has), ``n`` (its length) and ``b`` (where in the chunk that stretch starts)."""
+    from ..evidence import check_verbatim
+    rows = []
+    for line in problem_lines(message):
+        path = line.split(':', 1)[0].strip() if ':' in line else ''
+        kind = next((k for key, k in _KINDS if key in path), 'shape' if 'must' in line else 'other')
+        rows.append({'path': path, 'kind': kind, 'line': line})
+    if not isinstance(payload, dict) or not isinstance(text, str):
+        return rows
+    quoted = [(f'cards[{_slug(c)}].source_quotes[{i}]', q) for c in _cards(payload)
+              for i, q in enumerate(c.get('source_quotes') or [] if isinstance(c.get('source_quotes'), list) else [])]
+    if isinstance(payload.get('card'), dict) and isinstance(payload['card'].get('source_quotes'), list):
+        quoted += [(f'card.source_quotes[{i}]', q) for i, q in enumerate(payload['card']['source_quotes'])]
+    quoted += [(f'coverage[{i}].source_quote', r.get('source_quote')) for i, r in
+               enumerate(payload.get('coverage') or [] if isinstance(payload.get('coverage'), list) else [])
+               if isinstance(r, dict)]
+    for path, q in quoted:
+        if isinstance(q, str) and q.strip() and check_verbatim(text, q):
+            m = difflib.SequenceMatcher(None, q, text, autojunk=False).find_longest_match(0, len(q), 0, len(text))
+            rows.append({'path': path, 'kind': 'quote', 'quote': q, 'k': m.size, 'n': len(q), 'b': m.b})
+    return rows
 
 
 def problem_lines(message: str) -> list[str]:

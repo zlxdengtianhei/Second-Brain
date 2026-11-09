@@ -207,15 +207,15 @@ class ApiExecutor:
 
     def _read(self, data, task: Task) -> Result:
         output, model, usage, truncated, how = self._adapter.parse(data, tex_backslashes=task.tex_backslashes)
+        detail = self._adapter.answer_text(data) if hasattr(self._adapter, 'answer_text') else None
         if truncated:
             return Result(status='failed', model_reported=model, attestation='provider_response', usage=usage,
                           error=_error(INVALID_OUTPUT, 'the answer was cut off at max_output_tokens; '
-                                       'raise it or lower ingest.chunk_chars', True))
+                                       'raise it or lower ingest.chunk_chars', True), text=detail)
         if not isinstance(output, dict):
-            detail = self._adapter.answer_text(data) if hasattr(self._adapter, 'answer_text') else None
             return Result(status='failed', model_reported=model, attestation='provider_response', usage=usage,
                           error=_error(INVALID_OUTPUT, 'the answer is not a JSON object: '
                                        + json_problem(detail) if detail is not None
-                                       else 'the answer is not a JSON object', True))
+                                       else 'the answer is not a JSON object', True), text=detail)
         return Result(status='completed', output=output, model_reported=model,
-                      attestation='provider_response', usage=usage, unwrapped=how)
+                      attestation='provider_response', usage=usage, unwrapped=how, text=detail)

@@ -19,6 +19,7 @@ rounds run out stay *pending* and the rest of the source is written
 from __future__ import annotations
 
 import base64
+import copy
 import json
 import re
 from dataclasses import replace
@@ -1615,7 +1616,35 @@ def _answer_schema(chunk: str, role: str) -> dict:
 
 def validate_submission(packet: dict, payload: dict, *, role: str, candidate=None,
                         root=None, chunk=None, state=None) -> dict:
-    """jobs.submit hook: S4 for producers, shape checks for reviewers."""
+    """jobs.submit hook: S4 for producers, shape checks for reviewers. A producer's answer it refuses carries what
+    it found (``rejected``: the answer before and after the repairs, the repairs, each error line with its path and
+    kind, a quote's own text and where it comes closest, the coverage rows as given), for the entry point to keep
+    with the reply (:func:`secondbrain.jobs._keep_rejected`)."""
+    seen: dict = {'given': copy.deepcopy(payload)} if role == 'producer' else {}
+    try:
+        return _validate_submission(packet, payload, role=role, candidate=candidate, root=root, chunk=chunk,
+                                    state=state, seen=seen)
+    except schemas.AnswerError as exc:
+        if role == 'producer' and chunk is not None:
+            exc.rejected = _rejected_report(seen, chunk, str(exc))
+        raise
+
+
+def _rejected_report(seen: dict, slot: str, message: str) -> dict:
+    """What a refused producer answer is kept with, from the check (:func:`validate_submission`)."""
+    fixed, text = seen.get('fixed', seen.get('given')), seen.get('text')
+    given = seen.get('given')
+    rows = given.get('coverage') if isinstance(given, dict) else None
+    return {'base_chunk': _base(slot), 'round': _round(slot),
+            'chunk_sha256': jobs.digest(text.encode('utf-8')) if isinstance(text, str) else None,
+            'payload_before_repair': given, 'payload_after_repair': fixed, 'repairs': seen.get('records') or [],
+            'errors': answerfix.error_rows(message, fixed, text),
+            'coverage': [{k: r.get(k) for k in ('disposition', 'cards', 'with', 'source_quote')}
+                         for r in rows if isinstance(r, dict)] if isinstance(rows, list) else rows}
+
+
+def _validate_submission(packet: dict, payload: dict, *, role: str, candidate=None, root=None, chunk=None,
+                         state=None, seen: dict) -> dict:
     if chunk is None:
         raise IngestError('ingest runs are always bound to a chunk slot')
     draft = _draft(state, chunk) if role == 'producer' else None
@@ -1627,6 +1656,8 @@ def validate_submission(packet: dict, payload: dict, *, role: str, candidate=Non
     records: list = []
     if spec.cards:  # a role that writes cards: the program repairs them here, first, for every such role
         payload, records = _repaired(packet, state, root, chunk, spec, payload, draft)
+        seen.update(fixed=payload, records=records, text=_chunk_text(packet, _split_item(state, chunk)['chunk']
+                                                                      if split.is_slot(chunk) else _base(chunk)))
     if card_diagrams.is_slot(chunk):
         return card_diagrams.validate_answer(payload)
     if source_check.is_slot(chunk):
