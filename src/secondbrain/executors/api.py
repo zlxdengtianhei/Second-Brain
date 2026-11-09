@@ -33,15 +33,18 @@ def _error(code, message, retryable=False, status=None) -> dict:
     return {'code': code, 'message': message[:2000], 'retryable': retryable, 'http_status': status}
 
 
-def _candidates(text: str) -> list[str]:
-    stripped = text.strip()
-    inner = strip_fence(stripped)  # one Markdown code fence around the whole answer: the one rule of both modes
+def _candidates(text: str) -> list[tuple[str, str | None]]:
+    """The readings of an answer to try, in order, each with what was set aside: the text as it is (or without one
+    Markdown code fence around the whole of it, ``fence``), then the part from its first ``{`` to its last ``}``,
+    when there are words before or after it (``around``)."""
+    stripped, how = text.strip(), None
+    inner = strip_fence(stripped)  # one Markdown code fence around the whole answer
     if inner is not None:
-        stripped = inner.strip()
-    out = [stripped]
+        stripped, how = inner.strip(), 'fence'
+    out = [(stripped, how)]
     start, end = stripped.find('{'), stripped.rfind('}')
     if 0 <= start < end and (start, end) != (0, len(stripped) - 1):
-        out.append(stripped[start:end + 1])
+        out.append((stripped[start:end + 1], 'around'))
     return out
 
 
@@ -75,8 +78,12 @@ def escape_tex(text: str) -> str:
     return ''.join(out)
 
 
-def parse_json_text(text: str, *, tex_backslashes: bool = False) -> dict | None:
-    """The JSON object in a model's text answer (code fences tolerated); None when there is none.
+def read_answer(text: str, *, tex_backslashes: bool = False) -> tuple[dict | None, str | None]:
+    """``(the JSON object in a model's text answer, or None; what was set aside to read it)``: the one reading of an
+    answer, for an API executor and for `sb job submit` alike. The text is read as JSON as it is; else without one
+    Markdown code fence around the whole of it (``fence``); else the part from its first ``{`` to its last ``}``,
+    when words stand before or after it (``around``). Nothing else is loosened: a literal ``\\n`` written for a line
+    break is no JSON, and a JSON value that is not an object is None.
 
     With ``tex_backslashes`` (`sb export` only, :attr:`Task.tex_backslashes`), when strict parsing
     fails the answer is read once more with the backslashes of TeX commands doubled
@@ -85,22 +92,27 @@ def parse_json_text(text: str, *, tex_backslashes: bool = False) -> dict | None:
     never use it. A strict parse that succeeds is never re-read.
     """
     if not isinstance(text, str):
-        return None
-    for candidate in _candidates(text):
+        return None, None
+    for candidate, how in _candidates(text):
         for attempt in (candidate, escape_tex(candidate)) if tex_backslashes else (candidate,):
             try:
                 value = json.loads(attempt)
             except ValueError:
                 continue
-            return value if isinstance(value, dict) else None
-    return None
+            return (value, how) if isinstance(value, dict) else (None, None)
+    return None, None
+
+
+def parse_json_text(text: str, *, tex_backslashes: bool = False) -> dict | None:
+    """The JSON object in a model's text answer, or None (:func:`read_answer`)."""
+    return read_answer(text, tex_backslashes=tex_backslashes)[0]
 
 
 def json_problem(text: str) -> str:
     """Why ``text`` is not a JSON object: the parser's message and the text around the error."""
     if not isinstance(text, str) or not text.strip():
         return 'the answer is empty'
-    candidate = _candidates(text)[-1]
+    candidate = _candidates(text)[-1][0]
     try:
         value = json.loads(candidate)
     except ValueError as exc:
@@ -199,7 +211,7 @@ class ApiExecutor:
                                  'program_error': {'type': type(exc).__name__, 'message': str(exc)[:500]}})
 
     def _read(self, data, task: Task) -> Result:
-        output, model, usage, truncated = self._adapter.parse(data, tex_backslashes=task.tex_backslashes)
+        output, model, usage, truncated, how = self._adapter.parse(data, tex_backslashes=task.tex_backslashes)
         if truncated:
             return Result(status='failed', model_reported=model, attestation='provider_response', usage=usage,
                           error=_error(INVALID_OUTPUT, 'the answer was cut off at max_output_tokens; '
@@ -211,4 +223,4 @@ class ApiExecutor:
                                        + json_problem(detail) if detail is not None
                                        else 'the answer is not a JSON object', True))
         return Result(status='completed', output=output, model_reported=model,
-                      attestation='provider_response', usage=usage, unwrapped=self._adapter.fenced(data))
+                      attestation='provider_response', usage=usage, unwrapped=how)

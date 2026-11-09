@@ -106,7 +106,9 @@ def test_a_quote_not_in_the_chunk_or_too_short_or_there_twice_is_left_to_the_che
         out, records = answerfix.repair({'cards': [card('x', source_quotes=[quote])]}, ctx())
         assert out['cards'][0]['source_quotes'] == [quote] and records == []
     twice = answerfix.Context(text='a lit marker here; a **lit** marker there', catalog=CATALOG, prefix='kc_')
-    assert answerfix.repair({'cards': [card('x', source_quotes=['a lit marker'])]}, twice)[1] == []
+    for quote in ('a  lit marker', 'a **lit marker**'):  # not in the chunk as written; twice once marks and blanks go
+        assert quote not in twice.text
+        assert answerfix.repair({'cards': [card('x', source_quotes=[quote])]}, twice)[1] == []
 
 
 def test_a_repair_that_changes_a_proposition_is_a_fault_of_the_program(monkeypatch):
@@ -337,7 +339,7 @@ def test_a_fenced_answer_is_taken_in_both_modes_and_the_fence_is_recorded(tmp_pa
     root, job_id, prefix = lantern_job(tmp_path)
     fence = '```json\n' + json.dumps(slipped(prefix, bad=())) + '\n```'
     messages, candidate, run = host_answers(root, job_id, [fence], tmp_path)
-    assert messages == [] and run['unwrapped'] is True and run['status'] == 'submitted'
+    assert messages == [] and run['unwrapped'] == 'fence' and run['status'] == 'submitted'
     state = jobs.load(root, job_id)
     packet = ingest.review_packet(root, state, jobs.read_input(root, job_id), 'c01')
     assert packet['program_repairs'][0]['rule'] == 'fence'
@@ -347,11 +349,12 @@ def test_a_fenced_answer_is_taken_in_both_modes_and_the_fence_is_recorded(tmp_pa
     # API mode: the executor reads the fenced text and says so
     from secondbrain.executors import api_anthropic, api_openai
     data = {'choices': [{'message': {'content': fence}, 'finish_reason': 'stop'}], 'model': 'm'}
-    assert api_openai.parse(data)[0] == json.loads(fence[8:-4]) and api_openai.fenced(data)
-    assert not api_openai.fenced({'choices': [{'message': {'content': fence[8:-4]}}]})
+    assert api_openai.parse(data)[0] == json.loads(fence[8:-4]) and api_openai.parse(data)[4] == 'fence'
+    assert api_openai.parse({'choices': [{'message': {'content': fence[8:-4]}}]})[4] is None
     text = {'content': [{'type': 'text', 'text': fence}]}
-    assert api_anthropic.parse(text)[0] == json.loads(fence[8:-4]) and api_anthropic.fenced(text)
-    assert not api_anthropic.fenced({'content': [{'type': 'tool_use', 'name': api_anthropic.TOOL, 'input': {}}]})
+    assert api_anthropic.parse(text)[0] == json.loads(fence[8:-4]) and api_anthropic.parse(text)[4] == 'fence'
+    assert api_anthropic.parse({'content': [{'type': 'tool_use', 'name': api_anthropic.TOOL, 'input': {}}]})[4] \
+        is None
 
 
 def test_a_file_that_is_not_json_even_without_its_fence_is_refused_and_counted(tmp_path):
@@ -387,3 +390,20 @@ def test_host_packet_of_the_next_ask_carries_the_fix(tmp_path):
     jobs.submit(root, job_id, fixed('marker-dimming'), role='producer', run_id=h2['run_id'], model_reported='gpt-test')
     cand = jobs.artifact(root, jobs.load(root, job_id), 'candidate', 'c01')
     assert sorted(c['slug'] for c in cand['cards']) == sorted(CARDS)
+
+
+def test_a_card_held_back_keeps_its_text_for_the_owner_and_the_reviewer_sees_only_why(tmp_path):
+    root, job_id, prefix = lantern_job(tmp_path, retries=0)
+    answer = slipped(prefix)
+    produce, review, seen = scripted([answer], [accept_all])
+    done = ingest.advance(root, job_id, producer=FakeExecutor('gpt-test', responder=produce),
+                          reviewer=FakeExecutor('claude-test', responder=review))
+    given = next(c for c in answer['cards'] if c['slug'] == 'marker-dimming')
+    [pending] = [p for p in done['pending'] if p.get('slug') == 'marker-dimming']
+    assert pending['card']['propositions'] == given['propositions']
+    assert pending['card']['flashcards'] == given['flashcards']
+    assert pending['card']['source_quotes'] == [BAD_QUOTES['marker-dimming']]
+    held = jobs.artifact(root, jobs.load(root, job_id), 'candidate', 'c01')['held_cards']
+    assert held[0]['card'] == pending['card']
+    [rv] = seen['reviewer']
+    assert set(rv.packet['held_cards'][0]) == {'slug', 'title', 'problems'}

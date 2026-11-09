@@ -1,8 +1,7 @@
 """Request/response mapping for Anthropic ``/v1/messages`` (tool-forced JSON)."""
 from __future__ import annotations
 
-from ..pipelines.answerfix import strip_fence
-from .api import parse_json_text
+from .api import read_answer
 
 TOOL = 'submit_result'
 VERSION = '2023-06-01'
@@ -29,23 +28,15 @@ def _text(data: dict) -> str:
     return ''.join(b.get('text', '') for b in data.get('content') or [] if b.get('type') == 'text')
 
 
-def fenced(data: dict) -> bool:
-    """Whether the answer came as text wrapped in one Markdown code fence (taken off before it was read); an answer
-    given through the tool has no fence."""
-    if any(b.get('type') == 'tool_use' and b.get('name') == TOOL for b in data.get('content') or []):
-        return False
-    return strip_fence(_text(data)) is not None
-
-
 def parse(data: dict, *, tex_backslashes: bool = False):
     usage = data.get('usage') or {}
     usage = {'input_tokens': usage.get('input_tokens'), 'output_tokens': usage.get('output_tokens')}
     truncated = data.get('stop_reason') == 'max_tokens'
-    output = None
+    output, how = None, None
     for block in data.get('content') or []:
         if block.get('type') == 'tool_use' and block.get('name') == TOOL:
             output = block.get('input')
             break
     if output is None:
-        output = parse_json_text(_text(data), tex_backslashes=tex_backslashes)
-    return output, data.get('model'), usage, truncated
+        output, how = read_answer(_text(data), tex_backslashes=tex_backslashes)
+    return output, data.get('model'), usage, truncated, how

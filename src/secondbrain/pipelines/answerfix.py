@@ -298,10 +298,11 @@ def _knowledge(card: dict, canon: Callable[[str], str]) -> str:
     return json.dumps(view, ensure_ascii=False, sort_keys=True)
 
 
-def repair(payload, ctx: Context) -> tuple:
-    """``(payload, records)``: a copy of ``payload`` with the :data:`RULES` applied, and what each changed. A payload
-    that is not an object is given back as it is. Raises :class:`RepairFault` when the knowledge text of a card
-    changed beyond naming a card by title: before and after are compared in one written form (:func:`_canonical`)."""
+def repair(payload, ctx: Context, rules=None) -> tuple:
+    """``(payload, records)``: a copy of ``payload`` with the :data:`RULES` applied (those named in ``rules``, when
+    given), and what each changed. A payload that is not an object is given back as it is. Raises
+    :class:`RepairFault` when the knowledge text of a card changed beyond naming a card by title: before and after
+    are compared in one written form (:func:`_canonical`)."""
     if not isinstance(payload, dict):
         return payload, []
     out = copy.deepcopy(payload)
@@ -309,7 +310,8 @@ def repair(payload, ctx: Context) -> tuple:
     before = {id(c): (_slug(c), _knowledge(c, canon)) for c in _cards(out)}
     records = []
     for rule in RULES:
-        records += rule.fn(out, ctx)
+        if rules is None or rule.name in rules:
+            records += rule.fn(out, ctx)
     for c in _cards(out):
         slug, was = before.get(id(c), (None, None))
         if was is not None and _knowledge(c, canon) != was:

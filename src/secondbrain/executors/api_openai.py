@@ -1,8 +1,7 @@
 """Request/response mapping for OpenAI-compatible ``/chat/completions``."""
 from __future__ import annotations
 
-from ..pipelines.answerfix import strip_fence
-from .api import parse_json_text
+from .api import read_answer
 
 
 def request(endpoint, key: str, system: str, text: str, schema: dict, *, mode: str):
@@ -25,16 +24,11 @@ def answer_text(data: dict) -> str:
     return ((data.get('choices') or [{}])[0].get('message') or {}).get('content') or ''
 
 
-def fenced(data: dict) -> bool:
-    """Whether the answer was wrapped in one Markdown code fence (taken off before it was read)."""
-    return strip_fence(answer_text(data)) is not None
-
-
 def parse(data: dict, *, tex_backslashes: bool = False):
     choice = (data.get('choices') or [{}])[0]
     message = choice.get('message') or {}
     usage = data.get('usage') or {}
     usage = {'input_tokens': usage.get('prompt_tokens'), 'output_tokens': usage.get('completion_tokens')}
     truncated = choice.get('finish_reason') == 'length'
-    return (parse_json_text(message.get('content') or '', tex_backslashes=tex_backslashes), data.get('model'),
-            usage, truncated)
+    output, how = read_answer(message.get('content') or '', tex_backslashes=tex_backslashes)
+    return output, data.get('model'), usage, truncated, how

@@ -256,26 +256,22 @@ def _job(args, root: Path):
     if args.job_command == 'show':
         return service.job_show(args.id)
     if args.job_command == 'submit':
-        from .pipelines.answerfix import strip_fence
-        raw, unwrapped = args.file.read_bytes(), False
+        from .executors.api import json_problem, read_answer
+        raw = args.file.read_bytes()
         try:
             text = raw.decode('utf-8')
         except UnicodeDecodeError as exc:  # read like any answer: refused and counted at the gate
             message = f'the answer file is not UTF-8 text: {exc}'
             jobs.refuse(root, args.id, args.run_id, role=args.role, message=message)
             raise ValueError(message) from exc
-        try:
-            payload = json.loads(text)
-        except json.JSONDecodeError as exc:  # counted like any refused answer, against the run's slot
-            inner = strip_fence(text)  # one Markdown code fence around the whole answer goes, as in API mode
-            try:
-                payload, unwrapped = json.loads(inner), True
-            except (TypeError, json.JSONDecodeError):
-                message = f'the answer file is not JSON: {exc}'
-                jobs.refuse(root, args.id, args.run_id, role=args.role, message=message)
-                raise ValueError(message) from exc
+        # the one reading of an answer, as an API executor reads it (TeX backslashes for an export's answers)
+        payload, how = read_answer(text, tex_backslashes=jobs.load(root, args.id).get('kind') == 'export')
+        if payload is None:  # counted like any refused answer, against the run's slot
+            message = f'the answer file is not JSON: {json_problem(text)}'
+            jobs.refuse(root, args.id, args.run_id, role=args.role, message=message)
+            raise ValueError(message)
         return service.submit(args.id, payload, role=args.role, run_id=args.run_id, model=args.model,
-                              unwrapped=unwrapped)
+                              unwrapped=how)
     if args.job_command == 'abandon':
         return jobs.abandon_run(root, args.id, args.run_id, reason=args.reason)
     if args.job_command == 'skip-source-check':

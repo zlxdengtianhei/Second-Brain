@@ -435,12 +435,13 @@ def _validator(kind: str):
 
 def submit(root: Path, job_id: str, payload: dict, *, role: str, run_id: str,
            model_reported: str | None = None, attestation: str = 'self_reported',
-           usage: dict | None = None, unwrapped: bool = False) -> dict:
+           usage: dict | None = None, unwrapped: str | None = None) -> dict:
     """Validate and persist one run's output; never writes knowledge.
 
     A submission refused here (not a JSON object, or refused by the kind's validator) is counted against its slot's
-    budget (:func:`_refused_answer`), the same count for a host sub-agent and an API run. ``unwrapped``: the answer
-    came wrapped in one Markdown code fence, which the program took off; the run records it (``unwrapped``)."""
+    budget (:func:`_refused_answer`), the same count for a host sub-agent and an API run. ``unwrapped``: what the
+    program set aside to read the answer (``fence`` or ``around``, :func:`executors.api.read_answer`); the run records
+    it."""
     if attestation not in {'provider_response', 'self_reported', 'test'}:
         raise ValueError(f'unknown attestation: {attestation}')
     with vault_lock(root):
@@ -454,7 +455,7 @@ def submit(root: Path, job_id: str, payload: dict, *, role: str, run_id: str,
         if run['status'] not in {'started', 'submitted'}:
             raise Conflict(f'TERMINAL_RUN: {run["status"]}')
         if unwrapped:
-            run['unwrapped'] = True
+            run['unwrapped'] = unwrapped
         if not isinstance(payload, dict):  # counted like any refused answer
             message = f'a submission must be a JSON object, not {type(payload).__name__}'
             _refused_answer(root, job_id, state, run, message)

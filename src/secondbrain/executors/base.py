@@ -54,8 +54,9 @@ class Result:
     error: dict | None = None
     #: Host executor: where the packet is and how to submit the answer.
     handoff: dict | None = field(default=None)
-    #: The answer was wrapped in one Markdown code fence, which the program took off (``answerfix.strip_fence``).
-    unwrapped: bool = False
+    #: What the program set aside to read the answer (:func:`secondbrain.executors.api.read_answer`): ``fence``, one
+    #: Markdown code fence around the whole of it, or ``around``, words before or after its JSON object.
+    unwrapped: str | None = None
 
 
 @runtime_checkable

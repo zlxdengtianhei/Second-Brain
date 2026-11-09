@@ -120,7 +120,7 @@ def test_an_api_answer_the_program_fails_to_read_is_counted_and_listed(tmp_path)
 
 # --- in a job: the repair step fails on every answer -------------------------------------------------------------------
 def failing_repair(monkeypatch):
-    def fail(payload, ctx):
+    def fail(payload, ctx, rules=None):
         raise answerfix.RepairFault('a repair changed the knowledge text; nothing was kept')
     monkeypatch.setattr(answerfix, 'repair', fail)
 
