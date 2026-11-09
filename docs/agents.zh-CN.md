@@ -38,7 +38,7 @@ sb export --domain <slug> --executor host   # 导出文章也走同样的交接�
 sb export --job <job_id> --executor host    # 下一批交接；各步都完成后写出文章文件
 ```
 
-一个运行 id（run id）只接受一份答案。同一个运行再提交一份不同的答案，会被拒绝。被程序拒绝的答案，可以在同一个运行上重交，最多 `[review] max_invalid_retries` 次。块生产者的答案只因部分卡被拒时（“Answer again with these cards only”），只交改好的这几张卡，写成 `{"cards": [...]}`：程序把它们和留下的卡合在一起，整份再校验。整份包在一个 Markdown 代码围栏里的答案文件，去掉这一层围栏再读。
+一个运行 id（run id）只接受一份答案。同一个运行再提交一份不同的答案，会被拒绝。被程序拒绝的答案，可以在同一个运行上重交，最多 `[review] max_invalid_retries` 次。块生产者的答案只因部分卡被拒时（“Answer again with these cards only”），只交改好的这几张卡，写成 `{"cards": [...]}`：程序把它们和留下的卡合在一起，整份再校验。答案文件的读法与 API 执行器读答案相同：先按原样读 JSON，不行就去掉外面一层 Markdown 代码围栏，还不行、而前后有别的文字时只读其中的 JSON 对象。程序检查答案时自己出的错也算一次退回，并由 `sb status --owner-items` 列出。
 
 ## API 执行器
 
@@ -50,7 +50,7 @@ sb export --job <job_id> --executor host    # 下一批交接；各步都完成�
 4. 检查：`sb doctor` 显示配置，以及每个 key 是否可用；`sb doctor --live` 向每个端点发一次小请求。
 5. 运行 `sb ingest <file> --executor api`；或者在设了 `[executor] default = "api"` 时运行 `sb ingest --all`。
 
-遇到限流和服务器错误时，工具会退避后重试。块太大、放不进模型上下文时，工具把它一分为二再试。答案被截断、不是 JSON，或某个值的 JSON 类型不对时，算作无效答案：程序重新要一次答案，最多 `[review] max_invalid_retries` 次，不占返修轮。整份答案包在一个 Markdown 代码围栏里时，去掉这一层围栏再读，这次运行记下这件事。
+遇到限流和服务器错误时，工具会退避后重试。块太大、放不进模型上下文时，工具把它一分为二再试。答案被截断、不是 JSON，或某个值的 JSON 类型不对时，算作无效答案：程序重新要一次答案，最多 `[review] max_invalid_retries` 次，不占返修轮。整份答案包在一个 Markdown 代码围栏里时，去掉这一层围栏再读；JSON 对象前后有别的文字时，只读这个对象；运行记下用了哪种。
 
 设了 `[export.writer]` 和 `[export.reviewer]` 时，`sb export` 用它们写作和复核；没设时用生产者和复核者（[export.zh-CN.md](export.zh-CN.md#配置)）。
 

@@ -38,7 +38,7 @@ sb export --domain <slug> --executor host   # the same loop for an article
 sb export --job <job_id> --executor host    # next hand-offs; the article files once all steps are done
 ```
 
-A run id accepts one answer. A second, different answer for the same run is refused. An answer the program refuses may be submitted again on the same run, within `[review] max_invalid_retries`. When a chunk producer's answer is refused for some cards only ("Answer again with these cards only"), submit those cards only, fixed, as `{"cards": [...]}`: the program puts them back with the cards it kept and checks the whole. An answer file wrapped in one Markdown code fence is read without that fence.
+A run id accepts one answer. A second, different answer for the same run is refused. An answer the program refuses may be submitted again on the same run, within `[review] max_invalid_retries`. When a chunk producer's answer is refused for some cards only ("Answer again with these cards only"), submit those cards only, fixed, as `{"cards": [...]}`: the program puts them back with the cards it kept and checks the whole. An answer file is read as the API executor reads an answer: as JSON as it is, else without one Markdown code fence around it, else its JSON object alone when words stand around it. An error of the program while it checks an answer counts as a refusal too, and is listed by `sb status --owner-items`.
 
 ## API executor
 
@@ -50,7 +50,7 @@ The tool calls the endpoints itself. Producer and reviewer must be models of dif
 4. Check: `sb doctor` shows the configuration and whether each key is available; `sb doctor --live` sends one small request to each endpoint.
 5. Run `sb ingest <file> --executor api`, or `sb ingest --all` with `[executor] default = "api"`.
 
-Rate limits and server errors are retried with back-off. A chunk that is too large for the model's context is split in two and retried. An answer that is cut off, is not JSON, or has a value of the wrong type counts as invalid: it is asked for again, up to `[review] max_invalid_retries` times, and does not use a repair round. An answer wrapped in one Markdown code fence is read without that fence, and the run records it.
+Rate limits and server errors are retried with back-off. A chunk that is too large for the model's context is split in two and retried. An answer that is cut off, is not JSON, or has a value of the wrong type counts as invalid: it is asked for again, up to `[review] max_invalid_retries` times, and does not use a repair round. An answer wrapped in one Markdown code fence is read without that fence, and one with words around its JSON object is read as the object alone; the run records which.
 
 `sb export` uses the models in `[export.writer]` and `[export.reviewer]` when they are set, else the producer and the reviewer ([export.md](export.md#configuration)).
 

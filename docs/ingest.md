@@ -68,7 +68,7 @@ Two titles, or two topic names, clash when they are the same text in the sense o
 
 ### What the program repairs before the check
 
-Before the check, the program repairs the slips of a chunk producer's answer that it can fix without writing any knowledge text, by a fixed table of rules in this order, and records each repair (`program_repairs` in the job result; the reviewer's packet shows them too):
+Before the check, the program repairs the slips it can fix without writing any knowledge text, by a fixed table of rules in this order, and records each repair (`program_repairs` in the job result; the reviewer's packet shows them too). It does so in one place for every role that writes cards: a chunk's answer gets every rule; a split card gets `title`, `card_id` and `quote`, and its relations are left to its own check, which asks for a typed link to the card it narrows:
 
 | Rule | Repair |
 |---|---|
@@ -79,11 +79,11 @@ Before the check, the program repairs the slips of a chunk producer's answer tha
 | `relation_pair` | of two or more relations between one pair of cards (back links counted), the one first in the catalog's order of types is kept |
 | `relation_direction` | of two relations that point opposite ways, one is dropped: on one card the one later in the catalog's order, between two cards the one on the card later by slug |
 
-The essence, the propositions, the intuition, the confusions and the review cards are compared before and after: a repair that changed them (other than naming a card by its title) is a fault of the program, and the job stops with nothing kept. An answer wrapped in one Markdown code fence (```` ```json … ``` ````) is read without that fence, in API mode and through `sb job submit` alike, and its run records it (`fence` in `program_repairs`); nothing else is loosened, and an answer written with a literal `\n` for its line breaks is still not JSON.
+The essence, the propositions, the intuition, the confusions and the review cards are compared before and after, both written in one form first (a card id that names a card as its `[[Title]]`, a title full width where it must be), so a card that names another by `[[Title]]` in one place and by id in another is repaired, not taken for a change. A repair that changed them otherwise is a fault of the program: the answer is refused and counted, and the fault is listed for you ([Answers of the wrong shape](#answers-of-the-wrong-shape)). An answer is read the same way in API mode and through `sb job submit`: as JSON as it is, else without one Markdown code fence around it (```` ```json … ``` ````, `fence`), else its JSON object alone when words stand before or after it (`around`); the run records which, and `program_repairs` lists it. Nothing else is loosened: an answer written with a literal `\n` for its line breaks is still not JSON.
 
 ### A card that fails goes back alone
 
-When what the check finds names only some cards, the answer is refused for those cards alone, and the cards that pass are kept. The refusal counts once against the slot's `max_invalid_retries`, however many cards it names; the count is kept in the job, so a job run again goes on from it. The next ask shows the failing cards as they were given, with their error lines (`fix` in the packet: `cards`, `problems`, `kept`), and asks for those cards only; the answer is put back with the kept cards and checked as a whole. When the slot's last answer still has failing cards, the cards that pass go on to review and the others wait for you with their lines (`pending`; their coverage rows, and a new topic only they used, go with them and are recorded as `held_back`). A problem of the whole chunk, in the coverage table or the new topics, refuses the whole answer as before. Host mode works the same way: `sb job submit` repairs, keeps and refuses alike, and the sub-agent answers again with the failing cards only.
+When what the check finds names only some cards, the answer is refused for those cards alone, and the cards that pass are kept. The refusal counts once against the slot's `max_invalid_retries`, however many cards it names; the count is kept in the job, so a job run again goes on from it. The next ask shows the failing cards as they were given, with their error lines (`fix` in the packet: `cards`, `problems`, `kept`), and asks for those cards only; the answer is put back with the kept cards and checked as a whole. When the slot's last answer still has failing cards, the cards that pass go on to review and the others wait for you with their lines and their text (`pending`, with `card`; their coverage rows, and a new topic only they used, go with them and are recorded as `held_back`). A problem of the whole chunk, in the coverage table or the new topics, refuses the whole answer as before. Host mode works the same way: `sb job submit` repairs, keeps and refuses alike, and the sub-agent answers again with the failing cards only.
 
 ## Candidate cards
 
@@ -291,9 +291,9 @@ The defaults come from a test of 1, 2 and 3 repair rounds, with focused review a
 
 ## Answers of the wrong shape
 
-Every model answer, of every role, is first checked against the JSON schema it was asked for. A value of the wrong JSON type (an object for a name, a string for a link, a null where the schema allows none) is refused by name, for example `cards[0].links[0] must be an object, not str`. The answer is then asked for again, within `max_invalid_retries`. An error inside a check is also turned into a refusal that names it. So a wrong answer never stops `sb ingest`; before, some stopped the whole run with a `TypeError` or an `AttributeError` and left it open.
+Every model answer, of every role, is first checked against the JSON schema it was asked for. A value of the wrong JSON type (an object for a name, a string for a link, a null where the schema allows none) is refused by name, for example `cards[0].links[0] must be an object, not str`. The answer is then asked for again, within `max_invalid_retries`. An error inside a check is also turned into a refusal that names it. So a wrong answer never stops `sb ingest`; before, some stopped the whole run with a `TypeError` or an `AttributeError` and left it open. Any other error while an answer is read or checked, in every job kind and role, goes through the same gate: the answer is refused and counted against the slot's budget, a host run is closed when the budget is spent, and the error, which is the program's and not the answer's, is kept on the run and in the job and listed by `sb status --owner-items` (`kind: program_error`).
 
-Ingest answers are parsed as strict JSON. An answer that is not JSON is invalid and is asked for again. Only `sb export` reads raw TeX backslashes in an answer ([export.md](export.md)).
+Ingest answers are read as JSON as they are, else without one code fence around them, else as their JSON object alone when words stand around it, the same in API and host mode ([above](#what-the-program-repairs-before-the-check)). An answer that is not JSON is invalid and is asked for again. Only `sb export` reads raw TeX backslashes in an answer ([export.md](export.md)), in host mode too.
 
 ## What counts as the same text
 
@@ -317,7 +317,7 @@ In one transaction:
 - the MOC pages of the affected domains and the entry page `HOME.md`;
 - with `after_ingest = "move"`, the removal of the inbox file (its bytes are in the source copy).
 
-Formulas in a card's text are put between `$` by code, which also gives a bare macro name its backslash (`alpha` becomes `\alpha`). The name of a relation or operator symbol used as a function name, directly followed by `(`, is written as an operator name: `sim(q, d)` becomes `\operatorname{sim}(q, d)`, not the relation `\sim`; `X \sim p` stays as it is. `softmax`, `argmax`, `argmin`, `sigmoid` and `relu` are always operator names.
+Formulas in a card's text are put between `$` by code, which also gives a bare macro name its backslash (`alpha` becomes `\alpha`). The name of a relation symbol used as a function name, directly followed by `(`, is written as an operator name: `sim(q, d)` becomes `\operatorname{sim}(q, d)`, not the relation `\sim`; `X \sim p` stays as it is. A binary operator before a group stays the operator: `w_i times(x_i + b_i)` becomes `w_i \times(x_i + b_i)`. `softmax`, `argmax`, `argmin`, `sigmoid` and `relu` are always operator names.
 
 A relation to a card the reviewer judged `same` goes to the existing card it repeats. A relation to a card that went into an existing card goes to that card, and a relation to a card rewritten in a split slot goes to the split card. A relation that cannot be written is listed in the result under `skipped_relations`, with one of two reasons:
 
@@ -348,7 +348,7 @@ Besides `produced`, `pending`, `needs_taxonomy`, `out_of_scope`, `new_topics`, `
 | `needs_review` | the cards written as needs-review next to an existing card (or, their carry held, next to a card of the source), with `with`, the reason and `not_merged` |
 | `patches_held` | each existing card whose patch failed the checks in the merge check's last answer: the cards that extend it and the problems; a card whose carry into a card of the source failed them (`carry: true`); review cards held because they would pass 8 (`review_cards_only: true`) |
 | `amended` | every mechanical fix, before and after |
-| `program_repairs` | every repair the program made to an answer, writing no knowledge text, by slot: a code fence taken off (`fence`, any role), the rules of [What the program repairs before the check](#what-the-program-repairs-before-the-check), and what a slot's last answer left out (`held_back`) |
+| `program_repairs` | every repair the program made to an answer, writing no knowledge text, by slot: a code fence or words around the JSON object set aside (`fence`, `around`, any role), for the chunk and split producers the rules of [What the program repairs before the check](#what-the-program-repairs-before-the-check), and what a slot's last answer left out (`held_back`) |
 | `review_notes`, `notes_turned` | every review note with its kind; the accepts the program turned into revises ([Review rules](#review-rules)) |
 | `refused_topics` | each new topic a reviewer refused, with the reason and the number of cards filed under it |
 
@@ -361,7 +361,7 @@ Besides `produced`, `pending`, `needs_taxonomy`, `out_of_scope`, `new_topics`, `
 | `source_unclear` | a needs-review card whose source was unclear (also a card marked needs-review before reasons were recorded) |
 | `possible_repeat` | a needs-review card written next to an existing card it extends, with why that card did not take it in `detail` |
 | `conflict` | an open conflict with an existing card |
-| `pending` | a pending item of the latest job of a partly written source; a paragraph of the latest export of an article that did not pass review (`kind: export_paragraph`, [export.md](export.md)); a maintenance job (classification, curation, relocation, domain creation) that stopped to wait for you, with the job, its kind, the step that stopped and the reason (`kind: maintenance_job`; only the newest job of each operation) |
+| `pending` | a pending item of the latest job of a partly written source; a paragraph of the latest export of an article that did not pass review (`kind: export_paragraph`, [export.md](export.md)); a maintenance job (classification, curation, relocation, domain creation) that stopped to wait for you, with the job, its kind, the step that stopped and the reason (`kind: maintenance_job`; only the newest job of each operation); an error of the program while it read or checked an answer, with the job, the slot, the role, the step, the error and how many times (`kind: program_error`) |
 | `needs_taxonomy` | a passage without a place in the taxonomy (`kind: passage`), or a new topic a reviewer refused, with its reason and card count (`kind: refused_topic`) |
 
 The list is made each time from the vault and the jobs; nothing new is stored. `sb status` gives the counts under `owner_items`.

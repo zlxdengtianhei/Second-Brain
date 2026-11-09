@@ -146,7 +146,7 @@ mode = "sequential"          # sequential | parallel
 | `allow_same_family_in_host_mode` | true | 宿主模式下，模型名是自报的；生产者和复核者同属一个家族也允许，任务记录 `same_family: true`。 |
 | `withhold_producer_reasons` | true | 复核者看不到生产者的理由。 |
 | `max_repair_rounds` | 2 | 内容返修轮数：复核者附理由退回的卡、拆出的卡或文章写作单位，最多重写几次。合并核对因异议重跑的次数也受它限制。`sb ingest --max-rounds N`（以及 `sb export --max-rounds N`）可以在单次运行里覆盖它。取值 0 到 10。 |
-| `max_invalid_retries` | 2 | 答案没过程序校验时，最多重新要几次答案，按槽位计：块、复核、合并核对、异议后的重判、拆出的卡及其复核、模型写的说明、导出的每一步，以及维护类任务（分类、整理、移卡、建领域）的生产者和复核者。计数存在任务里，任务再跑时不从头计；宿主模式下子代理交回、被 `sb job submit` 拒收的答案也一样计，文件不是 JSON 的也算，用 `sb job abandon` 放弃的运行也算。不占返修轮。失败次数达到这个数加一时，合并核对自己跳过，`sb job skip-source-check` 会说它已经结束。取值 0 到 10。 |
+| `max_invalid_retries` | 2 | 答案没过程序校验时，最多重新要几次答案，按槽位计：块、复核、合并核对、异议后的重判、拆出的卡及其复核、模型写的说明、导出的每一步，以及维护类任务（分类、整理、移卡、建领域）的生产者和复核者。计数存在任务里，任务再跑时不从头计；宿主模式下子代理交回、被 `sb job submit` 拒收的答案也一样计，文件不是 JSON 的也算，用 `sb job abandon` 放弃的运行也算；程序读答案、查答案时自己出的错也一样计，并列给主人看。不占返修轮。失败次数达到这个数加一时，合并核对自己跳过，`sb job skip-source-check` 会说它已经结束。取值 0 到 10。 |
 | `focused_review` | true | 返修轮的复核者逐条说上一轮的问题改好没有。只有问题没改好，或有阻塞类问题（`fact`、`unreadable`、`quote`、`not_a_unit`）时，才退回卡片；别的问题记进备注。 |
 | `amend` | true | 复核者接受一张卡时，可以直接补、改或删一条关系，把卡改归到已有主题下，或删掉一组问答。程序核对结果合法后照改，不占返修轮（[ingest.zh-CN.md](ingest.zh-CN.md#复核规则)）。 |
 
