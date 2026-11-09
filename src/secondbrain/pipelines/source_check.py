@@ -262,7 +262,9 @@ def validate_answer(frozen: dict, payload: Any, closed: Callable[[str, str, str]
             target = cards.get(into) or patch_cards.get(into)
             errors += _incomplete(f'cards: {slug}.carry', cards[slug]['propositions'], props,
                                   carry.get('replace') or [], carry.get('already'),
-                                  len(target['propositions']) if target else 0, into)
+                                  len(target['propositions']) if target else 0, into,
+                                  wanted_cards=cards[slug]['flashcards'], carried_cards=flashcards, swaps=swaps,
+                                  asked=len(target['flashcards']) if target else 0)
             if into in cards:  # D-21: what goes into a card of the source is checked as a patch is, never cut
                 errors += _said_twice(f'cards: {slug}.carry', into, cards[into], props, carry.get('replace') or [],
                                       flashcards, carry.get('differs'), exact_ok=True, swaps=swaps)
@@ -364,9 +366,13 @@ def _check_patches(frozen: dict, payload: dict, rows: dict, merged: dict, errors
         total = len((groups[target]['card'] or {}).get('propositions') or [])
         wanted = [p for c in sources for p in c['propositions']] + [p for s in merged_in
                                                                    for p in _row_items(rows, s, 'propositions')]
-        errors += _incomplete(at, list(dict.fromkeys(wanted)), added, row.get('replace') or [], row.get('already'),
-                              total, target)
         old_cards = [f for f in (groups[target]['card'] or {}).get('flashcards') or [] if isinstance(f, dict)]
+        asked_by = [f for c in sources for f in c['flashcards']] + [f for s in merged_in
+                                                                   for f in _row_items(rows, s, 'flashcards')]
+        errors += _incomplete(at, list(dict.fromkeys(wanted)), added, row.get('replace') or [], row.get('already'),
+                              total, target, wanted_cards=list({(f.get('q'), f.get('a')): f for f in asked_by
+                                                                if isinstance(f, dict)}.values()),
+                              carried_cards=flashcards, swaps=row.get('flashcard_replace') or [], asked=len(old_cards))
         errors += _swap_form(at, target, old_cards, row.get('flashcard_replace') or [], set())
         errors += _said_twice(at, target, groups[target]['card'] or {}, added, row.get('replace') or [],
                               flashcards, row.get('differs'), swaps=row.get('flashcard_replace') or [])
@@ -389,14 +395,33 @@ def _check_patches(frozen: dict, payload: dict, rows: dict, merged: dict, errors
             errors.append(f'patches: give {target} its patch from {", ".join(left)}, or dispute them')
 
 
-def _incomplete(at: str, wanted: list, carried: list, replace: list, already, total: int, target: str) -> list[str]:
-    """Carry completeness (design section 4.1, H7): every proposition in ``wanted`` is carried, used in
-    ``replace``, or named in ``already`` with the proposition of ``target`` (P1-P``total``) that says it. The size
-    of the target is no reason to leave one out: the program splits a patch that does not fit."""
+def _incomplete(at: str, wanted: list, carried: list, replace: list, already, total: int, target: str, *,
+                wanted_cards: list = (), carried_cards: list = (), swaps: list = (), asked: int = 0) -> list[str]:
+    """Carry completeness (design section 4.1, H7): every item of the cards that go into ``target`` has somewhere to
+    go. Every proposition in ``wanted`` is carried, used in ``replace``, or named in ``already`` with the proposition
+    of ``target`` (P1-P``total``) that says it; every review card in ``wanted_cards`` is carried (``carried_cards``),
+    swapped in (a ``flashcard_replace`` row of ``swaps`` that asks its question), or named in ``already`` with the
+    review card of ``target`` (Q1-Q``asked``) that asks it (``{"text": <its question>, "as": "Q<n>"}``). The size of
+    the target is no reason to leave one out: the program splits a patch that does not fit.
+
+    With :func:`lost` (every item of a patch is in the card it goes into) this makes the chain whole: no item of a
+    card that goes into another is left behind without a word.
+    """
     errors, named = [], set()
+    questions = [str(f.get('q')) for f in wanted_cards if isinstance(f, dict)]
     for k, row in enumerate(already or []):
         text, ref = (row.get('text'), row.get('as')) if isinstance(row, dict) else (None, None)
-        number = int(ref[1:]) if isinstance(ref, str) and re.fullmatch(r'P[1-9]\d*', ref) else 0
+        if _number(ref, 'Q'):  # a review card the target asks already
+            if text not in questions:
+                errors.append(f'{at}.already[{k}].text must be the question of one of the review cards it would '
+                              'carry, copied exactly, when "as" names a review card')
+            elif not 1 <= _number(ref, 'Q') <= asked:
+                errors.append(f'{at}.already[{k}].as must name the review card of {target} that asks it '
+                              f'(Q1–Q{asked})')
+            else:
+                named.add(('Q', text))
+            continue
+        number = _number(ref, 'P')
         if text not in wanted:
             errors.append(f'{at}.already[{k}].text must be one of the propositions it would carry, copied exactly')
         elif not 1 <= number <= total:
@@ -410,6 +435,18 @@ def _incomplete(at: str, wanted: list, carried: list, replace: list, already, to
                       + f': carry every proposition, use it in replace, or name in already the proposition of '
                         f'{target} that says it ({{"text": ..., "as": "P<n>"}}). Never leave one out for the size of '
                         f'{target}: the program splits what does not fit')
+    pairs = {(f.get('q'), f.get('a')) for f in carried_cards if isinstance(f, dict)}
+    swapped_in = {_spaced(w.get('q')) for w in swaps if isinstance(w, dict)}
+    cards_left = [f for f in wanted_cards if isinstance(f, dict) and (f.get('q'), f.get('a')) not in pairs
+                  and _spaced(f.get('q')) not in swapped_in and ('Q', f.get('q')) not in named]
+    if cards_left:
+        first = cards_left[0]
+        errors.append(f'{at} leaves out the review card {first.get("q")!r} ({first.get("a")!r})'
+                      + (f' and {len(cards_left) - 1} more' if len(cards_left) > 1 else '')
+                      + f': carry every review card, swap it in for a review card of {target} (flashcard_replace '
+                        f'with its question), or name in already the review card of {target} that asks it '
+                        f'({{"text": "<its question, word for word>", "as": "Q<n>"}}), so that no question is left '
+                        'behind without a word')
     return errors
 
 
@@ -575,11 +612,13 @@ def _said_twice(at: str, target: str, old: dict, added: list, replace: list, fla
             continue  # the same question and answer: the program leaves it out when it merges
         n, how = against(question, questions)
         if how == 'exact' and exact(answer, old_flashcards[n - 1].get('a')):
-            errors.append(f'{at}.flashcards: {question!r} is {target} Q{n}, answer and all: leave it out')
+            errors.append(f'{at}.flashcards: {question!r} is {target} Q{n}, answer and all: leave it out, and name '
+                          f'it in already as Q{n}')
         elif how == 'exact' and (question, f'Q{n}') not in allowed:
             errors.append(f'{at}.flashcards: {question!r} asks what {target} Q{n} asks, but their answers differ '
                           f'({old_flashcards[n - 1].get("a")!r} and {answer!r}): '
-                          + ('carry one complete pair' if exact_ok else f'leave it out when Q{n} answers it')
+                          + ('carry one complete pair' if exact_ok else f'leave it out when Q{n} answers it (and name it in '
+                                                                 f'already as Q{n})')
                           + f', or list it in differs with "from": "Q{n}" and why both answers are needed')
         elif how in ('same', 'near') and (question, f'Q{n}') not in allowed:
             errors.append(f'{at}.flashcards: {question!r} {"looks the same as" if how == "same" else "may ask again what"}'

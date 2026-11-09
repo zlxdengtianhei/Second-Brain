@@ -136,7 +136,8 @@ def test_before_the_last_answer_a_colliding_patch_is_still_sent_back(tmp_path):
         if len(checks) == 1:
             return keep_all(packet)
         return keep_all(packet, _patches={'card_c': {'propositions': list(LIT['propositions']),
-                                                     'flashcards': LIT['flashcards'][1:]}})
+                                                     'flashcards': LIT['flashcards'][1:],
+                                                     'already': [{'text': LIT['flashcards'][0]['q'], 'as': 'Q1'}]}})
     done = run(root, job_id, reviewer(checks, check=check, levels=levels), producer_with(produce))
     assert len(checks) == 2 and done['patches_held'] == [] and len(done['source_check_refusals']) == 1
     assert done['patch_set']['lit-marker-cost'] == 'patched'

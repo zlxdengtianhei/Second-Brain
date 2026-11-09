@@ -54,7 +54,7 @@ def test_a_same_source_merge_asks_again_and_keeps_the_new_point(tmp_path, kind, 
         return out
 
     def check(packet):
-        carry = {'propositions': list(ARRIVAL['propositions']) + [new]}
+        carry = {'propositions': list(ARRIVAL['propositions']) + [new], 'flashcards': list(ARRIVAL['flashcards'])}
         if len(checks) > 1:  # the second answer says why it is another point
             n = 1 + next(i for i, c in enumerate(packet['cards']) if c['slug'] == 'lit-marker-cost')
             props = next(c for c in packet['cards'] if c['slug'] == 'lit-marker-cost')['propositions']
@@ -84,7 +84,8 @@ def test_a_same_source_merge_still_leaves_out_the_same_words_by_itself(tmp_path)
 
     def check(packet):
         return keep_all(packet, **{'arrival-order': {'overlap': 'extends', 'with': 'lit-marker-cost', 'reason': 'r',
-                                                     'carry': {'propositions': list(ARRIVAL['propositions'])}}})
+                                                     'carry': {'propositions': list(ARRIVAL['propositions']),
+                                                               'flashcards': list(ARRIVAL['flashcards'])}}})
     done = run(root, job_id, reviewer(checks, check=check), with_diagrams(produce))
     assert len(checks) == 1 and done['source_check_refusals'] == []
     [merged] = done['source_check']['merged']

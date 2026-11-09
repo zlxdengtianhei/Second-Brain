@@ -112,18 +112,24 @@ def test_a_close_question_goes_back_unless_differs_says_why_it_asks_something_el
 
 
 def test_a_swap_only_patch_is_not_empty_and_adds_no_review_card(tmp_path):
+    """The card says both of lantern-queue's points and asks its second question; its first question goes in by a
+    swap of Q1 (the fuller answer keeps the old one's fact). Every item is accounted for, and nothing is added."""
     root, job_id, _ = job(tmp_path)
-    path = next((root / '10_Knowledge').rglob(f'{EXISTING}.md'))  # the card says both of lantern-queue's points
+    path = next((root / '10_Knowledge').rglob(f'{EXISTING}.md'))
+    second = LANTERN['flashcards'][1]
     path.write_bytes(path.read_bytes().replace(b'Old proposition 1 about routing readers.', LANTERN['propositions'][0]
                                                .encode()).replace(b'Old proposition 2 about routing readers.',
-                                                                  LANTERN['propositions'][1].encode()))
+                                                                  LANTERN['propositions'][1].encode())
+                     .replace(b'Old question 2?::Old answer 2.', f"{second['q']}::{second['a']}".encode()))
+    swap_in = {'flashcard': 'Q1', 'q': LANTERN['flashcards'][0]['q'], 'a': 'Arrival order (Old answer 1).'}
 
     def check(p):
-        return keep_all(p, _patches={EXISTING: {'flashcard_replace': [SWAP], 'already': [
-            {'text': LANTERN['propositions'][0], 'as': 'P1'}, {'text': LANTERN['propositions'][1], 'as': 'P2'}]}})
+        return keep_all(p, _patches={EXISTING: {'flashcard_replace': [swap_in], 'already': [
+            {'text': LANTERN['propositions'][0], 'as': 'P1'}, {'text': LANTERN['propositions'][1], 'as': 'P2'},
+            {'text': second['q'], 'as': 'Q2'}]}})
     done = run(root, job_id, reviewer(check=check))
     assert done['status'] == 'applied', done.get('pending')
-    assert cardfmt.flashcards_of(card_of(root, EXISTING).body) == [NEW, {'q': 'Old question 2?', 'a': 'Old answer 2.'}]
+    assert cardfmt.flashcards_of(card_of(root, EXISTING).body) == [{k: swap_in[k] for k in ('q', 'a')}, second]
     assert done['merged_into_existing'][0]['replaced'] == ['Q1']
 
 
@@ -170,6 +176,7 @@ def carry_check(*swaps):
     def check(p):
         return keep_all(p, **{'arrival-order': {'overlap': 'extends', 'with': 'lit-marker-cost', 'reason': 'r',
                                                 'carry': {'propositions': list(ARRIVAL['propositions']),
+                                                          'flashcards': list(ARRIVAL['flashcards']),
                                                           'flashcard_replace': list(swaps)}}})
     return check
 
@@ -180,7 +187,7 @@ def test_a_carry_swaps_a_review_card_of_the_card_of_the_source_it_goes_into(tmp_
     assert done['status'] == 'applied', done.get('pending')
     written = {c.title: c for c in read_snapshot(root).cards.values()}[MARKERS['title']]
     new = {k: MARKER_SWAP[k] for k in ('q', 'a')}
-    assert cardfmt.flashcards_of(written.body) == [new] + MARKERS['flashcards'][1:]
+    assert cardfmt.flashcards_of(written.body) == [new] + MARKERS['flashcards'][1:] + ARRIVAL['flashcards']
     [merged] = done['source_check']['merged']
     assert merged['slug'] == 'arrival-order' and merged['replaced'] == 1
     assert merged['replacements'] == [{'flashcard': 'Q1', 'before': MARKERS['flashcards'][0], 'after': new}]

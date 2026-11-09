@@ -52,11 +52,13 @@ def producing(split_answers):
 
 
 def check(packet):
-    """One patch for card_exist from three cards: arrival-order's one proposition the card already says (P1)."""
+    """One patch for card_exist from three cards: arrival-order's one proposition the card already says (P1), and
+    its two review cards the card asks already (Q1, Q2)."""
     return keep_all(packet, _patches={EXISTING: {
         'propositions': LANTERN['propositions'] + LIT['propositions'],
         'flashcards': LANTERN['flashcards'] + LIT['flashcards'],
-        'already': [{'text': ARRIVAL['propositions'][0], 'as': 'P1'}]}})
+        'already': [{'text': ARRIVAL['propositions'][0], 'as': 'P1'}]
+        + [{'text': f['q'], 'as': f'Q{i}'} for i, f in enumerate(ARRIVAL['flashcards'], 1)]}})
 
 
 def by_slot(task, seen):

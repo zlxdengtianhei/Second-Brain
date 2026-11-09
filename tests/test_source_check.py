@@ -96,7 +96,8 @@ def run(tmp_path, check, *, topics=False):
 def test_a_card_two_chunks_both_write_is_written_once_with_what_it_adds_and_links_follow_it(tmp_path):
     same = {'arrival-order': {'decision': 'same', 'with': 'queue-order', 'reason': 'both say items keep arrival order',
                               'carry': {'propositions': CARDS['queue-order']['propositions']  # already there
-                                        + ['The order holds while markers are lit.']}}}
+                                        + ['The order holds while markers are lit.'],
+                                        'flashcards': CARDS['queue-order']['flashcards']}}}  # already there too
     root, job_id, result, seen = run(tmp_path, lambda packet: keep_all(packet, **same))
     assert result['status'] == 'applied'
     [task] = seen
@@ -110,7 +111,7 @@ def test_a_card_two_chunks_both_write_is_written_once_with_what_it_adds_and_link
                                                  'into': ids['queue-order'],
                                                  'reason': 'both say items keep arrival order',
                                                  'carried': {'propositions': 1, 'flashcards': 0},
-                                                 'repeats_skipped': 1}]
+                                                 'repeats_skipped': 3}]
     assert result['skipped_relations'] == []
     cards = read_snapshot(root).cards
     # the link to the merged card goes to the card it repeats, and the merged card's own link moved there
@@ -450,6 +451,7 @@ def test_a_retry_card_that_extends_a_written_card_goes_into_it_through_the_merge
         [group] = packet['patch_set']
         by, *rest = group['from'][0]['propositions']
         return {**keep_all(packet), 'patches': [{'target': group['target'], 'propositions': rest,
+                                                 'flashcards': group['from'][0]['flashcards'],
                                                  'replace': [{'proposition': 'P1', 'by': by}]}]}
     root, ids, done, _, checks = retry_reviewed(tmp_path, extends_order, check=replace_first)
     [check] = checks
@@ -570,9 +572,9 @@ def test_a_card_merged_into_may_hold_twice_the_flashcards_of_a_new_card():
     two = {'flashcards': [{'q': 'a q1?', 'a': 'a a1'}, {'q': 'a q2?', 'a': 'a a2'}], **said}
     assert source_check.validate_answer(frozen, answer(same('a', 'b', carry=two)))  # 6 + 2 = 8
     nine = answer({**same('a', 'b', carry=two), **same(
-        'c', 'b', carry={'flashcards': [{'q': 'c q1?', 'a': 'c a1'}],
+        'c', 'b', carry={'flashcards': frozen_card('c')['flashcards'],
                          'already': [{'text': t, 'as': 'P1'} for t in frozen_card('c')['propositions']]})})
-    assert source_check.validate_answer(frozen, nine)  # 9: not sent back; the program splits it (D-15)
+    assert source_check.validate_answer(frozen, nine)  # 10: not sent back; the program splits it (D-15)
     settled = [{'chunk': 'c01', 'accepted': {c['slug']: c for c in frozen['cards']}, 'topics': {}}]
     kept, report, _ = applied(settled, frozen, nine)
     assert report['too_large'] == {'c': 'b'} and len(kept['b']['flashcards']) == 8 and 'c' not in kept
@@ -701,9 +703,11 @@ def test_an_extends_card_accounts_for_every_proposition_and_a_card_too_large_to_
     props = frozen_card('a')['propositions']
     with pytest.raises(ValueError, match="a.carry leaves out"):
         source_check.validate_answer(frozen, answer(same('a', 'b', carry={'propositions': props[:1]})))
-    full = {'propositions': props[:1], 'already': [{'text': t, 'as': 'P1'} for t in props[1:]]}
+    full = {'propositions': props[:1], 'already': [{'text': t, 'as': 'P1'} for t in props[1:]],
+            'flashcards': frozen_card('a')['flashcards']}
     assert source_check.validate_answer(frozen, answer(same('a', 'b', carry=full)))
     # past the limit the answer is not sent back: the program gives the card a split slot (decision D-15)
     big = {**frozen_card('b'), 'propositions': [f'b p{i}' for i in range(1, 12)]}
     wide = {**FROZEN, 'cards': [FROZEN['cards'][0], big, FROZEN['cards'][2]]}
-    assert source_check.validate_answer(wide, answer(same('a', 'b', carry={'propositions': props})))
+    assert source_check.validate_answer(wide, answer(same('a', 'b', carry={
+        'propositions': props, 'flashcards': frozen_card('a')['flashcards']})))

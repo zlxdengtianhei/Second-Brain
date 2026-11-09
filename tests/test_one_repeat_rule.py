@@ -164,7 +164,8 @@ def test_with_the_rule_broken_to_always_same_the_check_stops_a_carry_into_a_card
     def check(p):
         mine = next(c for c in p['cards'] if c['slug'] == 'arrival-order')
         return keep_all(p, **{'arrival-order': {'overlap': 'extends', 'with': 'lit-marker-cost', 'reason': 'r',
-                                                'carry': {'propositions': list(mine['propositions'])}}})
+                                                'carry': {'propositions': list(mine['propositions']),
+                                                          'flashcards': list(mine['flashcards'])}}})
     assert arrival['propositions']
     cards = set(read_snapshot(root).cards)
     monkeypatch.setattr(source_check, 'repeat', lambda a, b: True)

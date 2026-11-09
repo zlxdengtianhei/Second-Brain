@@ -285,11 +285,13 @@ def test_a_source_card_the_same_as_a_patch_set_card_goes_with_it_into_the_existi
     root, job_id, _ = job(tmp_path)
     added = 'Lantern queues keep arrival order.'
     rows = {'arrival-order': {'overlap': 'extends', 'with': ['lantern-queue'], 'reason': 'both say what order holds',
-                              'carry': {'propositions': [ARRIVAL['propositions'][0]]}}}
+                              'carry': {'propositions': [ARRIVAL['propositions'][0]],
+                                        'flashcards': list(ARRIVAL['flashcards'])}}}
 
     def check(packet):
         return keep_all(packet, _patches={EXISTING: {'propositions': LANTERN['propositions'][:1]
                                                      + [ARRIVAL['propositions'][0]],
+                                                     'flashcards': LANTERN['flashcards'] + ARRIVAL['flashcards'],
                                                      'already': [{'text': LANTERN['propositions'][1], 'as': 'P1'}]}},
                         **rows)
     done = run(root, job_id, reviewer(check=check))
@@ -345,7 +347,7 @@ def test_a_proposition_the_existing_card_already_says_is_named_not_carried(tmp_p
     checks = []
     run(root, job_id, reviewer(checks, check=lambda p: {**keep_all(p), 'patches': [], 'disputes': []}))
     frozen = checks[0].packet
-    said = {'target': EXISTING, 'propositions': [LANTERN['propositions'][1]]}
+    said = {'target': EXISTING, 'propositions': [LANTERN['propositions'][1]], 'flashcards': LANTERN['flashcards']}
     for already, problem in (([{'text': LANTERN['propositions'][0], 'as': 'P2'}], None),
                              ([{'text': LANTERN['propositions'][0], 'as': 'P9'}], r'P1–P2'),
                              ([{'text': 'Something else.', 'as': 'P1'}], 'copied exactly'),
@@ -388,7 +390,8 @@ def test_d15_a_card_of_the_source_too_large_to_merge_into_goes_to_a_split_slot(t
 
     def check(packet):
         return keep_all(packet, **{'arrival-order': {'overlap': 'extends', 'with': 'lit-marker-cost', 'reason': 'r',
-                                                     'carry': {'propositions': list(ARRIVAL['propositions'])}}})
+                                                     'carry': {'propositions': list(ARRIVAL['propositions']),
+                                                               'flashcards': list(ARRIVAL['flashcards'])}}})
     done = run(root, job_id, reviewer(checks, check=check), with_diagrams(produce))
     assert done['status'] == 'applied', done.get('pending')
     assert len(checks) == 1 and done['source_check_refusals'] == []

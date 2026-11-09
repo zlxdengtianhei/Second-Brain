@@ -41,7 +41,8 @@ def test_a_patch_that_says_a_point_of_the_card_again_is_sent_back_and_the_card_s
             return keep_all(packet)
         return keep_all(packet, _patches={EXISTING: {
             'propositions': [LANTERN['propositions'][1]], 'flashcards': [LANTERN['flashcards'][1]],
-            'already': [{'text': LANTERN['propositions'][0], 'as': 'P1'}]}})
+            'already': [{'text': LANTERN['propositions'][0], 'as': 'P1'},
+                        {'text': LANTERN['flashcards'][0]['q'], 'as': 'Q1'}]}})
     done = run(root, job_id, reviewer(checks, check=check))
     assert done['status'] == 'applied', done.get('pending')
     body = card_of(root, EXISTING).body
@@ -50,7 +51,8 @@ def test_a_patch_that_says_a_point_of_the_card_again_is_sent_back_and_the_card_s
     assert [f['q'] for f in cardfmt.flashcards_of(body)] == ['In what order does the queue keep its items?',
                                                              LANTERN['flashcards'][1]['q']]
     # each already row is in the result, for a judge to check that P1 says it (second verdict, not blocking 2)
-    assert done['merged_into_existing'][0]['already'] == [{'text': LANTERN['propositions'][0], 'as': 'P1'}]
+    assert done['merged_into_existing'][0]['already'] == [{'text': LANTERN['propositions'][0], 'as': 'P1'},
+                                                          {'text': LANTERN['flashcards'][0]['q'], 'as': 'Q1'}]
     [refusal] = done['source_check_refusals']
     assert refusal['slot'] == 'xc01'
     assert f"{LANTERN['propositions'][0]!r} may say again what {EXISTING} P1 says" in refusal['message']

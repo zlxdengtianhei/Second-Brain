@@ -111,7 +111,8 @@ def merge_and_split_roles(tmp_path):
     merge = keep_all(frozen, **{'filler-note': {'links': [{'target': 'lit-marker-cost', 'type': 'similar_to',
                                                            'note': 'both on order'}]},
                                 'arrival-order': {'overlap': 'extends', 'with': 'lit-marker-cost', 'reason': 'r',
-                                                  'carry': {'propositions': list(ARRIVAL['propositions'])}}})
+                                                  'carry': {'propositions': list(ARRIVAL['propositions']),
+                                                            'flashcards': list(ARRIVAL['flashcards'])}}})
     card = {'card': {**SPLIT_CARD, 'slug': 'lantern-skip-ahead-b', 'title': 'Skipping ahead, once more'}}
     verdict = {'decision': 'accept', 'restates': False, 'reason': 'faithful',
                'notes': [{'category': 'minor', 'text': 'the title could be shorter'}],
