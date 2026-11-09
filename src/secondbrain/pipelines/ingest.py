@@ -731,8 +731,10 @@ def _slots(state: dict, base: str) -> list[tuple[str, dict]]:
     return out
 
 
-def _other_cards(root: Path, state: dict, packet: dict, base: str) -> list[dict]:
-    """Cards proposed for the other chunks of this source (latest per slug)."""
+def _other_cards(root: Path, state: dict, packet: dict, base: str, named=frozenset()) -> list[dict]:
+    """Cards proposed for the other chunks of this source (latest per slug): each by its title, domain and essence;
+    a card whose title is in ``named`` (the cards a reviewed card names by ``[[title]]``) with its propositions too,
+    so the reviewer can check what such a card is cited for."""
     out = {}
     for chunk in effective_chunks(packet, state):
         if chunk['chunk_id'] == base:
@@ -743,8 +745,18 @@ def _other_cards(root: Path, state: dict, packet: dict, base: str) -> list[dict]
                     if isinstance(c, dict) and isinstance(c.get('slug'), str):
                         out[c['slug']] = {'slug': c['slug'], 'title': c.get('title'),
                                           'domain': c.get('domain'), 'essence': c.get('essence'),
-                                          'chunk': chunk['chunk_id']}
+                                          'chunk': chunk['chunk_id'],
+                                          **({'propositions': list(c.get('propositions') or [])}
+                                             if c.get('title') in named else {})}
     return list(out.values())
+
+
+_NAMED = re.compile(r'\[\[([^\[\]\n|#]+)')
+
+
+def named_titles(cards) -> set:
+    """The titles the text of ``cards`` names by ``[[title]]`` (an alias or a heading after it left out)."""
+    return {m.strip() for c in cards or [] if isinstance(c, dict) for t in _text_fields(c) for m in _NAMED.findall(t)}
 
 
 def _aux_slot(name: str) -> bool:
@@ -995,7 +1007,7 @@ def review_packet(root: Path, state: dict, packet: dict, slot: str) -> dict:
            'domains': [{'slug': d, 'question': m.get('question')}
                        for d, m in sorted(packet['catalog']['domains'].items())],
            **_relation_views(packet['catalog'], domains),
-           'other_chunks_cards': _other_cards(root, state, packet, base),
+           'other_chunks_cards': _other_cards(root, state, packet, base, named_titles(candidate.get('cards'))),
            **_note_part(root, state, packet, base),
            **({'placement': packet['placement']} if packet.get('placement') else {}),
            # what the program changed in the answer, writing no knowledge text, and the cards it left out
@@ -2769,14 +2781,18 @@ def _split_stage(root: Path, job_id: str, packet: dict, settled: list[dict], pro
                     text += '\n## Your previous answer was rejected by the validator\n\n' + feedback + '\n'
                 with jobs.reading('review_packet', (slot, 'producer')):
                     cand = jobs.artifact(root, state, 'candidate', slot)
-                    body = {**shown, 'card': withhold_reasons(cand['card']), **_program_view(root, state, slot, cand)}
+                    body = {**shown, 'card': withhold_reasons(cand['card']), **_program_view(root, state, slot, cand),
+                            'other_chunks_cards': _other_cards(root, state, packet, item['chunk'],
+                                                               named_titles([cand['card']]))}
                 try:
                     call_executor(root, job_id, reviewer, role='reviewer', step='review', prompt_text=text,
                                   packet=body, output_schema=split.REVIEW_SCHEMA, chunk=slot)
                 except ExecutorFailure as failure:
                     _failed_answer(root, job_id, slot, 'reviewer', failure)
             else:
-                body = {**shown, 'card': item['card'], 'carry': item['carry']}
+                body = {**shown, 'card': item['card'], 'carry': item['carry'],
+                        'other_chunks_cards': _other_cards(root, state, packet, item['chunk'],
+                                                           named_titles([item['card']]))}
                 if kind == 'repair':
                     prev = _slot_name(item['slot'], _round(slot) - 1)
                     with jobs.reading('produce_packet', (prev, 'reviewer')):  # the last round's card and review

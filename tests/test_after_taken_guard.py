@@ -551,10 +551,10 @@ def test_the_same_error_after_a_set_aside_parks_instead_of_setting_aside_the_nex
         return copy.deepcopy(first_review() if '.r' not in task.chunk else repair_review())
     real = ingest._other_cards
 
-    def other_cards(root_, state, packet, base):
+    def other_cards(root_, state, packet, base, *named):
         if ((state.get('chunks') or {}).get('c01') or {}).get('review'):
             raise RuntimeError("reading the other chunks' cards broke")
-        return real(root_, state, packet, base)
+        return real(root_, state, packet, base, *named)
     monkeypatch.setattr(ingest, '_other_cards', other_cards)
     outs = [ingest.advance(root, job_id, producer=FakeExecutor('gpt-test', responder=produce),
                            reviewer=FakeExecutor('claude-test', responder=review)) for _ in range(3)]
