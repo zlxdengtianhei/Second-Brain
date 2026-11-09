@@ -216,7 +216,7 @@ Details: [export.md](export.md).
 | `SECONDBRAIN_NO_CACHE=1` | read every card from disk, without the parse cache |
 | `SECONDBRAIN_TEST_TIMEOUT` | seconds after which one test fails (default 300; `0` turns the limit off; POSIX only) |
 | `SB_MATHJAX_NODE_PATH` | the `node_modules` folder that holds `mathjax-full`, for the formula check of `sb export` |
-| `SB_MATHJAX_CHECK` | another script for that check (default `tools/mathjax_check.js`) |
+| `SB_MATHJAX_CHECK` | another script for that check (default: `mathjax_check.js`, installed with the package) |
 
 ## Install extras
 

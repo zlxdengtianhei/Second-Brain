@@ -216,7 +216,7 @@ mode = "sequential"          # sequential | parallel
 | `SECONDBRAIN_NO_CACHE=1` | 每张卡都从磁盘读取，不用解析缓存 |
 | `SECONDBRAIN_TEST_TIMEOUT` | 单个测试超过这么多秒就判为失败（默认 300；`0` 关闭限制；只在 POSIX 系统上有效） |
 | `SB_MATHJAX_NODE_PATH` | 装有 `mathjax-full` 的 `node_modules` 目录，供 `sb export` 的公式检查使用 |
-| `SB_MATHJAX_CHECK` | 换用另一个公式检查脚本（默认 `tools/mathjax_check.js`） |
+| `SB_MATHJAX_CHECK` | 换用另一个公式检查脚本（默认是随包安装的 `mathjax_check.js`） |
 
 ## 安装可选依赖
 

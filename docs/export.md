@@ -111,7 +111,7 @@ npm install --prefix ~/.cache/sb-mathjax mathjax-full@3
 export SB_MATHJAX_NODE_PATH=~/.cache/sb-mathjax/node_modules
 ```
 
-`SB_MATHJAX_CHECK` names another checker script instead of `tools/mathjax_check.js`. If the checker fails later in the run, the export stops with the same error.
+The checker script, `mathjax_check.js`, is installed with the package (next to `secondbrain/export/checks.py`), so an install that is not editable (from git or from a wheel) has it too; `mathjax-full` you install yourself, as above. `SB_MATHJAX_CHECK` names another checker script, which is then used instead. If the checker fails later in the run, the export stops with the same error.
 
 To go on without the check, run `sb export --no-formula-check`. The article then says under its title that its formulas were not parse-checked, and the report has `formula_check_skipped`. Cards without formulas need no checker.
 

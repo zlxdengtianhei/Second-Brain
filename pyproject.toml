@@ -28,7 +28,7 @@ secondbrain = "secondbrain.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-secondbrain = ["prompts/*.md"]
+secondbrain = ["prompts/*.md", "export/mathjax_check.js"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

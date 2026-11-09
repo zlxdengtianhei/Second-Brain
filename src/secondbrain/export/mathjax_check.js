@@ -5,10 +5,11 @@
 // stdout: one JSON object per line, {"ok": true} or {"ok": false, "error": "..."}
 //
 // Undefined macros and parse errors count as failures: the `noundefined` and
-// `noerrors` packages (which turn them into red text) are left out. Install
-// the package anywhere and point NODE_PATH at its node_modules, e.g.
+// `noerrors` packages (which turn them into red text) are left out. This file
+// is installed with the Python package (secondbrain/export/mathjax_check.js).
+// Install `mathjax-full` anywhere and point NODE_PATH at its node_modules, e.g.
 //   npm install --prefix ~/.cache/sb-mathjax mathjax-full@3
-//   NODE_PATH=~/.cache/sb-mathjax/node_modules node tools/mathjax_check.js
+//   NODE_PATH=~/.cache/sb-mathjax/node_modules node mathjax_check.js
 'use strict';
 const readline = require('readline');
 const {mathjax} = require('mathjax-full/js/mathjax.js');

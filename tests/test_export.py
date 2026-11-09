@@ -531,7 +531,7 @@ def test_an_export_whose_formulas_cannot_be_checked_stops_before_any_model_call(
 
 @pytest.mark.skipif(not __import__("shutil").which("node"), reason="needs node")
 def test_node_without_mathjax_stops_the_export_before_any_model_call(vault_root, tmp_path):
-    script = Path(__file__).resolve().parents[1] / "tools" / "mathjax_check.js"
+    script = checks.SCRIPT
     checker = checks.NodeMathJax(script, node_path=str(tmp_path / "no_modules"))
     assert "Cannot find module" in checks.preflight(checker)
     job = pipeline.prepare(vault_root, domain=DOMAIN, mode="parallel")

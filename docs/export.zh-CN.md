@@ -111,7 +111,7 @@ npm install --prefix ~/.cache/sb-mathjax mathjax-full@3
 export SB_MATHJAX_NODE_PATH=~/.cache/sb-mathjax/node_modules
 ```
 
-`SB_MATHJAX_CHECK` 可以换用另一个检查脚本，代替 `tools/mathjax_check.js`。运行中途检查失败时，导出以同样的错误停下。
+检查脚本 `mathjax_check.js` 随包安装（在 `secondbrain/export/checks.py` 旁边），所以非可编辑的安装（从 git 或从 wheel 装）也有它；`mathjax-full` 仍要自己装，见上。`SB_MATHJAX_CHECK` 可以指定另一个检查脚本，这时用它。运行中途检查失败时，导出以同样的错误停下。
 
 不做这项检查也要导出时，运行 `sb export --no-formula-check`。这时文章在标题下写明公式没有经过解析检查，报告里有 `formula_check_skipped`。卡片里没有公式时，不需要这项检查。
 

@@ -169,7 +169,7 @@ def preflight(checker) -> str | None:
     are spent rather than after them, and never skips the check without a word.
     """
     if checker is None:
-        return 'no checker: node is not on PATH, or tools/mathjax_check.js is missing (SB_MATHJAX_CHECK)'
+        return 'no checker: node is not on PATH, or the checker script is missing (SB_MATHJAX_CHECK)'
     try:
         good, bad = checker.check([('a_{1}', False), ('\\frac{a}{b', False)])
     except (ValueError, OSError, subprocess.SubprocessError) as exc:
@@ -179,8 +179,20 @@ def preflight(checker) -> str | None:
     return None
 
 
+#: The checker script, installed with the package (so a non-editable install has it too).
+SCRIPT = Path(__file__).with_name('mathjax_check.js')
+
+
+def script_path() -> Path | None:
+    """The checker script: ``SB_MATHJAX_CHECK`` when it is set, else the one installed with the package (None when
+    neither is a file)."""
+    named = os.environ.get('SB_MATHJAX_CHECK')
+    path = Path(named).expanduser() if named else SCRIPT
+    return path if path.is_file() else None
+
+
 class NodeMathJax:
-    """``node tools/mathjax_check.js`` with ``mathjax-full`` on ``NODE_PATH``."""
+    """``node mathjax_check.js`` (:data:`SCRIPT`) with ``mathjax-full`` on ``NODE_PATH``."""
 
     name = 'mathjax'
 
@@ -191,12 +203,10 @@ class NodeMathJax:
 
     @classmethod
     def from_env(cls) -> 'NodeMathJax | None':
-        """``SB_MATHJAX_CHECK`` = script path, ``SB_MATHJAX_NODE_PATH`` = its node_modules; else none."""
-        script = os.environ.get('SB_MATHJAX_CHECK')
-        if not script:
-            here = Path(__file__).resolve().parents[3] / 'tools' / 'mathjax_check.js'
-            script = str(here) if here.is_file() else None
-        if not script or not shutil.which('node'):
+        """The script of :func:`script_path` run by ``node``, with ``SB_MATHJAX_NODE_PATH`` as the folder of
+        ``mathjax-full``; None without ``node`` on ``PATH`` or without the script."""
+        script = script_path()
+        if script is None or not shutil.which('node'):
             return None
         return cls(script, os.environ.get('SB_MATHJAX_NODE_PATH'))
 
