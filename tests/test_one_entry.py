@@ -123,9 +123,28 @@ def test_an_error_at_any_step_of_the_entry_point_is_counted_and_listed(tmp_path,
 
 
 # --- one way in --------------------------------------------------------------------------------------------------------
+def jobs_names(tree) -> set:
+    """The names the ``jobs`` module goes by in a file: ``jobs``, and any alias (``from . import jobs as jb``,
+    ``import secondbrain.jobs as jb``)."""
+    out = {'jobs'}
+    for n in ast.walk(tree):
+        if isinstance(n, ast.ImportFrom):
+            out |= {a.asname or a.name for a in n.names if a.name == 'jobs'}
+        elif isinstance(n, ast.Import):
+            out |= {a.asname for a in n.names if a.name.split('.')[-1] == 'jobs' and a.asname}
+    return out
+
+
 def calls(tree, owner, names):
+    """Calls of ``owner.name(...)`` for a name of ``names``; ``owner`` 'jobs' stands for the module under any alias."""
+    owners = jobs_names(tree) if owner == 'jobs' else {owner}
     return [n for n in ast.walk(tree) if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
-            and n.func.attr in names and isinstance(n.func.value, ast.Name) and n.func.value.id == owner]
+            and n.func.attr in names and isinstance(n.func.value, ast.Name) and n.func.value.id in owners]
+
+
+def test_the_check_sees_the_jobs_module_under_an_alias():
+    tree = ast.parse('from . import jobs as jb\nimport secondbrain.jobs as sj\njb.submit(1)\nsj.refuse(2)\n')
+    assert len(calls(tree, 'jobs', {'submit', 'refuse'})) == 2
 
 
 def imported_from_jobs(tree, names):
