@@ -90,8 +90,9 @@ class Service:
         and refused new topics that need a place in the taxonomy (``needs_taxonomy``); and the paragraphs of the
         latest export of each article that its review or its program check still did not pass when the repair
         rounds ran out (``pending``, ``kind: export_paragraph``; the article marks them too); the maintenance jobs
-        that stopped to wait for the owner (``pending``, ``kind: maintenance_job``); and the errors of the program
-        while it read or checked an answer (``pending``, ``kind: program_error``).
+        that stopped to wait for the owner (``pending``, ``kind: maintenance_job``); the errors of the program
+        while it read or checked an answer, or read the answers a job took (``pending``, ``kind: program_error``);
+        and the jobs the program stopped on purpose (``pending``, ``kind: job_stopped``).
         """
         from . import inbox
         from .pipelines.ingest import open_conflicts
@@ -181,8 +182,15 @@ class Service:
                              'times': seen.get(key, {}).get('times', 0) + 1,
                              'detail': 'the program failed while it read or checked an answer; the answer was '
                                        'counted as refused, and asking again will not help until the program is '
-                                       'fixed'}
+                                       'fixed' if key[1] else
+                                       'the program failed while it read the answers the job took, and no one '
+                                       'answer is to blame; the job waits for you until the program is fixed'}
             items += list(seen.values())
+            items += [{'owner_reason': 'pending', 'kind': 'job_stopped', 'job_id': state['job_id'],
+                       'job_kind': state.get('kind'), 'error': row.get('type'), 'message': row.get('message'),
+                       'times': row.get('times', 1),
+                       'detail': 'the program stopped the job on purpose and waits for you (see the message)'}
+                      for row in state.get('halts') or []]
         return items
 
     def _not_merged(self, ids: set) -> dict:

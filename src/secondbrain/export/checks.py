@@ -23,6 +23,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
+from ..store import Halt
+
 _CITE = re.compile(r'\[\[([^\[\]\n]+?)\]\]')
 _CODE = re.compile(r'`[^`\n]*`')
 _NUMBER = re.compile(r'(?<![A-Za-z_\d.,])\d+(?:[.,]\d+)*(?![A-Za-z\d])')
@@ -151,7 +153,7 @@ class FormulaChecker(Protocol):
         """One answer per ``(tex, display)``: ``None`` when it parses, else the error."""
 
 
-class CheckerUnavailable(ValueError):
+class CheckerUnavailable(ValueError, Halt):
     """The MathJax parse check cannot run on this machine (no node, no script, or no ``mathjax-full``)."""
 
 

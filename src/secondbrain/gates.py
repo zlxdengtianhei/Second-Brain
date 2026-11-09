@@ -8,7 +8,11 @@ by each pipeline's own ``review_rows``.
 """
 from __future__ import annotations
 
-from .store import Conflict
+from .store import Conflict, Halt
+
+
+class IndependenceError(ValueError, Halt):
+    """The producer's and the reviewer's models may not judge each other under the job's frozen review rules."""
 
 HOST_ATTESTATION = 'self_reported'
 
@@ -42,11 +46,11 @@ def assess_families(producer_run: dict, reviewer_run: dict, rules) -> dict:
     if a is None or b is None:
         unknown = producer_model if a is None else reviewer_model
         if rule(rules, 'require_different_family') and not host:
-            raise ValueError(f'Unknown model family for {unknown!r}; add it to [model_families]')
+            raise IndependenceError(f'Unknown model family for {unknown!r}; add it to [model_families]')
         warnings.append(f'unknown model family for {unknown!r}')
     if same and rule(rules, 'require_different_family') and not (
             host and rule(rules, 'allow_same_family_in_host_mode')):
-        raise ValueError('Producer and reviewer must come from different model families '
+        raise IndependenceError('Producer and reviewer must come from different model families '
                          f'({producer_model!r} and {reviewer_model!r} are both {a!r})')
     return {'producer_family': a, 'reviewer_family': b, 'same_family': same,
             'host_mode': host, 'warnings': warnings}

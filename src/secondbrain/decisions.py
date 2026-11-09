@@ -145,8 +145,10 @@ def _dead_slots(entries: list) -> dict:
 
 
 def superseded(entries: list) -> set:
-    """Numbers of the entries a later entry superseded (one by one, or with their whole round)."""
+    """Numbers of the entries a later entry superseded (one by one, or with their whole round), and those of an
+    answer the program set aside after taking it (:func:`void`)."""
     gone = {e['supersedes'] for e in entries if e.get('supersedes') is not None}
+    gone |= {n for e in entries if e['kind'] == 'void' for n in e['entries']}
     rounds = _dead_slots(entries)
     gone |= {e['n'] for e in entries if e['kind'] in ('value', 'step') and (e['role'], e['slot']) in rounds}
     chains: dict = {}
@@ -230,6 +232,17 @@ def record(entries: list, value: str, obj: str, data: dict, *, role: str, slot: 
         raise DecisionError(f'{value} of {obj}: the job shows no {reason} that would let {slot} supersede '
                             f'{earlier["slot"]}')
     return _append(entries, {**entry, 'supersedes': earlier['n'], 'reason': reason})
+
+
+def void(entries: list, numbers: list, *, role: str, slot: str, run: str, reason: str) -> dict | None:
+    """Record that the entries ``numbers``, which an answer (``run``) put in the record when it was taken, no longer
+    count: the program set that answer aside (``reason``), and the slot is asked again. The record stays append-only:
+    the entries stay, superseded by this one (:func:`superseded`)."""
+    numbers = sorted({n for n in numbers if isinstance(n, int)})
+    if not numbers:
+        return None
+    return _append(entries, {'kind': 'void', 'role': role, 'slot': slot, 'run': run, 'entries': numbers,
+                             'reason': reason})
 
 
 def supersede_round(entries: list, *, role: str, slot: str, earlier_slot: str, reason: str) -> dict:

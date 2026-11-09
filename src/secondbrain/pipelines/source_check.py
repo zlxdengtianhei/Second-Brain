@@ -45,6 +45,7 @@ from typing import Any, Callable
 from .. import decisions
 from ..overlap import LEVELS, TOPIC_LEVELS, with_problem
 from ..schemas import AnswerError, shape_checked
+from ..store import Halt
 from ..textnorm import near_same, plain, same_text
 
 SLOT = 'xc01'
@@ -1031,7 +1032,7 @@ def apply(settled: list[dict], frozen: dict, entries: list) -> tuple[list[dict],
     return out, report
 
 
-class Lost(ValueError):
+class Lost(ValueError, Halt):
     """A card that took a carry would not hold an item of it (``missing``: each named)."""
 
     def __init__(self, missing: list[str]):

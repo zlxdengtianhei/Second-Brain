@@ -247,6 +247,14 @@ def _previous_paragraph(root, state, packet, index: int) -> str | None:
     return paras[-1][2] if paras else None
 
 
+def _newest(chunk: str):
+    """For the guard (:func:`jobs.reading`): the newest answer of export unit ``chunk``, as ``(chunk, role)``."""
+    def newest(state: dict):
+        slot = (state.get('chunks') or {}).get(chunk) or {}
+        return (chunk, 'reviewer') if slot.get('review') else (chunk, 'producer') if slot.get('candidate') else None
+    return newest
+
+
 def _plan(root, job_id, state, packet, errors_for, feedback) -> list[tuple]:
     """Steps that can run now, as ``(step, chunk, prompt, packet, schema, role)``; settles finished units.
 
@@ -273,75 +281,77 @@ def _plan(root, job_id, state, packet, errors_for, feedback) -> list[tuple]:
 
     for i, unit in enumerate(packet['units']):
         uid = unit['id']
-        slot = chunks.get(uid) or {}
-        if slot.get('status') in DONE:
-            continue
-        if not slot.get('candidate'):
-            if given_up(uid, slot, 'produce'):
+        with jobs.reading('plan', _newest(uid)):  # this unit's answers
+            slot = chunks.get(uid) or {}
+            if slot.get('status') in DONE:
+                continue
+            if not slot.get('candidate'):
+                if given_up(uid, slot, 'produce'):
+                    continue
+                pending.append(uid)
+                before = chunks.get(packet['units'][i - 1]['id']) or {} if i else {}
+                if packet['mode'] == 'sequential' and i and not before.get('candidate') and before.get('status') not in DONE:
+                    continue
+                steps.append(('produce', uid, note(uid, 'produce', head + prompt('export_write.md')),
+                              write_packet(packet, unit, _previous_paragraph(root, state, packet, i)),
+                              schemas.EXPORT_WRITE, 'producer'))
+                continue
+            candidate = jobs.artifact(root, state, 'candidate', uid)
+            if not slot.get('review'):
+                if given_up(uid, slot, 'review', [pid for pid, _, _ in paragraphs(candidate)]):
+                    continue
+                pending.append(uid)
+                steps.append(('review', uid, note(uid, 'review', head + prompt('export_review.md')),
+                              review_packet(packet, unit, candidate), schemas.EXPORT_REVIEW, 'reviewer'))
+                continue
+            review = jobs.require_independent_review(root, state, uid)
+            revise = [x for x in review['items'] if x['decision'] == 'revise']
+            found = unit_findings(packet, unit, candidate, errors_for([t for _, _, t in paragraphs(candidate)]))
+            if _settled(root, job_id, uid, slot, review, revise, found):
+                continue
+            if given_up(uid, jobs.load(root, job_id)['chunks'][uid], 'repair', unresolved={
+                    'review': revise, 'program': found}):
                 continue
             pending.append(uid)
-            before = chunks.get(packet['units'][i - 1]['id']) or {} if i else {}
-            if packet['mode'] == 'sequential' and i and not before.get('candidate') and before.get('status') not in DONE:
-                continue
-            steps.append(('produce', uid, note(uid, 'produce', head + prompt('export_write.md')),
-                          write_packet(packet, unit, _previous_paragraph(root, state, packet, i)),
-                          schemas.EXPORT_WRITE, 'producer'))
-            continue
-        candidate = jobs.artifact(root, state, 'candidate', uid)
-        if not slot.get('review'):
-            if given_up(uid, slot, 'review', [pid for pid, _, _ in paragraphs(candidate)]):
-                continue
-            pending.append(uid)
-            steps.append(('review', uid, note(uid, 'review', head + prompt('export_review.md')),
-                          review_packet(packet, unit, candidate), schemas.EXPORT_REVIEW, 'reviewer'))
-            continue
-        review = jobs.require_independent_review(root, state, uid)
-        revise = [x for x in review['items'] if x['decision'] == 'revise']
-        found = unit_findings(packet, unit, candidate, errors_for([t for _, _, t in paragraphs(candidate)]))
-        if _settled(root, job_id, uid, slot, review, revise, found):
-            continue
-        if given_up(uid, jobs.load(root, job_id)['chunks'][uid], 'repair', unresolved={
-                'review': revise, 'program': found}):
-            continue
-        pending.append(uid)
-        text = (head + prompt('export_write.md') + '\n' + prompt('export_repair.md') + '\n```json\n'
-                + json.dumps({'review_findings': revise, 'program_findings': found}, ensure_ascii=False)
-                + '\n```\n')
-        repair = dict(write_packet(packet, unit, _previous_paragraph(root, state, packet, i)),
-                      previous_candidate=jobs.as_given(candidate))
-        steps.append(('repair', uid, note(uid, 'repair', text), repair, schemas.EXPORT_WRITE, 'producer'))
+            text = (head + prompt('export_write.md') + '\n' + prompt('export_repair.md') + '\n```json\n'
+                    + json.dumps({'review_findings': revise, 'program_findings': found}, ensure_ascii=False)
+                    + '\n```\n')
+            repair = dict(write_packet(packet, unit, _previous_paragraph(root, state, packet, i)),
+                          previous_candidate=jobs.as_given(candidate))
+            steps.append(('repair', uid, note(uid, 'repair', text), repair, schemas.EXPORT_WRITE, 'producer'))
     if steps or pending:
         return steps
-    smooth = chunks.get(SMOOTH) or {}
-    if smooth.get('status') in DONE:
-        return steps
-    if not smooth.get('candidate'):
-        if given_up(SMOOTH, smooth, 'produce'):
+    with jobs.reading('plan', _newest(SMOOTH)):  # the smoothing's answers
+        smooth = chunks.get(SMOOTH) or {}
+        if smooth.get('status') in DONE:
             return steps
-        steps.append(('produce', SMOOTH, note(SMOOTH, 'produce', head + prompt('export_smooth.md')),
-                      _smooth_packet(root, job_id, state, packet), schemas.EXPORT_SMOOTH, 'producer'))
-        return steps
-    candidate = jobs.artifact(root, state, 'candidate', SMOOTH)
-    if not smooth.get('review'):
-        if given_up(SMOOTH, smooth, 'review', [pid for pid, _ in smooth_paragraphs(candidate)]):
+        if not smooth.get('candidate'):
+            if given_up(SMOOTH, smooth, 'produce'):
+                return steps
+            steps.append(('produce', SMOOTH, note(SMOOTH, 'produce', head + prompt('export_smooth.md')),
+                          _smooth_packet(root, job_id, state, packet), schemas.EXPORT_SMOOTH, 'producer'))
             return steps
-        steps.append(('review', SMOOTH, note(SMOOTH, 'review', head + prompt('export_smooth_review.md')),
-                      smooth_review_packet(root, job_id, state, packet, candidate), schemas.EXPORT_REVIEW,
-                      'reviewer'))
+        candidate = jobs.artifact(root, state, 'candidate', SMOOTH)
+        if not smooth.get('review'):
+            if given_up(SMOOTH, smooth, 'review', [pid for pid, _ in smooth_paragraphs(candidate)]):
+                return steps
+            steps.append(('review', SMOOTH, note(SMOOTH, 'review', head + prompt('export_smooth_review.md')),
+                          smooth_review_packet(root, job_id, state, packet, candidate), schemas.EXPORT_REVIEW,
+                          'reviewer'))
+            return steps
+        review = jobs.require_independent_review(root, state, SMOOTH)
+        revise = [x for x in review['items'] if x['decision'] == 'revise']
+        if _settled(root, job_id, SMOOTH, smooth, review, revise, []):
+            return steps
+        if given_up(SMOOTH, jobs.load(root, job_id)['chunks'][SMOOTH], 'repair',
+                     unresolved={'review': revise, 'program': []}):
+            return steps
+        text = (head + prompt('export_smooth.md') + '\n' + prompt('export_smooth_repair.md') + '\n```json\n'
+                + json.dumps({'review_findings': revise}, ensure_ascii=False) + '\n```\n')
+        steps.append(('repair', SMOOTH, note(SMOOTH, 'repair', text),
+                      dict(_smooth_packet(root, job_id, state, packet), previous_candidate=jobs.as_given(candidate)),
+                      schemas.EXPORT_SMOOTH, 'producer'))
         return steps
-    review = jobs.require_independent_review(root, state, SMOOTH)
-    revise = [x for x in review['items'] if x['decision'] == 'revise']
-    if _settled(root, job_id, SMOOTH, smooth, review, revise, []):
-        return steps
-    if given_up(SMOOTH, jobs.load(root, job_id)['chunks'][SMOOTH], 'repair',
-                 unresolved={'review': revise, 'program': []}):
-        return steps
-    text = (head + prompt('export_smooth.md') + '\n' + prompt('export_smooth_repair.md') + '\n```json\n'
-            + json.dumps({'review_findings': revise}, ensure_ascii=False) + '\n```\n')
-    steps.append(('repair', SMOOTH, note(SMOOTH, 'repair', text),
-                  dict(_smooth_packet(root, job_id, state, packet), previous_candidate=jobs.as_given(candidate)),
-                  schemas.EXPORT_SMOOTH, 'producer'))
-    return steps
 
 
 def _settled(root, job_id, chunk, slot, review, revise, found) -> bool:
@@ -507,8 +517,15 @@ def advance(root: Path, job_id: str, *, producer, reviewer, checker=None, worker
 
     When the cards in scope have formulas, ``checker`` must work (:func:`checks.preflight`) before any model is
     asked; otherwise :class:`checks.CheckerUnavailable` is raised, unless ``formula_check`` is False: then the
-    formulas are not parse-checked and the article and its report say so.
+    formulas are not parse-checked and the article and its report say so. An error while it reads the answers it
+    took goes to the one guard (:func:`secondbrain.jobs.guarded`).
     """
+    return jobs.guarded(root, job_id, lambda: _advance(root, job_id, producer=producer, reviewer=reviewer,
+                                                       checker=checker, workers=workers, out_dir=out_dir,
+                                                       html=html, formula_check=formula_check))
+
+
+def _advance(root: Path, job_id: str, *, producer, reviewer, checker, workers, out_dir, html, formula_check) -> dict:
     unchecked = None
     if _has_formulas(jobs.read_input(root, job_id)):
         why = checks.preflight(checker)
@@ -553,7 +570,8 @@ def advance(root: Path, job_id: str, *, producer, reviewer, checker=None, worker
                 if failures[key] >= MAX_FAILURES or not error.get('retryable', False):
                     raise ExecutorFailure(error)
         state = jobs.load(root, job_id)
-        article, report = assemble(root, state, packet, errors_for, checker)
+        with jobs.reading('assemble'):  # every unit's answers at once: an error parks the job
+            article, report = assemble(root, state, packet, errors_for, checker)
         if unchecked:
             article['unchecked'] = report['formula_check_skipped'] = unchecked
         result = {'job_id': job_id, 'status': 'complete', 'report': report}

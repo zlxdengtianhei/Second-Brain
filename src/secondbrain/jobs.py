@@ -15,6 +15,7 @@ the vault. Knowledge files stay in the real vault and are written only through
 """
 from __future__ import annotations
 
+import contextlib
 import importlib
 import json
 import os
@@ -642,10 +643,13 @@ def receive(root: Path, job_id: str, run_id: str, *, role: str, answer=_NO_ANSWE
             recorder = _recorder(state['kind'])
             if recorder is not None:
                 entries = list(state.get('decisions') or [])
+                before = len(entries)
                 with config.job_settings(frozen):
                     recorder(packet, payload, role=role, candidate=candidate, root=root, chunk=chunk, state=state,
                              run=run, entries=entries)
                 state['decisions'] = entries
+                if len(entries) > before:  # what this answer put in the record, voided if it is set aside
+                    run['recorded'] = [e['n'] for e in entries[before:]]
             done = {'job_id': job_id, 'run_id': run_id, 'chunk': chunk, 'status': slot['status'],
                     'artifact': ref, 'written_to_knowledge': False}
             run['submit_result'] = done
@@ -689,28 +693,143 @@ def _refuse_received(root: Path, job_id: str, run_id: str, exc: BaseException, s
     raise Refused(message, given_up=given_up, fault=fault) from exc
 
 
-#: Where the program reads an answer after it was taken (:func:`set_aside`): a chunk's outcome, the packet of its
-#: review.
-AFTER_STEPS = ('outcome', 'review_packet')
+# --------------------------------------------------------------------------
+# After an answer is taken: one guard
+# --------------------------------------------------------------------------
+#: Attribute an error carries once it has passed a :func:`reading` mark: ``(stage, aside)``; ``None`` for an error of
+#: a model call (:func:`from_model_call`), which is not the guard's.
+_TAKEN = '_sb_after_taken'
+
+#: How many answers one ``advance`` may set aside before it parks the job instead (each is counted, so a slot's
+#: budget ends it long before this).
+GUARD_LIMIT = 200
 
 
-def set_aside(root: Path, job_id: str, chunk: str, role: str, exc: BaseException, *, stage: str) -> bool:
-    """The same gate as :func:`receive`, for an answer the program fails to read after it was taken (``stage``, one of
-    :data:`AFTER_STEPS`; ``exc`` one of :data:`schemas.SHAPE_SLIPS`, a value of a shape the reader did not expect,
-    while a check that stops the job on purpose, the independence of a review say, still stops it): the slot ``chunk``
-    no longer holds ``role``'s answer (a producer's answer takes its review
-    with it), the answer's run is failed, the fault is kept for the owner (``program_errors``), and the answer is
-    counted against the slot's budget, so the step is asked again until the budget is spent. False when the slot
-    holds no answer of ``role`` (nothing to set aside: the caller raises ``exc``)."""
+def _mark(exc: BaseException, where) -> BaseException:
+    if not hasattr(exc, _TAKEN):
+        try:
+            setattr(exc, _TAKEN, where)
+        except AttributeError:  # an exception that takes no attributes stays unmarked, and is raised as it is
+            pass
+    return exc
+
+
+@contextlib.contextmanager
+def reading(stage: str, aside=None):
+    """Mark code of an ``advance`` that reads answers the job took. It catches nothing: an error that passes the
+    mark (the innermost one) is the guard's (:func:`guarded`). ``aside`` names the answer to set aside for it,
+    ``(slot, role)`` (``slot`` None for the job's own), or a function of the job state that returns that or None;
+    without one the job is parked."""
+    try:
+        yield
+    except Exception as exc:
+        _mark(exc, (stage, aside))
+        raise
+
+
+def from_model_call(exc: BaseException) -> BaseException:
+    """Mark an error of a model call (the executor, the hand-off, its answer taken at the entry point): the guard
+    raises it as it is, wherever it was called."""
+    return _mark(exc, None)
+
+
+def guarded(root: Path, job_id: str, advance_once):
+    """The one guard of the layer after an answer is taken, around every kind's ``advance`` (``advance_once``, safe
+    to run again). An error that passed a :func:`reading` mark is counted, never raised: when it names an answer of
+    a slot (the newest one, or the round's one candidate or review), that answer is set aside and counted
+    (:func:`set_aside`) and the advance runs again, so the step is asked again until the budget is spent; when it
+    names none (a stage that reads many answers), the job is parked (:func:`park`) and the advance returns. A
+    :class:`~secondbrain.store.Halt` still stops the job, listed for the owner (:func:`note_halt`). Any other error
+    (one of a model call, or met before any answer is read) is raised as it is."""
+    from .store import Halt
+    for _ in range(GUARD_LIMIT):
+        try:
+            out = advance_once()
+        except Halt as exc:
+            note_halt(root, job_id, exc)
+            raise
+        except Exception as exc:
+            where = getattr(exc, _TAKEN, None)
+            if not where:
+                raise
+            stage, aside = where
+            target = aside(load(root, job_id)) if callable(aside) else aside
+            if target and set_aside(root, job_id, target[0], target[1], exc, stage=stage):
+                continue
+            return park(root, job_id, exc, stage)
+        if isinstance(out, dict) and load(root, job_id).get('parked'):
+            update_parked(root, job_id, None)  # the stage that parked it passed this time
+        return out
+    return park(root, job_id, RuntimeError(f'more than {GUARD_LIMIT} answers set aside in one advance'), 'guard')
+
+
+def update_parked(root: Path, job_id: str, parked: dict | None) -> None:
     with vault_lock(root):
         state = load(root, job_id)
-        slot = ((state.get('chunks') or {}).get(chunk)) if chunk is not None else None
+        if parked is None:
+            state.pop('parked', None)
+        else:
+            state['parked'] = parked
+        write_json(root, location(job_id), state)
+
+
+def park(root: Path, job_id: str, exc: BaseException, stage: str) -> dict:
+    """The job met ``exc`` at ``stage`` while it read answers it took, and no one answer is to blame: it waits for
+    the owner. The fault is kept (``program_errors``, listed by ``sb status --owner-items`` with its stage; the same
+    fault again is counted on ``parked``, not listed twice), and the advance returns the job as it is."""
+    fault = {**fault_of(exc), 'stage': stage}
+    with vault_lock(root):
+        state = load(root, job_id)
+        before = state.get('parked') or {}
+        same = (before.get('stage'), before.get('type'), before.get('message')) == \
+            (stage, fault['type'], fault['message'])
+        if not same:
+            state['program_errors'] = list(state.get('program_errors') or []) + [
+                {**fault, 'slot': None, 'role': None, 'step': stage, 'run_id': None, 'at': now()}]
+        state['parked'] = {**fault, 'at': now(), 'times': int(before.get('times', 0)) + 1 if same else 1}
+        write_json(root, location(job_id), state)
+    return load(root, job_id)
+
+
+def note_halt(root: Path, job_id: str, exc: BaseException) -> None:
+    """List a stop on purpose for the owner (``halts`` of the job, ``kind: job_stopped`` in ``sb status
+    --owner-items``): the same stop again is counted, not listed twice. A job that cannot be read is left alone."""
+    try:
+        with vault_lock(root):
+            state = load(root, job_id)
+            rows = list(state.get('halts') or [])
+            key = (type(exc).__name__, str(exc)[:500])
+            if rows and (rows[-1].get('type'), rows[-1].get('message')) == key:
+                rows[-1] = {**rows[-1], 'times': int(rows[-1].get('times', 1)) + 1, 'at': now()}
+            else:
+                rows.append({'type': key[0], 'message': key[1], 'times': 1, 'at': now()})
+            state['halts'] = rows
+            write_json(root, location(job_id), state)
+    except (OSError, ValueError, KeyError):
+        pass
+
+
+def set_aside(root: Path, job_id: str, chunk: str | None, role: str, exc: BaseException, *, stage: str) -> bool:
+    """The guard's count of an answer the program failed to read after it took it (:func:`guarded`), the same as
+    the entry point's for one it failed to check: the slot ``chunk`` (None: the job's own, as a maintenance job
+    keeps its one candidate and review) no longer holds ``role``'s answer (a producer's answer takes its review with
+    it), the answer's run is failed, the fault is kept for the owner (``program_errors``, with ``stage``), and the
+    answer is counted against the slot's budget, so the step is asked again until the budget is spent. False when
+    the slot holds no answer of ``role``, or while a write is under way (``commit_intent``: its frozen plan names the
+    answers it writes, so none is taken away; the job is parked, and the next advance finishes the write)."""
+    with vault_lock(root):
+        state = load(root, job_id)
+        if state.get('commit_intent'):
+            return False
+        slot = state if chunk is None else (state.get('chunks') or {}).get(chunk)
         field = 'review' if role == 'reviewer' else 'candidate'
         ref = (slot or {}).get(field) or {}
         if not ref.get('run_id'):
             return False
         run = load_run(root, job_id, ref['run_id'])
         message = _record_fault(state, run, {**fault_of(exc), 'stage': stage})
+        review = (slot.get('review') or {}).get('run_id') if role == 'producer' else None
+        _void_recorded(root, job_id, state, chunk, [run] + ([load_run(root, job_id, review)] if review else []))
         slot[field] = None
         if role == 'producer':
             slot['review'] = None
@@ -720,6 +839,16 @@ def set_aside(root: Path, job_id: str, chunk: str, role: str, exc: BaseException
             'program_error': run['program_error']})
         _refused_answer(root, job_id, state, run, message)
         return True
+
+
+def _void_recorded(root: Path, job_id: str, state: dict, chunk: str | None, runs: list) -> None:
+    """The decision record no longer counts what the answers of ``runs`` put in it when they were taken."""
+    from . import decisions
+    entries = list(state.get('decisions') or [])
+    for run in runs:
+        decisions.void(entries, run.get('recorded') or [], role=run['role'], slot=chunk, run=run['run_id'],
+                       reason='set_aside')
+    state['decisions'] = entries
 
 
 def submit(root: Path, job_id: str, payload, *, role: str, run_id: str, model_reported: str | None = None,

@@ -34,7 +34,14 @@ from . import config
 from . import layout as layouts
 
 
-class Conflict(ValueError):
+class Halt(Exception):
+    """The program stops a job on purpose and waits for its owner: a conflict with the vault or the job's input, a
+    review whose models may not judge each other, a write that would lose what it carries, a check that cannot run
+    on this machine. Raised as it is from ``advance``, and listed for the owner (``jobs.guarded``); any other error
+    while a job reads the answers it took is the guard's to count or to park."""
+
+
+class Conflict(ValueError, Halt):
     """An input changed or another writer owns the vault lock."""
 
 

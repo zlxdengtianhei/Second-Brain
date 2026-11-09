@@ -38,7 +38,7 @@ from ..classification import projection_changes, snapshot_checks, taxonomy_finge
 from ..evidence import check_verbatim
 from ..executors.base import CHUNK_TOO_LARGE, INVALID_OUTPUT, ExecutorFailure
 from ..locks import job_lock
-from ..store import Change, Conflict, digest, read_bytes
+from ..store import Change, Conflict, Halt, digest, read_bytes
 from ..textnorm import plain, same_text
 from ..vault import Card, append_list_items, parse_note, read_snapshot
 from .. import retrieval
@@ -56,6 +56,11 @@ DISPOSITIONS = set(overlap.COVERAGE)
 
 class IngestError(ValueError):
     """Input or validation problem in the ingest chain."""
+
+
+class WriteStopped(IngestError, Halt):
+    """The check before writing finds that the write would not hold what an answer gives a card: nothing is
+    written, and the job stops for the owner (a stop on purpose, :class:`~secondbrain.store.Halt`)."""
 
 
 class IngestAnswerError(IngestError, schemas.AnswerError):
@@ -2008,14 +2013,14 @@ def _accepted_so_far(root, state, base: str, upto_round: int) -> dict:
     return accepted
 
 
-def _set_aside_newest(root: Path, job_id: str, state: dict, base: str, exc: BaseException) -> bool:
-    """The outcome of chunk ``base`` met a value of a shape it did not expect (``exc``): set the chunk's newest answer
-    aside, counted (:func:`jobs.set_aside`); False when the chunk holds no answer."""
-    for slot, info in reversed(_slots(state, base)):
-        if info.get('candidate'):
-            role = 'reviewer' if info.get('review') else 'producer'
-            return jobs.set_aside(root, job_id, slot, role, exc, stage='outcome')
-    return False
+def _newest(base: str):
+    """For the guard (:func:`jobs.reading`): the newest answer chunk ``base`` holds, as ``(slot, role)``, or None."""
+    def newest(state: dict):
+        for slot, info in reversed(_slots(state, base)):
+            if info.get('candidate'):
+                return slot, 'reviewer' if info.get('review') else 'producer'
+        return None
+    return newest
 
 
 def chunk_outcome(root: Path, state: dict, packet: dict, base: str) -> dict:
@@ -2188,15 +2193,12 @@ def _step(root: Path, job_id: str, action: tuple, producer, reviewer) -> None:
         if feedback:
             text += '\n## Your previous answer was rejected by the validator\n\n' + feedback + '\n'
         try:
-            shown = review_packet(root, state, packet, slot)
+            with jobs.reading('review_packet', (slot, 'producer')):
+                shown = review_packet(root, state, packet, slot)
         except retrieval.TooLarge as exc:
             # the cards the producer named would crowd out the chunk: produce its halves instead
             if slot == _base(slot) and len(_chunk_text(packet, slot)) >= 2 * MIN_SPLIT_CHARS:
                 _record_split(root, job_id, slot, str(exc))
-                return
-            raise
-        except schemas.SHAPE_SLIPS as exc:  # the candidate taken earlier cannot be read for its review
-            if jobs.set_aside(root, job_id, slot, 'producer', exc, stage='review_packet'):
                 return
             raise
         try:
@@ -2213,7 +2215,8 @@ def _step(root: Path, job_id: str, action: tuple, producer, reviewer) -> None:
     base = _base(slot)
     info = (state.get('chunks') or {}).get(slot) or {}
     feedback = info.get('last_validation_error') if not info.get('candidate') else None
-    shown, schema, draft = producer_packet(root, state, packet, slot), schemas.CARDS, _draft(state, slot)
+    with jobs.reading('produce_packet', _newest(base)):  # a repair round shows the last round's answers
+        shown, schema, draft = producer_packet(root, state, packet, slot), schemas.CARDS, _draft(state, slot)
     if feedback:
         text += '\n## Your previous answer was rejected by the validator\n\n' + feedback + '\n'
     if draft:  # some cards of the last answer failed: ask for those, as they were given, with their lines
@@ -2273,10 +2276,13 @@ def _earlier_version(job_id: str, packet: dict) -> str:
 def advance(root: Path, job_id: str, *, producer, reviewer, apply: bool = True) -> dict:
     """Run every step that can run now; returns the job state plus hand-offs.
 
-    Every step reads the settings the job froze (:func:`_frozen_run`), never the configuration.
+    Every step reads the settings the job froze (:func:`_frozen_run`), never the configuration. An error while it
+    reads the answers it took goes to the one guard (:func:`secondbrain.jobs.guarded`).
     """
-    with _frozen_run(root, jobs.read_input(root, job_id)):
-        return _advance(root, job_id, producer=producer, reviewer=reviewer, apply=apply)
+    def once():
+        with _frozen_run(root, jobs.read_input(root, job_id)):
+            return _advance(root, job_id, producer=producer, reviewer=reviewer, apply=apply)
+    return jobs.guarded(root, job_id, once)
 
 
 def _advance(root: Path, job_id: str, *, producer, reviewer, apply: bool = True) -> dict:
@@ -2299,12 +2305,8 @@ def _advance(root: Path, job_id: str, *, producer, reviewer, apply: bool = True)
             if not todo:
                 break
             base = todo[0]
-            try:
+            with jobs.reading('outcome', _newest(base)):
                 out = chunk_outcome(root, state, packet, base)
-            except schemas.SHAPE_SLIPS as exc:  # an answer taken earlier the program cannot read: the gate
-                if not _set_aside_newest(root, job_id, state, base, exc):
-                    raise
-                continue
             if out['settled'] or out['next'][1] in {h['chunk'] for h in handoffs}:  # one note serves many chunks
                 visited.add(base)
                 continue
@@ -2314,25 +2316,34 @@ def _advance(root: Path, job_id: str, *, producer, reviewer, apply: bool = True)
                 handoffs.append({**waiting.handoff, 'chunk': out['next'][1], 'step': out['next'][0]})
                 visited.add(base)
         state = jobs.load(root, job_id)
-        settled = [chunk_outcome(root, state, packet, c['chunk_id']) for c in effective_chunks(packet, state)]
+        settled = []
+        for c in effective_chunks(packet, state):
+            with jobs.reading('outcome', _newest(c['chunk_id'])):
+                settled.append(chunk_outcome(root, state, packet, c['chunk_id']))
         if handoffs or not all(o['settled'] for o in settled):
             state = jobs.update(root, job_id, status='awaiting_submission' if handoffs else 'producing')
             return {**state, 'handoffs': handoffs}
-        handoffs = _source_check_stage(root, job_id, packet, settled, reviewer)
+        # the stages below read the answers of many slots at once: an error there parks the job
+        with jobs.reading('merge_check'):
+            handoffs = _source_check_stage(root, job_id, packet, settled, reviewer)
         if not handoffs:
-            handoffs = _split_stage(root, job_id, packet, settled, producer, reviewer)
+            with jobs.reading('split'):
+                handoffs = _split_stage(root, job_id, packet, settled, producer, reviewer)
         if handoffs:
             state = jobs.update(root, job_id, status='awaiting_submission')
             return {**state, 'handoffs': handoffs}
-        checked, _ = _checked(root, jobs.load(root, job_id), packet, settled)
+        with jobs.reading('checked'):
+            checked, _ = _checked(root, jobs.load(root, job_id), packet, settled)
         if not apply:
             state = jobs.update(root, job_id, status='reviewed', proposal=_summary(checked))
             return state
-        _, handoffs = _diagram_stage(root, job_id, packet, checked, producer)
+        with jobs.reading('diagrams'):
+            _, handoffs = _diagram_stage(root, job_id, packet, checked, producer)
         if handoffs:
             state = jobs.update(root, job_id, status='awaiting_submission')
             return {**state, 'handoffs': handoffs}
-        return apply_job(root, job_id, settled)
+        with jobs.reading('apply'):
+            return apply_job(root, job_id, settled)
 
 
 # --------------------------------------------------------------------------
@@ -2690,17 +2701,13 @@ def _split_stage(root: Path, job_id: str, packet: dict, settled: list[dict], pro
         try:
             if kind == 'review':
                 from ..runner import withhold_reasons
-                cand = jobs.artifact(root, state, 'candidate', slot)
                 text = _prompt('review_split.md', state)
                 feedback = ((state.get('chunks') or {}).get(slot) or {}).get('last_review_error')
                 if feedback:
                     text += '\n## Your previous answer was rejected by the validator\n\n' + feedback + '\n'
-                try:
+                with jobs.reading('review_packet', (slot, 'producer')):
+                    cand = jobs.artifact(root, state, 'candidate', slot)
                     body = {**shown, 'card': withhold_reasons(cand['card']), **_program_view(root, state, slot, cand)}
-                except schemas.SHAPE_SLIPS as exc:  # the split card taken earlier cannot be read for its review
-                    if jobs.set_aside(root, job_id, slot, 'producer', exc, stage='review_packet'):
-                        continue
-                    raise
                 try:
                     call_executor(root, job_id, reviewer, role='reviewer', step='review', prompt_text=text,
                                   packet=body, output_schema=split.REVIEW_SCHEMA, chunk=slot)
@@ -2710,8 +2717,9 @@ def _split_stage(root: Path, job_id: str, packet: dict, settled: list[dict], pro
                 body = {**shown, 'card': item['card'], 'carry': item['carry']}
                 if kind == 'repair':
                     prev = _slot_name(item['slot'], _round(slot) - 1)
-                    body.update(previous_candidate=jobs.as_given(jobs.artifact(root, state, 'candidate', prev)),
-                                review_findings=jobs.artifact(root, state, 'review', prev))
+                    with jobs.reading('produce_packet', (prev, 'reviewer')):  # the last round's card and review
+                        body.update(previous_candidate=jobs.as_given(jobs.artifact(root, state, 'candidate', prev)),
+                                    review_findings=jobs.artifact(root, state, 'review', prev))
                 text = _prompt('split_card.md', state)
                 feedback = ((state.get('chunks') or {}).get(slot) or {}).get('last_validation_error')
                 if feedback:
@@ -3247,7 +3255,7 @@ def _apply_job(root: Path, job_id: str, settled: list[dict] | None = None) -> di
                                  replace_flashcards={int(w['flashcard'][1:]): w['after'] for w in swapped},
                                  add_source=source_item, add_relations=moved, title_of=title_of.get, language=language)
         except cardfmt.PatchLost as exc:  # before anything is written: no item may go missing on the way
-            raise IngestError(f'{target} would not hold what the merge check\'s patch gives it: {exc}. '
+            raise WriteStopped(f'{target} would not hold what the merge check\'s patch gives it: {exc}. '
                               'Nothing was written; this is a fault of the program, not of the answer') from exc
         except cardfmt.PatchRefused as exc:
             raise Conflict(f'{target} could not take its patch: {exc}; run `sb job advance` again') from exc

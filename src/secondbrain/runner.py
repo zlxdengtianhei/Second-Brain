@@ -120,14 +120,17 @@ def call_executor(root: Path, job_id: str, executor: Executor, *, role: str, ste
     :class:`ExecutorFailure` (code ``INVALID_OUTPUT`` for outputs the
     validators reject) after recording the failure on the run.
     """
-    task = start_call(root, job_id, executor, role=role, step=step, prompt_text=prompt_text, packet=packet,
-                      output_schema=output_schema, chunk=chunk, tex_backslashes=tex_backslashes)
     try:
-        result = executor.run(task)
-    except Exception as exc:
-        fail_call(root, task, exc)
-        raise
-    return finish_call(root, task, result)
+        task = start_call(root, job_id, executor, role=role, step=step, prompt_text=prompt_text, packet=packet,
+                          output_schema=output_schema, chunk=chunk, tex_backslashes=tex_backslashes)
+        try:
+            result = executor.run(task)
+        except Exception as exc:
+            fail_call(root, task, exc)
+            raise
+        return finish_call(root, task, result)
+    except Exception as exc:  # an error of the model call is not one of reading a taken answer: raised as it is
+        raise jobs.from_model_call(exc)
 
 
 def start_call(root: Path, job_id: str, executor: Executor, *, role: str, step: str,
@@ -235,7 +238,14 @@ def _give_up(root: Path, job_id: str, why: str, step: str) -> dict:
 
 def run_job(root: Path, job_id: str, *, producer: Executor, reviewer: Executor,
             apply: bool = True, stop_after_review: bool = False) -> dict:
-    """Drive one maintenance job as far as it can go; safe to call again."""
+    """Drive one maintenance job as far as it can go; safe to call again. An error while it reads the answers it
+    took goes to the one guard (:func:`secondbrain.jobs.guarded`)."""
+    return jobs.guarded(root, job_id, lambda: _run_job(root, job_id, producer=producer, reviewer=reviewer,
+                                                       apply=apply, stop_after_review=stop_after_review))
+
+
+def _run_job(root: Path, job_id: str, *, producer: Executor, reviewer: Executor,
+             apply: bool, stop_after_review: bool) -> dict:
     with job_lock(root, job_id):
         while True:
             try:
@@ -273,31 +283,36 @@ def _run_locked(root: Path, job_id: str, *, producer: Executor, reviewer: Execut
         model_packet = {k: v for k, v in packet.items() if k != 'repair_feedback'}
         _produce(root, job_id, producer, text, model_packet, spec, packet, step='produce')
         raise _ContinueJob()
-    candidate = jobs.artifact(root, state, 'candidate')
-    spec.check(packet, candidate)
+    with jobs.reading('candidate', (None, 'producer')):  # the round's one candidate
+        candidate = jobs.artifact(root, state, 'candidate')
+        spec.check(packet, candidate)
     if not state.get('review'):
         spent = _spent(state, packet, 'reviewer')
         if spent:
             return _give_up(root, job_id, spent, 'review')
-        shown = withhold_reasons(candidate) if jobs.policy_of(packet).withhold_producer_reasons else candidate
-        review_packet = {'input': {k: v for k, v in packet.items() if k != 'repair_feedback'},
-                         'candidate': shown}
+        with jobs.reading('review_packet', (None, 'producer')):
+            shown = withhold_reasons(candidate) if jobs.policy_of(packet).withhold_producer_reasons else candidate
+            review_packet = {'input': {k: v for k, v in packet.items() if k != 'repair_feedback'},
+                             'candidate': shown}
         call_executor(root, job_id, reviewer, role='reviewer', step='review',
                       prompt_text=head + '\n' + prompt(spec.review_prompt),
                       packet=review_packet, output_schema=spec.review_schema)
         state = jobs.load(root, job_id)
-    review = jobs.require_independent_review(root, state)
+    with jobs.reading('review', (None, 'reviewer')):  # the round's one review
+        review = jobs.require_independent_review(root, state)
+        rejected = [x for x in review.get('items', []) if isinstance(x, dict) and x.get('decision') == 'revise']
     if stop_after_review:
         return state
-    rejected = [x for x in review.get('items', []) if isinstance(x, dict) and x.get('decision') == 'revise']
     if rejected and state['kind'] == 'classification':
-        return _repair_classification(root, state, packet, review, producer=producer,
-                                      reviewer=reviewer, apply=apply)
+        with jobs.reading('repair'):  # a child job and an apply of the accepted rows: no one answer to blame
+            return _repair_classification(root, state, packet, review, producer=producer,
+                                          reviewer=reviewer, apply=apply)
     if rejected and rounds_left(packet, state) > 0:
         text = (head + '\n' + prompt(spec.produce_prompt) + '\n' + prompt('repair.md')
                 + '\n```json\n' + json.dumps({'review_findings': rejected}, ensure_ascii=False) + '\n```\n')
-        repair_packet = {'input': {k: v for k, v in packet.items() if k != 'repair_feedback'},
-                         'previous_candidate': jobs.as_given(candidate)}
+        with jobs.reading('repair_packet', (None, 'producer')):
+            repair_packet = {'input': {k: v for k, v in packet.items() if k != 'repair_feedback'},
+                             'previous_candidate': jobs.as_given(candidate)}
         jobs._internal_update(root, job_id, repair_round=int(state.get('repair_round', 0)) + 1)
         _produce(root, job_id, producer, text, repair_packet, spec, packet, step='repair')
         raise _ContinueJob()
@@ -305,7 +320,8 @@ def _run_locked(root: Path, job_id: str, *, producer: Executor, reviewer: Execut
         _give_up(root, job_id, 'repair rounds exhausted; the review still rejects items', 'repair')
     if not apply:
         return jobs.load(root, job_id)
-    return spec.apply(root, job_id)
+    with jobs.reading('apply', (None, 'reviewer')):  # the round's review, the newest answer
+        return spec.apply(root, job_id)
 
 
 def _produce(root, job_id, producer, text, model_packet, spec, packet, *, step):
