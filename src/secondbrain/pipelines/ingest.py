@@ -2317,7 +2317,8 @@ def _patch_fits(old, patch: dict) -> tuple[str | None, list, list]:
         return problem, [], []
     props, flashcards = cardfmt.propositions_of(old.body), cardfmt.flashcards_of(old.body)
     replaced = {int(r['proposition'][1:]): r['by'] for r in patch.get('replace') or []}
-    have = props + list(replaced.values())
+    have = [replaced.get(n, p) for n, p in enumerate(props, 1)]  # the card once replaced: a proposition swapped out
+    # is no longer there to hold a carried one
     try:
         flashcards, _ = source_check.swap_flashcards(flashcards, patch.get('flashcard_replace') or [])  # D-26
     except ValueError as exc:

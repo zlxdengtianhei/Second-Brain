@@ -431,6 +431,10 @@ def active_review() -> ReviewPolicy:
 
 
 def review_policy() -> ReviewPolicy:
+    """The review rules: inside a job step (:func:`job_settings`), the ones the job froze, so a step never reads
+    the live configuration by mistake; elsewhere the configured ones, or the override of :func:`set_review_policy`."""
+    if _JOB is not None:
+        return _JOB.review
     if _POLICY is not None:
         return _POLICY
     return current().review
