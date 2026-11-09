@@ -38,7 +38,7 @@ sb export --domain <slug> --executor host   # 导出文章也走同样的交接�
 sb export --job <job_id> --executor host    # 下一批交接；各步都完成后写出文章文件
 ```
 
-一个运行 id（run id）只接受一份答案。同一个运行再提交一份不同的答案，会被拒绝。被程序拒绝的答案，可以在同一个运行上重交，最多 `[review] max_invalid_retries` 次。块生产者的答案只因部分卡被拒时（“Answer again with these cards only”），只交改好的这几张卡，写成 `{"cards": [...]}`：程序把它们和留下的卡合在一起，整份再校验。答案文件的读法与 API 执行器读答案相同：先按原样读 JSON，不行就去掉外面一层 Markdown 代码围栏，还不行、而前后有别的文字时只读其中的 JSON 对象。程序检查答案时自己出的错也算一次退回，并由 `sb status --owner-items` 列出。
+一个运行 id（run id）只接受一份答案。同一个运行再提交一份不同的答案，会被拒绝。被程序拒绝的答案，可以在同一个运行上重交，最多 `[review] max_invalid_retries` 次。块生产者的答案只因部分卡被拒时（“Answer again with these cards only”），只交改好的这几张卡，写成 `{"cards": [...]}`：程序把它们和留下的卡合在一起，整份再校验。答案文件的读法与 API 执行器读答案相同：先按原样读 JSON，不行就去掉外面一层 Markdown 代码围栏，还不行、而前后有别的文字时只读其中的 JSON 对象。只有程序才写的字段（`program_repairs`、`held_cards` 之类）在检查前会从答案文件里去掉，交答案时不要写它们。不是 UTF-8 文本的文件会被退回并计数。程序检查答案时自己出的错、或之后读已收下的答案时遇到的形状不对的值，也算一次退回，并由 `sb status --owner-items` 列出。
 
 ## API 执行器
 
