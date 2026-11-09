@@ -73,7 +73,7 @@ Every finding sends the unit back for a repair round, like a `revise`. The intro
 
 ### Review and repair
 
-The reviewer gets the paragraphs, the cards they cite and the cards of the unit. For each paragraph it answers `accept` or `revise` with a concrete reason, and it can write notes. Notes have the same five kinds as in ingest ([Review rules](ingest.md#review-rules)): when the reviewer accepts a paragraph with a note of a blocking kind (`fact`, `unreadable`, `quote`, `not_a_unit`), the program turns the accept into a revise, with the note as its reason. The report keeps the turned paragraphs of each round in the unit's history.
+The reviewer gets the paragraphs, the cards they cite and the cards of the unit. For each paragraph it answers `accept` or `revise` with a concrete reason, and it can write notes. Notes have the same five kinds as in ingest ([Review rules](ingest.md#review-rules)); `repeats`, which only a reviewer of a card writes, is not one of them: when the reviewer accepts a paragraph with a note of a blocking kind (`fact`, `unreadable`, `quote`, `not_a_unit`), the program turns the accept into a revise, with the note as its reason. The report keeps the turned paragraphs of each round in the unit's history.
 
 ### Smoothing
 
