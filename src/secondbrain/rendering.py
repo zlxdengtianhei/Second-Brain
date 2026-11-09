@@ -89,12 +89,12 @@ MACROS = [
 # softmax, argmax, argmin, sigmoid and relu are not MathJax commands: \softmax renders as a
 # red undefined control sequence, so they become \operatorname{}.
 OPERATORS = ["softmax", "argmax", "argmin", "sigmoid", "relu"]
-# Names of relation and operator symbols that a text also uses as function names: `sim(q, d)`
-# is a similarity function, but `\sim(` renders the relation ∼ (and `\approx(` renders ≈). A
-# bare one directly followed by `(` is a function name and becomes \operatorname{}; `X \sim p`,
-# with its backslash or with no `(` right after, stays the symbol.
-SYMBOL_FUNCTIONS = ["sim", "approx", "equiv", "propto", "neq", "leq", "geq", "perp", "parallel",
-                    "circ", "bullet", "oplus", "otimes", "times", "cdot"]
+# Names of relation symbols that a text also uses as function names: `sim(q, d)` is a similarity
+# function, but `\sim(` renders the relation ∼ (and `\approx(` renders ≈). A bare one directly
+# followed by `(` is a function name and becomes \operatorname{}; `X \sim p`, with its backslash
+# or with no `(` right after, stays the symbol. Binary operators (`times`, `cdot`, `circ`, `oplus`,
+# `otimes`, `bullet`) are not in the list: `w_i times(x_i + b_i)` multiplies by a group.
+SYMBOL_FUNCTIONS = ["sim", "approx", "equiv", "propto", "neq", "leq", "geq", "perp", "parallel"]
 MACRO_RE = re.compile(r"(?<![\\A-Za-z])(" + "|".join(MACROS) + r")(?![A-Za-z])")
 OPERATOR_RE = re.compile(r"(?<![\\A-Za-z{])(" + "|".join(OPERATORS) + r")(?![A-Za-z}])")
 FUNCTION_RE = re.compile(r"(?<![\\A-Za-z{])(" + "|".join(SYMBOL_FUNCTIONS) + r")(?=\()")

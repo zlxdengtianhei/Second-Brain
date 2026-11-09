@@ -58,3 +58,24 @@ def real_checker():
 def test_mathjax_reads_every_changed_formula():
     formulas = [part for _, out in CHANGED for part in out.split('$')[1::2]]
     assert real_checker().check([(f, False) for f in formulas]) == [None] * len(formulas)
+
+
+#: a binary operator before a group multiplies by it (or composes, adds): it stays the operator, `sim(` does not
+OPERATORS = [
+    ('a cdot(b)', 'a cdot(b)'),  # not read as a formula: left as written
+    ('w_i times(x_i + b_i)', r'$w_i \times(x_i + b_i)$'),
+    ('S = sum_i w_i times(x_i + b_i)', r'$S = \sum_i w_i \times(x_i + b_i)$'),
+    ('y_i = a_i cdot(b_i)', r'$y_i = a_i \cdot(b_i)$'),
+    ('h = sum_i f_i circ(g_i)', r'$h = \sum_i f_i \circ(g_i)$'),
+    ('c_i = a_i oplus(b_i)', r'$c_i = a_i \oplus(b_i)$'),
+    ('z_i = a_i otimes(b_i)', r'$z_i = a_i \otimes(b_i)$'),
+    ('p_i = bullet(x_i)', r'$p_i = \bullet(x_i)$'),
+    ('x_t sim(p)', r'$x_t \operatorname{sim}(p)$'),
+]
+
+
+@pytest.mark.parametrize('line, expected', OPERATORS)
+def test_a_binary_operator_before_a_group_stays_the_operator(line, expected):
+    out, _ = normalize_math(line)
+    assert out == expected
+    assert normalize_math(out) == (out, 0)
