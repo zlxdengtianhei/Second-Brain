@@ -120,6 +120,11 @@ REVIEW_CARDS = {
                            'overlap': {'type': ['string', 'null'], 'enum': [*_LEVELS, None]},
                            'with': {'type': ['array', 'null'], 'items': _STR}, 'conflicts': _CONFLICTS,
                            'amend': AMEND, 'notes': review_notes.CARD_NOTES,
+                           # the answers to the program's questions on the card (pipelines.cardlint)
+                           'answers': {'type': ['array', 'null'], 'items': {
+                               'type': 'object', 'required': ['id', 'answer', 'reason'],
+                               'properties': {'id': _STR, 'answer': {'type': 'string', 'enum': ['yes', 'no']},
+                                              'reason': _STR}}},
                            'fixed': {'type': ['array', 'null'], 'items': {
                                'type': 'object', 'required': ['finding', 'fixed'],
                                'properties': {'finding': _STR, 'fixed': {'type': 'boolean'}}}},

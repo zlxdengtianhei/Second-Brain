@@ -14,7 +14,7 @@ from pathlib import Path
 
 PACKAGE = Path(__file__).resolve().parents[1] / 'src' / 'secondbrain'
 CJK = re.compile(r'[　-〿一-鿿＀-￯]')
-SKIP = {'labels.py', 'cards.py', 'review_registry.py'}   # language tables; separately owned
+SKIP = {'labels.py', 'cards.py', 'review_registry.py', 'cardlint.py'}   # language tables; separately owned
 ALLOWED = {
     ('pipelines/chunking.py', '(?<=[。！？!?；;])|(?<=[.!?])(?=\\s)'),   # sentence ends
     ('rendering.py', '　-〿㐀-䶿一-鿿豈-﫿＀-￯‘’“”—–'),

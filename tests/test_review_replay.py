@@ -142,3 +142,19 @@ def test_read_applies_the_focused_rounds_rule(runs):
     rows = [{'slug': s, 'decision': 'revise', 'reason': 'the wording', 'blocking': None} for s in slugs]
     [line] = replay.read(task, {'cards': rows, 'new_topics': [], 'coverage': {'decision': 'accept', 'reason': 'ok'}})
     assert line.startswith('REFUSED\t') and 'in a repair round a card is revised only' in line
+
+
+def test_render_adds_the_programs_questions_an_older_packet_did_not_ask_and_read_wants_them_answered():
+    packet = {'chunk': {'id': 'c01', 'text': 'x'},
+              'candidate': {'cards': [{'slug': 'dim', 'essence': 'e', 'propositions': ['原文说它会变暗。']}]}}
+    new = replay.render(render_task_text(
+        'You are working on one chunk of a source document for the SecondBrain ingest job `ingest-x1`.\n\n'
+        '## Task: independently review proposed cards for this chunk\n', packet, {'type': 'object'}))
+    asked = packet_of(new)['program_questions']['dim']
+    assert [q['id'] for q in asked] == ['K1']
+    row = {'slug': 'dim', 'decision': 'accept', 'reason': 'ok', 'overlap': 'distinct', 'with': []}
+    answer = {'cards': [row], 'new_topics': [], 'coverage': {'decision': 'accept', 'reason': 'ok'}}
+    [line] = replay.read(new, answer)
+    assert line.startswith('REFUSED\t') and 'K1' in line
+    yes = {**row, 'answers': [{'id': 'K1', 'answer': 'yes', 'reason': 'it leans on the source'}]}
+    assert replay.read(new, {**answer, 'cards': [yes]}) == ['dim\trevise\tunreadable\t']

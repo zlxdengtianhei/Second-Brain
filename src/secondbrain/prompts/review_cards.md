@@ -18,6 +18,9 @@ For each card in `candidate.cards` decide `accept` or `revise`:
 <!-- notes.definition -->
 
 <!-- notes.cards -->
+
+`program_questions`, when present, lists for some cards the program's questions on their text (`id`, `check`, `question`): a phrase that may point at the source instead of saying the thing, or a one-letter symbol given a value or used in a product that the card does not explain. The program decides nothing by itself. Answer every question of a card in its row, in `answers`: `[{"id": "K1", "answer": "yes" | "no", "reason": "<one sentence>"}]`. Answer `yes` when it is so and a reader needs the source to understand the card: the card then goes back as `unreadable`, also when you accept it. Answer `no` when the card says the thing itself or it is clear without the source (a table or an example the card gives, a symbol it explains).
+
 Notes go on the card they are about; they are recorded for the owner and shown to the check of the whole source.
 
 `other_chunks_cards` lists the cards proposed for the other chunks of this source. Do not revise a card only because one of them makes the same point: once every chunk is reviewed, a check of the whole source decides which of such cards are written. A relation to one of them must still make sense.

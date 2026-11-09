@@ -54,9 +54,13 @@ def reviewer(checks=None, *, check=None, rejudge=None, split_review=None, levels
             props = task.packet['card'].get('propositions') or []
             return {'matches': [{'proposition': f'P{i}', 'existing': None} for i in range(1, len(props) + 1)],
                     **answer}
-        cand = task.packet['candidate']
+        cand, asked = task.packet['candidate'], task.packet.get('program_questions') or {}
+        # each question the program asks on a card is answered no: the card stays as the test made it
         return {'cards': [{'slug': c['slug'], 'decision': 'accept', 'reason': 'ok',
-                           **levels.get(c['slug'], {'overlap': 'distinct'})} for c in cand['cards']],
+                           **levels.get(c['slug'], {'overlap': 'distinct'}),
+                           **({'answers': [{'id': q['id'], 'answer': 'no', 'reason': 'the card says it'}
+                                           for q in asked[c['slug']]]} if c['slug'] in asked else {})}
+                          for c in cand['cards']],
                 'new_topics': [], 'coverage': {'decision': 'accept', 'reason': 'ok'}}
     return respond
 

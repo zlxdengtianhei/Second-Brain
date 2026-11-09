@@ -11,7 +11,9 @@ answer the way the program reads it:
 ``render`` keeps the packet as it was and puts in this version's instructions, assembled by the same functions a
 job uses (with the same added parts: mechanical fixes, a focused repair round, a retry), and output schema; a note
 the earlier answer got from the validator is left out. It knows a chunk's review, a split card's review and the
-merge check.
+merge check. A chunk's review packet gets the program's questions on its cards (``program_questions``) when an
+older job did not ask them, as a job of this version would; the cards of other chunks a card names are shown as the
+packet had them (their propositions need the job's state).
 
 ``read`` first runs the program's checks of the answer that need only the packet: the types against the schema,
 every card judged once, the notes' kinds, a split review's ``restates`` and ``matches``, the rule of a focused
@@ -31,7 +33,7 @@ from pathlib import Path
 
 from secondbrain import review_notes, schemas
 from secondbrain.executors.base import render_task_text
-from secondbrain.pipelines import ingest, source_check, split
+from secondbrain.pipelines import cardlint, ingest, source_check, split
 
 #: Each kind of task: the heading its instructions start with, and its schema.
 KINDS = {
@@ -64,6 +66,9 @@ def render(text: str) -> str:
         instructions = ingest.split_review_prompt(job_id)
     else:
         instructions = ingest.review_prompt(job_id, **{k: heading in text for k, heading in PARTS.items()})
+        asked = cardlint.of_cards((packet.get('candidate') or {}).get('cards'))
+        if asked and 'program_questions' not in packet:  # as a job of this version asks them
+            packet = {**packet, 'program_questions': asked}
     return render_task_text(instructions, packet, KINDS[kind][1])
 
 
@@ -78,11 +83,14 @@ def checked(task_text: str, answer) -> tuple[str, dict]:
         return kind, split.validate_review(copy.deepcopy(answer), card=card, existing=len(existing))
     candidate = packet.get('candidate') or {}
     domains = [d.get('slug') for d in packet.get('domains') or [] if isinstance(d, dict)]
-    review = ingest.validate_review(candidate, copy.deepcopy(answer), set(packet.get('candidate_cards') or {}), domains)
+    asked = packet.get('program_questions') or {}  # what this packet asked; an older one asked nothing
+    review = ingest.validate_review(candidate, copy.deepcopy(answer), set(packet.get('candidate_cards') or {}), domains,
+                                    asked=asked)
     problems = ingest.focused_problems(review) if PARTS['focused'] in task_text else []
     if problems:
         raise ValueError('Review rejected by validation:\n- ' + '\n- '.join(problems))
-    return kind, {**review, 'cards': [review_notes.turned(r) for r in review.get('cards') or []]}
+    return kind, {**review, 'cards': [cardlint.turned(review_notes.turned(r), asked.get(r.get('slug'), []))
+                                      for r in review.get('cards') or []]}
 
 
 def read(task_text: str, answer) -> list[str]:

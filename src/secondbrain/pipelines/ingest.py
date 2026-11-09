@@ -44,7 +44,7 @@ from ..textnorm import plain, same_text
 from ..vault import Card, append_list_items, parse_note, read_snapshot
 from .. import retrieval
 from . import amend as amends
-from . import answerfix, card_diagrams, chunking, notes, source_check, split
+from . import answerfix, cardlint, card_diagrams, chunking, notes, source_check, split
 from .chunking import chunk_text
 from .routing import route
 
@@ -1012,6 +1012,9 @@ def review_packet(root: Path, state: dict, packet: dict, slot: str) -> dict:
            **({'placement': packet['placement']} if packet.get('placement') else {}),
            # what the program changed in the answer, writing no knowledge text, and the cards it left out
            **_program_view(root, state, slot, candidate)}
+    asked = cardlint.of_cards(candidate.get('cards'))
+    if asked:  # the program's questions on the cards, for the reviewer to answer yes or no (pipelines.cardlint)
+        out['program_questions'] = asked
     if rnd:
         kept = _accepted_so_far(root, state, base, rnd)
         refiled = {c.get('slug') for c in candidate.get('cards', []) if isinstance(c, dict)}
@@ -1360,7 +1363,7 @@ def _repeated_targets(catalog: dict, cards: list) -> list[str]:
 
 
 @schemas.shape_checked(schemas.REVIEW_CARDS, what='review')
-def validate_review(candidate: dict, review: dict, existing_ids: set, domains=()) -> dict:
+def validate_review(candidate: dict, review: dict, existing_ids: set, domains=(), asked: dict | None = None) -> dict:
     """Shape checks of a review, and the values the program requires.
 
     A card is accepted (its content is right) or revised. Every accepted card
@@ -1373,6 +1376,7 @@ def validate_review(candidate: dict, review: dict, existing_ids: set, domains=()
     extends, so the pair is linked when that card cannot take it.
     """
     errors = []
+    asked = cardlint.of_cards(candidate.get('cards')) if asked is None else asked
     if not isinstance(review, dict):
         raise IngestAnswerError('review must be a JSON object')
     slugs = [c['slug'] for c in candidate.get('cards', [])]
@@ -1411,6 +1415,7 @@ def validate_review(candidate: dict, review: dict, existing_ids: set, domains=()
         # a revised card's level is not read: it is judged again once the card is right
         errors += _conflict_errors(row['slug'], row.get('conflicts'), existing_ids)
         errors += review_notes.problems(row.get('notes'), row['slug'], review_notes.CARD_CATEGORIES)
+        errors += cardlint.answer_problems(row, asked.get(row['slug'], []))
     if sorted(seen) != sorted(slugs):
         errors.append('the review must judge every candidate card exactly once')
     keys = [(t.get('domain'), t.get('pillar'), t.get('name')) for t in candidate.get('new_topics', [])]
@@ -1706,7 +1711,10 @@ def _validate_submission(packet: dict, payload: dict, *, role: str, candidate=No
         review = _made_amends(root, packet, state, chunk, candidate, review, existing_domains)
         # an accepted card with a note of a blocking kind is sent back, the note its reason (D-18 3); it is stored
         # so, with what the reviewer answered under `turned`, and every later step reads a revise
-        return {**review, 'cards': [review_notes.turned(r) for r in review.get('cards') or []]}
+        # and one that answers yes to a question of the program on it, as unreadable (pipelines.cardlint)
+        asked = cardlint.of_cards(candidate.get('cards'))
+        return {**review, 'cards': [cardlint.turned(review_notes.turned(r), asked.get(r.get('slug'), []))
+                                    for r in review.get('cards') or []]}
     base, rnd = _base(chunk), _round(chunk)
     kept = _accepted_so_far(root, state, base, rnd) if rnd else {}
     others = _other_cards(root, state, packet, base)
