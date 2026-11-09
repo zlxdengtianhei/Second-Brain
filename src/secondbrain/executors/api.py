@@ -103,11 +103,6 @@ def read_answer(text: str, *, tex_backslashes: bool = False) -> tuple[dict | Non
     return None, None
 
 
-def parse_json_text(text: str, *, tex_backslashes: bool = False) -> dict | None:
-    """The JSON object in a model's text answer, or None (:func:`read_answer`)."""
-    return read_answer(text, tex_backslashes=tex_backslashes)[0]
-
-
 def json_problem(text: str) -> str:
     """Why ``text`` is not a JSON object: the parser's message and the text around the error."""
     if not isinstance(text, str) or not text.strip():

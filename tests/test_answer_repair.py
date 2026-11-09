@@ -21,7 +21,7 @@ import pytest
 from secondbrain import cli, config, jobs, schemas
 from secondbrain.config import ReviewPolicy
 from secondbrain.executors import FakeExecutor
-from secondbrain.executors.api import parse_json_text
+from secondbrain.executors.api import read_answer
 from secondbrain.executors.host import HostExecutor
 from secondbrain.pipelines import answerfix, ingest
 from secondbrain.service import Service
@@ -134,7 +134,7 @@ def test_one_code_fence_around_the_whole_answer_is_taken_off_and_nothing_else(te
 
 
 def test_an_answer_written_with_a_literal_backslash_n_is_still_no_json():
-    assert parse_json_text('```json\\n{\\n"cards": []\\n}\\n```') is None
+    assert read_answer('```json\\n{\\n"cards": []\\n}\\n```')[0] is None
 
 
 # --- in a job: the lantern-queue fixture, one chunk -----------------------------------------------------------------

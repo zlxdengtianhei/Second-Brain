@@ -605,10 +605,10 @@ def test_a_card_no_paragraph_cites_is_listed_at_the_end_of_the_article(vault_roo
 def test_a_literal_backslash_n_outside_formulas_is_a_finding(vault_root):
     """Second verdict, not blocking 7: export reads TeX backslashes leniently (D-13), so a line-break escape before a
     letter in an answer comes in as a backslash and an n; the program check sends such a paragraph back."""
-    from secondbrain.executors.api import parse_json_text
+    from secondbrain.executors.api import read_answer
     index = checks.CardIndex.from_input(jobs.read_input(vault_root, pipeline.prepare(vault_root, domain=DOMAIN)["job_id"]))
     # strict JSON fails on the raw \mid, so the answer is read again with TeX backslashes doubled (D-13)
-    text = parse_json_text('{"p": "第一行\\nline two，记作 $a\\mid b$。[[合成卡 001]]"}', tex_backslashes=True)["p"]
+    text = read_answer('{"p": "第一行\\nline two，记作 $a\\mid b$。[[合成卡 001]]"}', tex_backslashes=True)[0]["p"]
     assert "\\nline" in text
     assert [f["code"] for f in checks.check_paragraph("p1.1", text, index)
             if f["code"] == "literal_newline"] == ["literal_newline"]

@@ -14,7 +14,7 @@ import httpx
 import pytest
 
 from secondbrain import cli, config, jobs
-from secondbrain.executors.api import ApiExecutor, parse_json_text
+from secondbrain.executors.api import ApiExecutor, read_answer
 from secondbrain.executors.base import Task
 from secondbrain.executors.factory import build
 from secondbrain.gates import model_family
@@ -26,6 +26,11 @@ from tests.ingest_helpers import (DIMMING_IR, SOURCE_NAME, build_ingest_vault, d
 HTTP = Path(__file__).parent / 'fixtures' / 'http'
 KEY = 'sk-test-not-a-real-key'
 SCHEMA = {'type': 'object', 'required': ['ok'], 'properties': {'ok': {'type': 'boolean'}}}
+
+
+def parse_json_text(text, **kw):
+    """The object of the one reading of an answer (the package's own helper of this name is retired)."""
+    return read_answer(text, **kw)[0]
 
 
 def fixture(name):
