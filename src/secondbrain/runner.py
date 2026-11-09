@@ -166,22 +166,18 @@ def finish_call(root: Path, task: Task, result: Result) -> Result:
     if result.status == 'awaiting_submission':
         _record_handoff(root, job_id, task.run_id, result.handoff or {})
         raise AwaitingSubmission(result.handoff or {})
-    if result.status != 'completed' or not isinstance(result.output, dict):
-        error = dict(result.error or {'code': INVALID_OUTPUT, 'message': 'executor returned no JSON object',
-                                      'retryable': True})
-        if error.get('code') == INVALID_OUTPUT:  # an answer of the wrong shape: counted at the gate, like a refusal
-            jobs.refuse(root, job_id, task.run_id, role=task.role, message=str(error.get('message', '')),
-                        fault=error.get('program_error'))
-            error['counted'] = True
+    answered = result.status == 'completed' and isinstance(result.output, dict)
+    error = dict(result.error or {'code': INVALID_OUTPUT, 'message': 'executor returned no JSON object',
+                                  'retryable': True})
+    if not answered and error.get('code') != INVALID_OUTPUT:  # no answer came (transport, provider): not counted
         jobs.fail_run(root, job_id, task.run_id, error=error)
         raise ExecutorFailure(error)
-    try:
-        jobs.submit(root, job_id, result.output, role=task.role, run_id=task.run_id,
-                    model_reported=result.model_reported, attestation=result.attestation,
-                    usage=result.usage, unwrapped=result.unwrapped)
-    except ValueError as exc:  # refused at the gate; ``counted``: already counted against the slot's budget there
-        error = {'code': INVALID_OUTPUT, 'message': str(exc), 'retryable': True,
-                 **({'counted': True} if getattr(exc, 'counted', False) else {})}
+    try:  # an answer, or one the executor could not read: the one entry point takes it, or refuses and counts it
+        jobs.receive(root, job_id, task.run_id, role=task.role, result=result)
+    except ValueError as exc:  # refused there (``counted``, the run failed there) or a conflict of the run (neither)
+        if getattr(exc, 'counted', False):
+            raise ExecutorFailure(exc.error) from exc
+        error = {'code': INVALID_OUTPUT, 'message': str(exc), 'retryable': True}
         jobs.fail_run(root, job_id, task.run_id, error=error)
         raise ExecutorFailure(error) from exc
     return result
@@ -294,7 +290,7 @@ def _run_locked(root: Path, job_id: str, *, producer: Executor, reviewer: Execut
         text = (head + '\n' + prompt(spec.produce_prompt) + '\n' + prompt('repair.md')
                 + '\n```json\n' + json.dumps({'review_findings': rejected}, ensure_ascii=False) + '\n```\n')
         repair_packet = {'input': {k: v for k, v in packet.items() if k != 'repair_feedback'},
-                         'previous_candidate': candidate}
+                         'previous_candidate': jobs.as_given(candidate)}
         jobs._internal_update(root, job_id, repair_round=int(state.get('repair_round', 0)) + 1)
         _produce(root, job_id, producer, text, repair_packet, spec, packet, step='repair')
         raise _ContinueJob()

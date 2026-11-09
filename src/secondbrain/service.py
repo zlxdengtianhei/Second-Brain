@@ -177,6 +177,7 @@ class Service:
                 seen[key] = {'owner_reason': 'pending', 'kind': 'program_error', 'job_id': state['job_id'],
                              'job_kind': state.get('kind'), 'slot': key[0], 'role': key[1], 'step': key[2],
                              'error': row.get('type'), 'message': row.get('message'), 'run_id': row.get('run_id'),
+                             **({'stage': row['stage']} if row.get('stage') else {}),
                              'times': seen.get(key, {}).get('times', 0) + 1,
                              'detail': 'the program failed while it read or checked an answer; the answer was '
                                        'counted as refused, and asking again will not help until the program is '
@@ -296,11 +297,13 @@ class Service:
             raise ValueError('query must not be empty and limit must be 1-50')
         return search(self.root, self.snapshot(), query, limit=limit)
 
-    def submit(self, job_id: str, payload: dict, *, role: str, run_id: str,
-               model: str | None = None, unwrapped: str | None = None):
-        """Submit a host-mode run output; validated, never written to knowledge."""
-        return jobs.submit(self.root, job_id, payload, role=role, run_id=run_id,
-                           model_reported=model, attestation='self_reported', unwrapped=unwrapped)
+    def submit(self, job_id: str, payload=None, *, role: str, run_id: str, model: str | None = None,
+               raw: bytes | None = None):
+        """Submit a host-mode run's answer, an object (``payload``) or a file's bytes (``raw``), through the one entry
+        point (:func:`jobs.receive`): checked, counted when refused, never written to knowledge."""
+        source = {'raw': raw} if raw is not None else {'answer': payload}
+        return jobs.receive(self.root, job_id, run_id, role=role, model_reported=model,
+                            attestation='self_reported', **source)
 
 
 def _state_size(root: Path) -> dict:

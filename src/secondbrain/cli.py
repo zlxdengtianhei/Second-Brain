@@ -256,22 +256,9 @@ def _job(args, root: Path):
     if args.job_command == 'show':
         return service.job_show(args.id)
     if args.job_command == 'submit':
-        from .executors.api import json_problem, read_answer
-        raw = args.file.read_bytes()
-        try:
-            text = raw.decode('utf-8')
-        except UnicodeDecodeError as exc:  # read like any answer: refused and counted at the gate
-            message = f'the answer file is not UTF-8 text: {exc}'
-            jobs.refuse(root, args.id, args.run_id, role=args.role, message=message)
-            raise ValueError(message) from exc
-        # the one reading of an answer, as an API executor reads it (TeX backslashes for an export's answers)
-        payload, how = read_answer(text, tex_backslashes=jobs.load(root, args.id).get('kind') == 'export')
-        if payload is None:  # counted like any refused answer, against the run's slot
-            message = f'the answer file is not JSON: {json_problem(text)}'
-            jobs.refuse(root, args.id, args.run_id, role=args.role, message=message)
-            raise ValueError(message)
-        return service.submit(args.id, payload, role=args.role, run_id=args.run_id, model=args.model,
-                              unwrapped=how)
+        # the file's bytes go to the one entry point, which reads them as an API executor reads an answer
+        return service.submit(args.id, role=args.role, run_id=args.run_id, model=args.model,
+                              raw=args.file.read_bytes())
     if args.job_command == 'abandon':
         return jobs.abandon_run(root, args.id, args.run_id, reason=args.reason)
     if args.job_command == 'skip-source-check':

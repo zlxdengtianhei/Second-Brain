@@ -48,7 +48,7 @@ KINDS = {'ingest': True, 'export': True, 'classification': True, 'curation': Tru
 #: the returned payload (possibly normalized) is what gets stored.
 #: Every kind that asks a model has one, so each answer is checked here, at the gate, before it is kept: an answer it
 #: refuses is counted against its slot's budget, and any other error while it checks is a fault of the program,
-#: counted the same and kept for the owner (:class:`ProgramFault`).
+#: counted the same and kept for the owner (:class:`Refused`, :func:`receive`).
 SUBMISSION_VALIDATORS = {
     'classification': 'secondbrain.classification:validate_submission',
     'ingest': 'secondbrain.pipelines.ingest:validate_submission',
@@ -341,12 +341,6 @@ def abandon_run(root: Path, job_id: str, run_id: str, *, reason: str) -> dict:
         return run
 
 
-class ProgramFault(ValueError):
-    """The program failed while it read or checked an answer (an error of the program, not of the answer). The answer
-    is refused and counted like any other (:func:`_refused_answer`), and the fault is kept for the owner
-    (``program_errors`` in the job state, listed by ``sb status --owner-items``)."""
-
-
 def fault_of(exc: BaseException) -> dict:
     """What the owner is shown of a program fault: the exception type and its message."""
     return {'type': type(exc).__name__, 'message': str(exc)[:500]}
@@ -433,17 +427,136 @@ def _validator(kind: str):
     return getattr(importlib.import_module(module), name)
 
 
-def submit(root: Path, job_id: str, payload: dict, *, role: str, run_id: str,
-           model_reported: str | None = None, attestation: str = 'self_reported',
-           usage: dict | None = None, unwrapped: str | None = None) -> dict:
-    """Validate and persist one run's output; never writes knowledge.
+#: The largest answer kept, encoded: a larger one is refused (and counted) as any other.
+MAX_ANSWER_BYTES = 8_000_000
 
-    A submission refused here (not a JSON object, or refused by the kind's validator) is counted against its slot's
-    budget (:func:`_refused_answer`), the same count for a host sub-agent and an API run. ``unwrapped``: what the
-    program set aside to read the answer (``fence`` or ``around``, :func:`executors.api.read_answer`); the run records
-    it."""
+#: Fields of an answer that only the program writes into what it keeps (its repairs, the cards it held back, what
+#: the merge check's last answer held, a verdict turned into a revise): a model that copies them from a packet into
+#: its answer would otherwise put the program's words into the record. They are taken out of every answer before it
+#: is checked (:func:`_without_program_fields`), at the top and in each row of ``cards`` and ``items``. (``blocking``
+#: is not among them: a focused review writes it.)
+PROGRAM_WRITTEN = ('program_repairs', 'held_cards', 'held', 'held_carries', 'turned')
+PROGRAM_WRITTEN_IN_ROWS = PROGRAM_WRITTEN
+
+#: The steps of :func:`receive`, in order. An error in the first three is the answer's when it is a ``ValueError``
+#: the program raised on purpose (:func:`_on_purpose`); any other error, and any error from ``record`` on, is the
+#: program's.
+RECEIVE_STEPS = ('read', 'size', 'fields', 'check', 'store', 'record')
+_ANSWER_STEPS = ('read', 'size', 'check')
+_NO_ANSWER = object()
+
+
+class Refused(ValueError):
+    """An answer the gate refused and counted for a fault of the program (:func:`receive`); ``error`` is what an
+    executor reports for it."""
+
+    def __init__(self, message: str, *, given_up: bool = False, fault: dict | None = None):
+        super().__init__(message)
+        self.counted, self.given_up, self.fault = True, given_up, fault
+        self.error = {'code': 'INVALID_OUTPUT', 'message': message[:4000], 'retryable': True, 'counted': True,
+                      **({'program_error': fault} if fault else {})}
+
+
+class _Unread(ValueError):
+    """An answer an executor could not read (its result carries the reason, and the fault when it was the program's)."""
+
+    def __init__(self, message: str, fault: dict | None = None):
+        super().__init__(message)
+        self.fault = fault
+
+
+class _NotAVerdict(Exception):
+    """A check of the run's binding met while an answer is stored (a second, different answer for a submitted run):
+    raised as the conflict it is, never counted."""
+
+    def __init__(self, conflict: Conflict):
+        super().__init__(str(conflict))
+        self.conflict = conflict
+
+
+def _on_purpose(exc: BaseException) -> bool:
+    """Whether a ``ValueError`` is a refusal the program raised on purpose: the last line of its traceback is a
+    ``raise`` statement of this package. One raised by Python or a library while a check ran (``int('x')``, a regular
+    expression, a decoder) is a fault of the program, though it is a ``ValueError`` too."""
+    import traceback
+    frames = traceback.extract_tb(exc.__traceback__)
+    if not frames:
+        return False
+    last = frames[-1]
+    package = os.path.dirname(os.path.abspath(__file__))
+    return os.path.abspath(last.filename).startswith(package + os.sep) and (last.line or '').lstrip().startswith('raise')
+
+
+def _without_program_fields(payload: dict) -> tuple[dict, list[str]]:
+    """``(payload, removed)``: ``payload`` without the fields only the program writes (:data:`PROGRAM_WRITTEN`)."""
+    removed = [k for k in PROGRAM_WRITTEN if k in payload]
+    out = {k: v for k, v in payload.items() if k not in PROGRAM_WRITTEN}
+    for key in ('cards', 'items'):
+        rows = out.get(key)
+        if not isinstance(rows, list):
+            continue
+        kept = []
+        for i, row in enumerate(rows):
+            if isinstance(row, dict) and any(f in row for f in PROGRAM_WRITTEN_IN_ROWS):
+                removed += [f'{key}[{i}].{f}' for f in PROGRAM_WRITTEN_IN_ROWS if f in row]
+                row = {k: v for k, v in row.items() if k not in PROGRAM_WRITTEN_IN_ROWS}
+            kept.append(row)
+        out[key] = kept
+    return out, removed
+
+
+def as_given(candidate: dict) -> dict:
+    """A kept answer as a model may see it again (a redo round's ``previous_candidate``): without the fields only the
+    program writes (:data:`PROGRAM_WRITTEN`), so the model does not copy them back."""
+    return _without_program_fields(candidate)[0] if isinstance(candidate, dict) else candidate
+
+
+def _read(state: dict, raw, answer, result) -> tuple:
+    """``(payload, what was set aside, model_reported, attestation, usage)`` of an answer from one of the three
+    sources: a host's file bytes, an object (MCP, a test), an API executor's result."""
+    from .executors.api import json_problem, read_answer
+    if raw is not None:
+        try:
+            text = raw.decode('utf-8')
+        except UnicodeDecodeError as exc:
+            raise ValueError(f'the answer file is not UTF-8 text: {exc}') from None
+        payload, how = read_answer(text, tex_backslashes=state.get('kind') == 'export')
+        if payload is None:
+            raise ValueError(f'the answer file is not JSON: {json_problem(text)}')
+        return payload, how, None, None, None
+    if result is not None:
+        if result.status != 'completed' or not isinstance(result.output, dict):
+            error = result.error or {}
+            raise _Unread(str(error.get('message') or 'the executor returned no JSON object'),
+                          error.get('program_error'))
+        return result.output, result.unwrapped, result.model_reported, result.attestation, result.usage
+    if not isinstance(answer, dict):
+        raise ValueError(f'a submission must be a JSON object, not {type(answer).__name__}')
+    return answer, None, None, None, None
+
+
+def receive(root: Path, job_id: str, run_id: str, *, role: str, answer=_NO_ANSWER, raw: bytes | None = None,
+            result=None, model_reported: str | None = None, attestation: str = 'self_reported',
+            usage: dict | None = None) -> dict:
+    """The one way an answer of a run is taken, from any of its three sources: a host's answer file (``raw`` bytes,
+    `sb job submit`), an object (``answer``, the MCP tool ``job_submit``), an API executor's result (``result``).
+    Never writes knowledge.
+
+    First the run's binding is checked (the input, the run's role and state, the job, the candidate a review
+    answers): a conflict there is no verdict on the answer and is not counted. Then, in one ``try``, the steps of
+    :data:`RECEIVE_STEPS`: read the answer (the one reading, :func:`executors.api.read_answer`), check its size,
+    take out the fields only the program writes, run the kind's check (:data:`SUBMISSION_VALIDATORS`), store it,
+    record its values (:data:`DECISION_RECORDERS`). An error in any step refuses the answer and counts it against
+    the slot's budget (:func:`_refused_answer`; a host run is closed when the budget is spent, an API run is
+    failed): an error of the answer as the refusal it is, any other as a fault of the program, kept for the owner
+    (``program_errors``, listed by ``sb status --owner-items``). What the failed steps changed is not kept. A refused
+    answer raises a ``ValueError`` marked ``counted`` with its ``error``: the answer's own error as it was raised,
+    a fault of the program as :class:`Refused`."""
     if attestation not in {'provider_response', 'self_reported', 'test'}:
         raise ValueError(f'unknown attestation: {attestation}')
+    sources = (answer is not _NO_ANSWER) + (raw is not None) + (result is not None)
+    if sources != 1:
+        raise TypeError('receive takes one answer: raw bytes, an object, or an executor result')
     with vault_lock(root):
         state = load(root, job_id)
         input_raw = read_state(root, location(job_id, 'input.json'))
@@ -454,14 +567,6 @@ def submit(root: Path, job_id: str, payload: dict, *, role: str, run_id: str,
             raise Conflict('RUN_ROLE_MISMATCH')
         if run['status'] not in {'started', 'submitted'}:
             raise Conflict(f'TERMINAL_RUN: {run["status"]}')
-        if unwrapped:
-            run['unwrapped'] = unwrapped
-        if not isinstance(payload, dict):  # counted like any refused answer
-            message = f'a submission must be a JSON object, not {type(payload).__name__}'
-            _refused_answer(root, job_id, state, run, message)
-            refused = ValueError(message)
-            refused.counted = True
-            raise refused
         chunk = run.get('chunk')
         slot = _slot(state, chunk, create=True)
         if run['status'] == 'started' and _job_write_blocked(root, job_id, state):
@@ -476,84 +581,127 @@ def submit(root: Path, job_id: str, payload: dict, *, role: str, run_id: str,
             raise Conflict('STALE_CANDIDATE')
         packet = json.loads(input_raw)
         frozen = frozen_settings(root, packet)
-        validate = _validator(state['kind'])
-        if validate is not None:
-            try:
+        step, how, written, path = 'read', None, False, location(job_id, 'out', f'{role}-{run_id}.json')
+        try:
+            payload, how, reported, given, used = _read(state, raw, answer, result)
+            model_reported, attestation, usage = reported or model_reported, given or attestation, used or usage
+            if how:
+                run['unwrapped'] = how
+            step = 'size'
+            if len(encoded(payload)) > MAX_ANSWER_BYTES:
+                raise ValueError('the answer is larger than 8 MB; split the work into smaller batches')
+            step = 'fields'
+            payload, removed = _without_program_fields(payload)
+            if removed:
+                run['program_fields_removed'] = removed
+            step = 'check'
+            validate = _validator(state['kind'])
+            if validate is not None:
                 with config.job_settings(frozen):
                     checked = validate(packet, payload, role=role, candidate=candidate,
                                        root=root, chunk=chunk, state=state)
-            except ValueError as exc:
-                # the run keeps each reason, for the job result; the kind counts the refusal against its slot's
-                # budget (``exc.counted`` tells the caller it is counted)
-                _refused_answer(root, job_id, state, run, str(exc), getattr(exc, 'keep', None))
-                exc.counted = True
-                raise
-            except Exception as exc:  # noqa: BLE001 - any error while an answer is checked goes through the gate
-                # the program failed on this answer: refused and counted the same, never taken; kept for the owner
-                message = _record_fault(state, run, fault_of(exc))
-                _refused_answer(root, job_id, state, run, message)
-                refused = ProgramFault(message)
-                refused.counted = True
-                raise refused from exc
-            payload = checked if isinstance(checked, dict) else payload
-        raw = encoded(payload)
-        if len(raw) > 8_000_000:
-            raise ValueError('the result is larger than 8 MB; split the work into smaller batches')
-        path = location(job_id, 'out', f'{role}-{run_id}.json')
-        existing = read_state(root, path)
-        if run['status'] == 'submitted':
-            if existing != raw:
-                raise Conflict('RUN_ALREADY_SUBMITTED')
-            return run['submit_result']
-        if existing is not None and existing != raw:
-            raise Conflict('RUN_ALREADY_SUBMITTED')
-        ref = {'path': path, 'sha256': digest(raw), 'run_id': run_id,
-               'input_sha256': state['input_sha256']}
-        if role == 'reviewer':
-            ref['candidate_sha256'] = run['candidate_sha256']
-        if existing is None:
-            write_json(root, path, payload)
-        if role == 'reviewer':
-            slot['review'] = ref
-            slot['status'] = 'review_submitted'
-        else:
-            slot['candidate'] = ref
-            slot['review'] = None
-            slot['status'] = 'proposed'
-        if chunk is None:
-            state['status'] = slot['status']
-        run.update(status='submitted', output_sha256=ref['sha256'], ended_at=now(),
-                   model_reported=model_reported or run.get('model_reported'),
+                payload = checked if isinstance(checked, dict) else payload
+            raw_out = encoded(payload)
+            if len(raw_out) > MAX_ANSWER_BYTES:
+                raise ValueError('the result is larger than 8 MB; split the work into smaller batches')
+            step = 'store'
+            existing = read_state(root, path)
+            if run['status'] == 'submitted':
+                if existing != raw_out:
+                    raise _NotAVerdict(Conflict('RUN_ALREADY_SUBMITTED'))
+                return run['submit_result']
+            if existing is not None and existing != raw_out:
+                raise _NotAVerdict(Conflict('RUN_ALREADY_SUBMITTED'))
+            ref = {'path': path, 'sha256': digest(raw_out), 'run_id': run_id,
+                   'input_sha256': state['input_sha256']}
+            if role == 'reviewer':
+                ref['candidate_sha256'] = run['candidate_sha256']
+            if existing is None:
+                write_json(root, path, payload)
+                written = True
+            if role == 'reviewer':
+                slot['review'] = ref
+                slot['status'] = 'review_submitted'
+            else:
+                slot['candidate'] = ref
+                slot['review'] = None
+                slot['status'] = 'proposed'
+            if chunk is None:
+                state['status'] = slot['status']
+            run.update(status='submitted', output_sha256=ref['sha256'], ended_at=now(),
+                       model_reported=model_reported or run.get('model_reported'),
+                       attestation=attestation, usage=usage)
+            if role == 'reviewer' and slot['candidate'].get('run_id'):  # a program-made input has no producer
+                producer = load_run(root, job_id, slot['candidate']['run_id'])
+                rules = policy_of(packet)
+                a = gates.model_family(producer.get('model_reported') or producer.get('model_requested'),
+                                       rules.model_families)
+                b = gates.model_family(run.get('model_reported') or run.get('model_requested'),
+                                       rules.model_families)
+                run['same_family'] = a is not None and a == b
+                try:
+                    gates.assess_families(producer, run, rules)
+                except ValueError as exc:
+                    run['independence_error'] = str(exc)
+                if run.get('same_family'):
+                    slot['same_family'] = True
+                    state['same_family'] = True
+            step = 'record'
+            recorder = _recorder(state['kind'])
+            if recorder is not None:
+                entries = list(state.get('decisions') or [])
+                with config.job_settings(frozen):
+                    recorder(packet, payload, role=role, candidate=candidate, root=root, chunk=chunk, state=state,
+                             run=run, entries=entries)
+                state['decisions'] = entries
+            done = {'job_id': job_id, 'run_id': run_id, 'chunk': chunk, 'status': slot['status'],
+                    'artifact': ref, 'written_to_knowledge': False}
+            run['submit_result'] = done
+            write_json(root, run_location(job_id, run_id), run)
+            state['updated_at'] = now()
+            write_json(root, location(job_id), state)
+            return done
+        except _NotAVerdict as conflict:
+            raise conflict.conflict from None
+        except Exception as exc:  # noqa: BLE001 - the one gate: every error while an answer is taken is counted
+            return _refuse_received(root, job_id, run_id, exc, step, how, written and path, result is not None)
+
+
+def _refuse_received(root: Path, job_id: str, run_id: str, exc: BaseException, step: str, how, written,
+                     executor: bool):
+    """The answer of ``run_id`` failed at ``step`` of :func:`receive` with ``exc``: count it, from the state as it
+    was before this answer (what the failed steps changed is dropped, the stored file too), and raise
+    :class:`Refused`. An answer's error is the refusal it is; any other is kept as a fault of the program."""
+    state, run = load(root, job_id), load_run(root, job_id, run_id)
+    if written:
+        remove_state(root, written)
+    if how:
+        run['unwrapped'] = how
+    fault = getattr(exc, 'fault', None) if isinstance(exc, _Unread) else None
+    if fault is None and not (isinstance(exc, ValueError) and step in _ANSWER_STEPS
+                              and (isinstance(exc, _Unread) or step != 'check' or _on_purpose(exc))):
+        fault = {**fault_of(exc), 'stage': step}
+    message = str(exc) if fault is None else _record_fault(state, run, fault)
+    if fault is not None and isinstance(exc, _Unread):
+        message += f' ({exc})'
+    given_up = _refused_answer(root, job_id, state, run, message,
+                               getattr(exc, 'keep', None) if fault is None else None)
+    if executor and run['status'] == 'started':  # an API run takes one answer: refused, it is over
+        run.update(status='failed', ended_at=now(), error={'code': 'INVALID_OUTPUT', 'message': message[:4000],
+                                                           'retryable': True, 'counted': True})
+        write_json(root, run_location(job_id, run['run_id']), run)
+    if fault is None:  # the answer's own error: raised as it is, marked as counted
+        exc.counted, exc.given_up = True, given_up
+        exc.error = {'code': 'INVALID_OUTPUT', 'message': message[:4000], 'retryable': True, 'counted': True}
+        raise exc
+    raise Refused(message, given_up=given_up, fault=fault) from exc
+
+
+def submit(root: Path, job_id: str, payload, *, role: str, run_id: str, model_reported: str | None = None,
+           attestation: str = 'self_reported', usage: dict | None = None) -> dict:
+    """An answer given as an object, through :func:`receive` (the one entry point)."""
+    return receive(root, job_id, run_id, role=role, answer=payload, model_reported=model_reported,
                    attestation=attestation, usage=usage)
-        if role == 'reviewer' and slot['candidate'].get('run_id'):  # a program-made input has no producer
-            producer = load_run(root, job_id, slot['candidate']['run_id'])
-            rules = policy_of(packet)
-            a = gates.model_family(producer.get('model_reported') or producer.get('model_requested'),
-                                   rules.model_families)
-            b = gates.model_family(run.get('model_reported') or run.get('model_requested'),
-                                   rules.model_families)
-            run['same_family'] = a is not None and a == b
-            try:
-                gates.assess_families(producer, run, rules)
-            except ValueError as exc:
-                run['independence_error'] = str(exc)
-            if run.get('same_family'):
-                slot['same_family'] = True
-                state['same_family'] = True
-        recorder = _recorder(state['kind'])
-        if recorder is not None:
-            entries = list(state.get('decisions') or [])
-            with config.job_settings(frozen):
-                recorder(packet, payload, role=role, candidate=candidate, root=root, chunk=chunk, state=state,
-                         run=run, entries=entries)
-            state['decisions'] = entries
-        result = {'job_id': job_id, 'run_id': run_id, 'chunk': chunk, 'status': slot['status'],
-                  'artifact': ref, 'written_to_knowledge': False}
-        run['submit_result'] = result
-        write_json(root, run_location(job_id, run_id), run)
-        state['updated_at'] = now()
-        write_json(root, location(job_id), state)
-        return result
 
 
 def put_program_candidate(root: Path, job_id: str, chunk: str, payload: dict) -> dict:

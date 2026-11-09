@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 from .service import Service
 
@@ -95,8 +96,9 @@ def create_server(root: Path, *, writer: bool = False):
                            placement={'domain': domain, 'pillar': pillar, 'topic': topic})
 
         @server.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, openWorldHint=False))
-        def job_submit(job: str, role: str, run_id: str, payload: dict, model: str | None = None) -> dict:
-            """Submit one run's JSON candidate or review. Validated now; never writes knowledge."""
+        def job_submit(job: str, role: str, run_id: str, payload: Any, model: str | None = None) -> dict:
+            """Submit one run's JSON candidate or review. Validated now; never writes knowledge. An answer that is
+            not a JSON object is refused and counted like any other."""
             result = service.submit(job, payload, role=role, run_id=run_id, model=model)
             return {**result, 'written_to_knowledge': False}
 

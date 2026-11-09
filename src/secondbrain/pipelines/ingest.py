@@ -815,7 +815,7 @@ def producer_packet(root: Path, state: dict, packet: dict, slot: str) -> dict:
         findings = _findings(jobs.artifact(root, state, 'review', prev_slot))
         held = _held_slugs(root, state, base, rnd)  # accepted as the same as existing cards: settled, not kept
         kept = {s: c for s, c in _accepted_so_far(root, state, base, rnd).items() if s not in held}
-        out['previous_candidate'] = previous
+        out['previous_candidate'] = jobs.as_given(previous)  # what the program wrote into it is not shown back
         out['review_findings'] = findings
         out['kept_slugs'] = sorted(kept)
         out['already_settled'] = _settled_rows(root, state, base, rnd)
@@ -951,11 +951,15 @@ def _program_view(root: Path, state: dict, slot: str, candidate: dict) -> dict:
 
 
 def program_repairs(root: Path, state: dict) -> list[dict]:
-    """Every repair the program made to an answer of this job, writing no knowledge text, by slot: a code fence taken
-    off an answer (any role), and the mechanical repairs of the cards of the chunk and split producers
-    (:mod:`.answerfix`)."""
-    out = [{'slot': run.get('chunk'), 'role': run['role'], **_fence_record(run)}
-           for run in jobs.list_runs(root, state['job_id']) if run.get('unwrapped')]
+    """Every repair the program made to an answer of this job, writing no knowledge text, by slot: a code fence or
+    words around the answer taken off, and fields only the program writes taken out (any role), and the mechanical
+    repairs of the cards of the chunk and split producers (:mod:`.answerfix`)."""
+    runs = jobs.list_runs(root, state['job_id'])
+    out = [{'slot': run.get('chunk'), 'role': run['role'], **_fence_record(run)} for run in runs if run.get('unwrapped')]
+    out += [{'slot': run.get('chunk'), 'role': run['role'], 'rule': 'program_fields', 'run_id': run['run_id'],
+             'removed': run['program_fields_removed'],
+             'what': 'the answer carried fields only the program writes; the program took them out before checking it'}
+            for run in runs if run.get('program_fields_removed')]
     for slot, info in sorted((state.get('chunks') or {}).items()):
         if (info.get('candidate') or {}).get('path') and (not _aux_slot(slot) or split.is_slot(_base(slot))):
             out += [{'slot': slot, **r}
@@ -2679,7 +2683,7 @@ def _split_stage(root: Path, job_id: str, packet: dict, settled: list[dict], pro
                 body = {**shown, 'card': item['card'], 'carry': item['carry']}
                 if kind == 'repair':
                     prev = _slot_name(item['slot'], _round(slot) - 1)
-                    body.update(previous_candidate=jobs.artifact(root, state, 'candidate', prev),
+                    body.update(previous_candidate=jobs.as_given(jobs.artifact(root, state, 'candidate', prev)),
                                 review_findings=jobs.artifact(root, state, 'review', prev))
                 text = _prompt('split_card.md', state)
                 feedback = ((state.get('chunks') or {}).get(slot) or {}).get('last_validation_error')

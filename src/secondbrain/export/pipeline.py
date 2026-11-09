@@ -308,7 +308,7 @@ def _plan(root, job_id, state, packet, errors_for, feedback) -> list[tuple]:
                 + json.dumps({'review_findings': revise, 'program_findings': found}, ensure_ascii=False)
                 + '\n```\n')
         repair = dict(write_packet(packet, unit, _previous_paragraph(root, state, packet, i)),
-                      previous_candidate=candidate)
+                      previous_candidate=jobs.as_given(candidate))
         steps.append(('repair', uid, note(uid, 'repair', text), repair, schemas.EXPORT_WRITE, 'producer'))
     if steps or pending:
         return steps
@@ -339,7 +339,7 @@ def _plan(root, job_id, state, packet, errors_for, feedback) -> list[tuple]:
     text = (head + prompt('export_smooth.md') + '\n' + prompt('export_smooth_repair.md') + '\n```json\n'
             + json.dumps({'review_findings': revise}, ensure_ascii=False) + '\n```\n')
     steps.append(('repair', SMOOTH, note(SMOOTH, 'repair', text),
-                  dict(_smooth_packet(root, job_id, state, packet), previous_candidate=candidate),
+                  dict(_smooth_packet(root, job_id, state, packet), previous_candidate=jobs.as_given(candidate)),
                   schemas.EXPORT_SMOOTH, 'producer'))
     return steps
 
