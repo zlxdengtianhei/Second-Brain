@@ -44,7 +44,7 @@ from typing import Any, Callable
 
 from .. import decisions
 from ..overlap import LEVELS, TOPIC_LEVELS, with_problem
-from ..schemas import shape_checked
+from ..schemas import AnswerError, shape_checked
 from ..textnorm import near_same, plain, same_text
 
 SLOT = 'xc01'
@@ -204,7 +204,7 @@ def validate_answer(frozen: dict, payload: Any, closed: Callable[[str, str, str]
     """
     if not isinstance(payload, dict) or not isinstance(payload.get('cards'), list) or \
             not isinstance(payload.get('new_topics'), list):
-        raise ValueError('the answer must be {"cards": [...], "new_topics": [...]}')
+        raise AnswerError('the answer must be {"cards": [...], "new_topics": [...]}')
     errors = []
     cards = {c['slug']: c for c in frozen['cards']}
     patch_cards = {c['slug']: c for g in frozen.get('patch_set') or [] for c in g['from']}
@@ -313,7 +313,7 @@ def validate_answer(frozen: dict, payload: Any, closed: Callable[[str, str, str]
     return payload
 
 
-class Refused(ValueError):
+class Refused(AnswerError):
     """A merge-check answer the program checks refuse; ``problems`` lists each one."""
 
     def __init__(self, problems: list[str]):

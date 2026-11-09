@@ -21,7 +21,7 @@ import re
 from .. import decisions, review_notes
 from ..cards import KINDS
 from ..evidence import check_verbatim
-from ..schemas import shape_checked
+from ..schemas import AnswerError, shape_checked
 from ..textnorm import near_same, same_text
 
 PREFIX = 'sp'
@@ -74,7 +74,7 @@ def validate_card(item: dict, payload, *, text: str, taken: set, catalog_types, 
     the new card may not use.
     """
     if not isinstance(payload, dict) or not isinstance(payload.get('card'), dict):
-        raise ValueError('the answer must be {"card": {...}}')
+        raise AnswerError('the answer must be {"card": {...}}')
     card, errors = payload['card'], []
     slug = card.get('slug')
     if not isinstance(slug, str) or not re.fullmatch(r'[a-z0-9][a-z0-9-]{0,59}', slug) or slug in taken:
@@ -117,7 +117,7 @@ def validate_card(item: dict, payload, *, text: str, taken: set, catalog_types, 
     if any(not isinstance(r, dict) or r.get('type') not in catalog_types for r in card.get('relations') or []):
         errors.append(f'card.relations: type must be one of {sorted(catalog_types)}')
     if errors:
-        raise ValueError('Split card rejected by validation:\n- ' + '\n- '.join(errors))
+        raise AnswerError('Split card rejected by validation:\n- ' + '\n- '.join(errors))
     return payload
 
 
@@ -130,9 +130,9 @@ def validate_review(payload, *, card: dict | None = None, existing: int | None =
     if not isinstance(payload, dict) or payload.get('decision') not in ('accept', 'revise') or \
             not isinstance(payload.get('restates'), bool) or not isinstance(payload.get('reason'), str) or \
             not payload['reason'].strip():
-        raise ValueError('the review must be {"decision": "accept"|"revise", "restates": true|false, "reason": "..."}')
+        raise AnswerError('the review must be {"decision": "accept"|"revise", "restates": true|false, "reason": "..."}')
     if payload['decision'] == 'accept' and payload['restates']:
-        raise ValueError('a card that restates the propositions of the card it narrows is not accepted; revise it')
+        raise AnswerError('a card that restates the propositions of the card it narrows is not accepted; revise it')
     wrong = review_notes.problems(payload.get('notes'), 'review')
     matched = []
     if card is not None:
@@ -153,7 +153,7 @@ def validate_review(payload, *, card: dict | None = None, existing: int | None =
             else:
                 matched.append((r.get('proposition'), ref))
     if wrong:
-        raise ValueError('the review was rejected by validation:\n- ' + '\n- '.join(wrong))
+        raise AnswerError('the review was rejected by validation:\n- ' + '\n- '.join(wrong))
     if matched and payload['decision'] == 'accept':  # D-22: a proposition the existing card says goes back
         said = '; '.join(f'{p} says what the existing card {e} says' for p, e in matched)
         payload = {**payload, 'decision': 'revise', 'restates': True,

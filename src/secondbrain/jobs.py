@@ -26,6 +26,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from . import config, gates
+from .schemas import AnswerError
 from . import layout as layouts
 from .store import (Change, Conflict, _state_dir, apply_changes, digest, job_name,
                     read_state, relative, remove_state, vault_lock, write_json)
@@ -438,9 +439,9 @@ MAX_ANSWER_BYTES = 8_000_000
 PROGRAM_WRITTEN = ('program_repairs', 'held_cards', 'held', 'held_carries', 'turned')
 PROGRAM_WRITTEN_IN_ROWS = PROGRAM_WRITTEN
 
-#: The steps of :func:`receive`, in order. An error in the first three is the answer's when it is a ``ValueError``
-#: the program raised on purpose (:func:`_on_purpose`); any other error, and any error from ``record`` on, is the
-#: program's.
+#: The steps of :func:`receive`, in order. An error in ``read``, ``size`` or ``check`` is the answer's when it is an
+#: :class:`~secondbrain.schemas.AnswerError`, which a check raises on purpose to refuse an answer; any other error,
+#: a ``ValueError`` included, and any error in the other steps, is the program's.
 RECEIVE_STEPS = ('read', 'size', 'fields', 'check', 'store', 'record')
 _ANSWER_STEPS = ('read', 'size', 'check')
 _NO_ANSWER = object()
@@ -457,7 +458,7 @@ class Refused(ValueError):
                       **({'program_error': fault} if fault else {})}
 
 
-class _Unread(ValueError):
+class _Unread(AnswerError):
     """An answer an executor could not read (its result carries the reason, and the fault when it was the program's)."""
 
     def __init__(self, message: str, fault: dict | None = None):
@@ -472,19 +473,6 @@ class _NotAVerdict(Exception):
     def __init__(self, conflict: Conflict):
         super().__init__(str(conflict))
         self.conflict = conflict
-
-
-def _on_purpose(exc: BaseException) -> bool:
-    """Whether a ``ValueError`` is a refusal the program raised on purpose: the last line of its traceback is a
-    ``raise`` statement of this package. One raised by Python or a library while a check ran (``int('x')``, a regular
-    expression, a decoder) is a fault of the program, though it is a ``ValueError`` too."""
-    import traceback
-    frames = traceback.extract_tb(exc.__traceback__)
-    if not frames:
-        return False
-    last = frames[-1]
-    package = os.path.dirname(os.path.abspath(__file__))
-    return os.path.abspath(last.filename).startswith(package + os.sep) and (last.line or '').lstrip().startswith('raise')
 
 
 def _without_program_fields(payload: dict) -> tuple[dict, list[str]]:
@@ -519,10 +507,10 @@ def _read(state: dict, raw, answer, result) -> tuple:
         try:
             text = raw.decode('utf-8')
         except UnicodeDecodeError as exc:
-            raise ValueError(f'the answer file is not UTF-8 text: {exc}') from None
+            raise AnswerError(f'the answer file is not UTF-8 text: {exc}') from None
         payload, how = read_answer(text, tex_backslashes=state.get('kind') == 'export')
         if payload is None:
-            raise ValueError(f'the answer file is not JSON: {json_problem(text)}')
+            raise AnswerError(f'the answer file is not JSON: {json_problem(text)}')
         return payload, how, None, None, None
     if result is not None:
         if result.status != 'completed' or not isinstance(result.output, dict):
@@ -531,7 +519,7 @@ def _read(state: dict, raw, answer, result) -> tuple:
                           error.get('program_error'))
         return result.output, result.unwrapped, result.model_reported, result.attestation, result.usage
     if not isinstance(answer, dict):
-        raise ValueError(f'a submission must be a JSON object, not {type(answer).__name__}')
+        raise AnswerError(f'a submission must be a JSON object, not {type(answer).__name__}')
     return answer, None, None, None, None
 
 
@@ -548,8 +536,8 @@ def receive(root: Path, job_id: str, run_id: str, *, role: str, answer=_NO_ANSWE
     take out the fields only the program writes, run the kind's check (:data:`SUBMISSION_VALIDATORS`), store it,
     record its values (:data:`DECISION_RECORDERS`). An error in any step refuses the answer and counts it against
     the slot's budget (:func:`_refused_answer`; a host run is closed when the budget is spent, an API run is
-    failed): an error of the answer as the refusal it is, any other as a fault of the program, kept for the owner
-    (``program_errors``, listed by ``sb status --owner-items``). What the failed steps changed is not kept. A refused
+    failed): an :class:`~secondbrain.schemas.AnswerError` a check raised as the refusal it is, any other error as a
+    fault of the program, kept for the owner (``program_errors``, listed by ``sb status --owner-items``). What the failed steps changed is not kept. A refused
     answer raises a ``ValueError`` marked ``counted`` with its ``error``: the answer's own error as it was raised,
     a fault of the program as :class:`Refused`."""
     if attestation not in {'provider_response', 'self_reported', 'test'}:
@@ -589,7 +577,7 @@ def receive(root: Path, job_id: str, run_id: str, *, role: str, answer=_NO_ANSWE
                 run['unwrapped'] = how
             step = 'size'
             if len(encoded(payload)) > MAX_ANSWER_BYTES:
-                raise ValueError('the answer is larger than 8 MB; split the work into smaller batches')
+                raise AnswerError('the answer is larger than 8 MB; split the work into smaller batches')
             step = 'fields'
             payload, removed = _without_program_fields(payload)
             if removed:
@@ -603,7 +591,7 @@ def receive(root: Path, job_id: str, run_id: str, *, role: str, answer=_NO_ANSWE
                 payload = checked if isinstance(checked, dict) else payload
             raw_out = encoded(payload)
             if len(raw_out) > MAX_ANSWER_BYTES:
-                raise ValueError('the result is larger than 8 MB; split the work into smaller batches')
+                raise AnswerError('the result is larger than 8 MB; split the work into smaller batches')
             step = 'store'
             existing = read_state(root, path)
             if run['status'] == 'submitted':
@@ -671,15 +659,15 @@ def _refuse_received(root: Path, job_id: str, run_id: str, exc: BaseException, s
                      executor: bool):
     """The answer of ``run_id`` failed at ``step`` of :func:`receive` with ``exc``: count it, from the state as it
     was before this answer (what the failed steps changed is dropped, the stored file too), and raise
-    :class:`Refused`. An answer's error is the refusal it is; any other is kept as a fault of the program."""
+    :class:`Refused`. An :class:`~secondbrain.schemas.AnswerError` is the refusal it is; any other error is kept as a
+    fault of the program."""
     state, run = load(root, job_id), load_run(root, job_id, run_id)
     if written:
         remove_state(root, written)
     if how:
         run['unwrapped'] = how
     fault = getattr(exc, 'fault', None) if isinstance(exc, _Unread) else None
-    if fault is None and not (isinstance(exc, ValueError) and step in _ANSWER_STEPS
-                              and (isinstance(exc, _Unread) or step != 'check' or _on_purpose(exc))):
+    if fault is None and not (isinstance(exc, AnswerError) and step in _ANSWER_STEPS):
         fault = {**fault_of(exc), 'stage': step}
     message = str(exc) if fault is None else _record_fault(state, run, fault)
     if fault is not None and isinstance(exc, _Unread):

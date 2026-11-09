@@ -190,7 +190,13 @@ def type_problems(value, schema: dict, where: str = '', *, null: bool = True) ->
     return out
 
 
-class ShapeError(ValueError):
+class AnswerError(ValueError):
+    """What a check raises on purpose to refuse an answer for what the answer says. Only this type (and its
+    subclasses) is an answer's refusal when an answer is taken (``jobs.receive``); any other error while an answer
+    is taken, a ``ValueError`` included, is a fault of the program."""
+
+
+class ShapeError(AnswerError):
     """An answer that does not have the shape its output schema gives: refused and asked again, like any answer
     the validators refuse."""
 

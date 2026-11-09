@@ -26,6 +26,7 @@ from . import classification as cls, jobs
 from . import layout as layouts
 from .catalog import category_pairs, taxonomy_packet
 from .evidence import check_verbatim
+from .schemas import AnswerError
 from .classification import projection_changes, taxonomy_fingerprint, writable_snapshot
 from .store import Change, Conflict, digest, read_bytes
 from .vault import (Card, card_packet, parse_note,
@@ -103,30 +104,30 @@ def validate(packet, proposal):
     """Coverage, version and quote rules as in classification; an ``assigned`` row must name the bound destination domain and one of its pillar/topic pairs."""
     rows = proposal.get('items')
     if not isinstance(rows, list):
-        raise ValueError('A move proposal must be {items:[...]}')
+        raise AnswerError('A move proposal must be {items:[...]}')
     expected = {c['id']: c for c in packet['cards']}
     ids = [r.get('id') for r in rows if isinstance(r, dict)]
     if len(ids) != len(rows) or len(ids) != len(set(ids)) or set(ids) != set(expected):
-        raise ValueError('A move proposal must cover every id of the batch exactly once')
+        raise AnswerError('A move proposal must cover every id of the batch exactly once')
     for row in rows:
         card = expected[row['id']]
         if row.get('input_sha256') != card['sha256']:
-            raise Conflict(f'Wrong input_sha256 in the proposal: {row["id"]}')
+            raise cls.AnswerConflict(f'Wrong input_sha256 in the proposal: {row["id"]}')
         if row.get('disposition') not in {'assigned', 'taxonomy_gap'}:
-            raise ValueError(f'No valid disposition: {row["id"]}')
+            raise AnswerError(f'No valid disposition: {row["id"]}')
         problem = check_verbatim(card['body'], row.get('evidence_quote'))
         if problem:
-            raise ValueError(f'Evidence is not a verbatim quote of the card body: {row["id"]} ({problem})')
+            raise AnswerError(f'Evidence is not a verbatim quote of the card body: {row["id"]} ({problem})')
         if not isinstance(row.get('reason'), str) or not row['reason'].strip():
-            raise ValueError(f'Move reason missing: {row["id"]}')
+            raise AnswerError(f'Move reason missing: {row["id"]}')
         if row['disposition'] != 'assigned':
             continue
         if row.get('domain') != packet['destinations'].get(row['id']):
-            raise ValueError(f'An assigned item must use the target domain bound at prepare: {row["id"]}')
+            raise AnswerError(f'An assigned item must use the target domain bound at prepare: {row["id"]}')
         if not row.get('pillar') or not row.get('topic'):
-            raise ValueError(f'Fill both pillar and topic, not only one: {row["id"]}')
+            raise AnswerError(f'Fill both pillar and topic, not only one: {row["id"]}')
         if (row['pillar'], row['topic']) not in _packet_pairs(packet, row['domain']):
-            raise ValueError(f"Classification is not in this domain's taxonomy: {row['id']}")
+            raise AnswerError(f"Classification is not in this domain's taxonomy: {row['id']}")
     return rows
 
 

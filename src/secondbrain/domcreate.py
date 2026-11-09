@@ -21,6 +21,7 @@ from .catalog import validate_catalog
 from .classification import writable_snapshot
 from .curation import _normalise_taxonomy, _projection_changes, _serialise_taxonomy
 from .relocate import _relocated_bytes, _registry_change
+from .schemas import AnswerError
 from .store import Change, Conflict, digest, read_bytes
 from .vault import read_snapshot
 
@@ -87,10 +88,10 @@ def prepare(root: Path, *, domain: str, moc: str, question: str, track: str,
 
 def validate(packet: dict, proposal: dict) -> dict:
     if not isinstance(proposal, dict):
-        raise ValueError('A new-domain proposal must be a JSON object')
+        raise AnswerError('A new-domain proposal must be a JSON object')
     for key in ('domain', 'moc', 'question', 'track'):
         if proposal.get(key) != packet[key]:
-            raise ValueError(f'Proposal {key} differs from the value the job set: {proposal.get(key)!r}')
+            raise AnswerError(f'Proposal {key} differs from the value the job set: {proposal.get(key)!r}')
     tx = proposal.get('taxonomy')
     _normalise_taxonomy(tx, packet['domain'], packet['moc'])
     pairs = set()
@@ -100,33 +101,33 @@ def validate(packet: dict, proposal: dict) -> dict:
     evidence = {c['id'] for c in packet['evidence_cards']}
     migrations = proposal.get('migrations')
     if not isinstance(migrations, list) or not migrations:
-        raise ValueError('migrations must be a non-empty list')
+        raise AnswerError('migrations must be a non-empty list')
     seen = set()
     for row in migrations:
         cid = row.get('id')
         if cid not in evidence:
-            raise ValueError(f'Card to move is not among the evidence cards: {cid}')
+            raise AnswerError(f'Card to move is not among the evidence cards: {cid}')
         if cid in seen:
-            raise ValueError(f'Card to move repeats: {cid}')
+            raise AnswerError(f'Card to move repeats: {cid}')
         seen.add(cid)
         if (row.get('pillar'), row.get('topic')) not in pairs:
-            raise ValueError(f'Move target is not in the proposed taxonomy: {cid} → {row.get("pillar")}/{row.get("topic")}')
+            raise AnswerError(f'Move target is not in the proposed taxonomy: {cid} → {row.get("pillar")}/{row.get("topic")}')
     relation_types = list(packet['catalog'].get('relation_types') or [])
     inverse = dict(packet['catalog'].get('inverse_relations') or {})
     words = proposal.get('relation_words') or []
     if not isinstance(words, list):
-        raise ValueError('relation_words must be a list')
+        raise AnswerError('relation_words must be a list')
     for w in words:
         t, inv, gloss = w.get('type'), w.get('inverse'), w.get('gloss')
         if not all(isinstance(x, str) and x.strip() for x in (t or '', inv or '', gloss or '')):
-            raise ValueError('Every relation_words item needs non-empty type, inverse and gloss')
+            raise AnswerError('Every relation_words item needs non-empty type, inverse and gloss')
         if t in relation_types or t in inverse or inv in relation_types or inv in inverse:
-            raise ValueError(f'Relation word clashes with the existing ones: {t}/{inv}')
+            raise AnswerError(f'Relation word clashes with the existing ones: {t}/{inv}')
         if t == inv:
-            raise ValueError(f'Relation word equals its own inverse: {t}')
+            raise AnswerError(f'Relation word equals its own inverse: {t}')
     for key in ('boundary_reason', 'difference_reason', 'impact_reason'):
         if not isinstance(proposal.get(key), str) or not proposal[key].strip():
-            raise ValueError(f'{key} must be specific')
+            raise AnswerError(f'{key} must be specific')
     return proposal
 
 

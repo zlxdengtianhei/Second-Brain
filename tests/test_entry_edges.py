@@ -3,8 +3,10 @@
 - An answer file that is not UTF-8 text is refused and counted, and the host run closes when the budget is spent.
 - The split card's reviewer sees what the program repaired in the card.
 - A host's answer to an export reads raw TeX backslashes as the API executor does; other jobs do not.
-- A ``ValueError`` the program raised on purpose in a check is the answer's refusal; one that Python or a library
-  raised while the check ran (``int('x')``) is a fault of the program, counted the same and listed for the owner.
+- Only an ``AnswerError``, which a check raises on purpose for what the answer says, is the answer's refusal. A
+  ``ValueError`` that Python or a library raised while the check ran (``int('x')``), or one the program raised
+  because its own state was wrong, is a fault of the program, counted the same and listed for the owner; every
+  ``raise`` in the registered checks is an ``AnswerError`` but for the few that name such a state.
 - The same text is taken or refused alike through an API executor and through `sb job submit` (the review's probe,
   run through the CLI).
 
@@ -12,8 +14,10 @@ The cards, answers and jobs are invented.
 """
 from __future__ import annotations
 
+import ast
 import copy
 import importlib
+import inspect
 import json
 from types import SimpleNamespace
 
@@ -23,6 +27,7 @@ from secondbrain import cli, jobs
 from secondbrain.config import ReviewPolicy
 from secondbrain.executors import api_openai
 from secondbrain.executors.host import HostExecutor
+from secondbrain.schemas import AnswerError
 from secondbrain.pipelines import ingest, split
 from secondbrain.service import Service
 from secondbrain.store import Conflict
@@ -105,26 +110,77 @@ def test_a_host_answer_reads_raw_tex_backslashes_only_for_an_export(tmp_path, mo
             Service(root).submit(job_id, role='producer', run_id='r1', raw=RAW_TEX)
 
 
-@pytest.mark.parametrize('how, program', [('on purpose', False), ('by Python', True)])
-def test_a_value_error_the_program_raised_on_purpose_is_a_refusal_and_any_other_a_fault(tmp_path, monkeypatch, how,
-                                                                                        program):
-    """The chunk's own check refuses a name given as a number on purpose (a ``raise`` of the package); a check that
-    calls ``int('x')`` raises Python's ``ValueError``, which is the program's fault."""
+@pytest.mark.parametrize('how, program', [('on purpose', False), ('by Python', True), ('program state', True)])
+def test_only_an_answer_error_is_the_answers_refusal_and_any_other_value_error_a_fault(tmp_path, monkeypatch, how,
+                                                                                    program):
+    """The chunk's own check refuses a name given as a number on purpose (an ``AnswerError``); a check that calls
+    ``int('x')`` raises Python's ``ValueError``; a check called without the slot the program binds every ingest run
+    to raises the package's own ``IngestError`` on a line that is a ``raise`` (the old guess took it for the
+    answer's). Both of the last are the program's fault."""
     root = build_vault(tmp_path / 'vault')
     jobs.create(root, 'ing', 'ingest', {'settings': None, 'cards': []})
+    real = ingest.validate_submission
     if how == 'by Python':
         monkeypatch.setattr(ingest, 'validate_submission', lambda packet, payload, **kw: int(payload['cards']))
+    elif how == 'program state':
+        monkeypatch.setattr(ingest, 'validate_submission',
+                            lambda packet, payload, **kw: real(packet, payload, **{**kw, 'chunk': None}))
     jobs.start_run(root, 'ing', role='producer', step='produce', executor='host', run_id='r1', model_requested='m',
                    chunk='c01')
     with pytest.raises(ValueError) as refused:
         Service(root).submit('ing', {'cards': 'x'}, role='producer', run_id='r1')
     assert refused.value.counted
+    assert isinstance(refused.value, AnswerError) is not program
     faults = [i for i in Service(root).owner_items() if i.get('kind') == 'program_error']
     assert bool(faults) is program
     if program:
-        assert faults[0]['error'] == 'ValueError' and faults[0]['stage'] == 'check'
+        assert faults[0]['stage'] == 'check'
+        assert faults[0]['error'] == ('ValueError' if how == 'by Python' else 'IngestError')
     else:
         assert 'rejected by validation' in str(refused.value)
+
+
+#: The check functions of each module that holds a registered check (:data:`jobs.SUBMISSION_VALIDATORS`) or one it
+#: hands an answer to, and the raises in them that name a state of the program (not of the answer).
+CHECKS = {
+    'secondbrain.classification': (['validate_submission', 'validate', '_validate_candidate_shape'],
+                                   ['Unknown submission role', 'needs the candidate it reviews']),
+    'secondbrain.curation': (['validate', '_deep_keys_equal_preserved'], []),
+    'secondbrain.relocate': (['validate'], []),
+    'secondbrain.domcreate': (['validate'], []),
+    'secondbrain.runner': (['validate_submission'], []),
+    'secondbrain.export.pipeline': (['validate_submission', '_validate_write', '_validate_review', '_validate_smooth'],
+                                    []),
+    'secondbrain.pipelines.ingest': (['validate_submission', 'validate_candidate', 'validate_review',
+                                      '_check_focused', '_made_amends', '_producer_answer', '_validate_rejudge'],
+                                     ['always bound to a chunk slot']),
+    'secondbrain.pipelines.split': (['validate_card', 'validate_review'], []),
+    'secondbrain.pipelines.notes': (['validate_summary', 'validate_concepts'], []),
+    'secondbrain.pipelines.source_check': (['validate_answer'], []),
+    'secondbrain.pipelines.card_diagrams': (['validate_answer'], []),
+    'secondbrain.schemas': (['shape_checked'], []),
+}
+
+
+def test_every_refusal_a_registered_check_raises_is_an_answer_error():
+    for ref in jobs.SUBMISSION_VALIDATORS.values():
+        module, name = ref.split(':')
+        assert name in CHECKS[module][0], ref
+    seen = 0
+    for module, (names, program) in CHECKS.items():
+        mod = importlib.import_module(module)
+        tree = ast.parse(inspect.getsource(mod))
+        found = [n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name in names]
+        assert sorted(n.name for n in found) == sorted(names), module
+        for fn in found:
+            for r in ast.walk(fn):
+                if not (isinstance(r, ast.Raise) and isinstance(r.exc, ast.Call)):
+                    continue  # a bare raise or a name raises what was raised or built above
+                seen += 1
+                cls = eval(ast.unparse(r.exc.func), vars(mod))  # noqa: S307 - a class name of the module
+                states = any(p in ast.unparse(r.exc) for p in program)
+                assert issubclass(cls, AnswerError) is not states, f'{module}.{fn.name}:{r.lineno}'
+    assert seen > 80
 
 
 ANSWER = json.dumps(first_candidate())

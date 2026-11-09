@@ -18,7 +18,7 @@ from __future__ import annotations
 import re
 
 from ..config import CONTEXT_NOTE_MODES as MODES  # noqa: F401  (the arms, kept with the setting)
-from ..schemas import shape_checked
+from ..schemas import AnswerError, shape_checked
 from .chunking import SUMMARY_CHARS
 
 CONCEPTS_SLOT = 'nt-concepts'
@@ -68,9 +68,9 @@ def concepts_packet(text: str, chunks: list[dict], filename: str) -> dict:
 def validate_summary(payload) -> dict:
     summary = payload.get('summary') if isinstance(payload, dict) else None
     if not isinstance(summary, str) or not summary.strip():
-        raise ValueError('summary must be a non-empty string')
+        raise AnswerError('summary must be a non-empty string')
     if len(summary.strip()) > SUMMARY_CHARS:
-        raise ValueError(f'summary must be at most {SUMMARY_CHARS} characters; it has {len(summary.strip())}')
+        raise AnswerError(f'summary must be at most {SUMMARY_CHARS} characters; it has {len(summary.strip())}')
     return payload
 
 
@@ -78,14 +78,14 @@ def validate_summary(payload) -> dict:
 def validate_concepts(payload, chunk_ids) -> dict:
     rows = payload.get('concepts') if isinstance(payload, dict) else None
     if not isinstance(rows, list) or not rows:
-        raise ValueError('concepts must list the concepts of the source')
+        raise AnswerError('concepts must list the concepts of the source')
     if len(rows) > MAX_CONCEPTS:
-        raise ValueError(f'concepts: at most {MAX_CONCEPTS}')
+        raise AnswerError(f'concepts: at most {MAX_CONCEPTS}')
     known = set(chunk_ids)
     for i, row in enumerate(rows):
         if not isinstance(row, dict) or not isinstance(row.get('name'), str) or not row['name'].strip() \
                 or len(row['name']) > 80:
-            raise ValueError(f'concepts[{i}].name must be a name of at most 80 characters')
+            raise AnswerError(f'concepts[{i}].name must be a name of at most 80 characters')
         if not isinstance(row.get('chunks'), list) or not row['chunks'] or any(c not in known for c in row['chunks']):
-            raise ValueError(f'concepts[{i}].chunks must list chunk ids of this source ({", ".join(sorted(known))})')
+            raise AnswerError(f'concepts[{i}].chunks must list chunk ids of this source ({", ".join(sorted(known))})')
     return payload

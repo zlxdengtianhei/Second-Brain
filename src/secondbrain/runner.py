@@ -90,7 +90,7 @@ def validate_submission(packet: dict, payload: dict, *, role: str, state: dict, 
     spec = _spec(state['kind'])
     wrong = schemas.type_problems(payload, spec.produce_schema if role == 'producer' else spec.review_schema)
     if wrong:
-        raise ValueError('Answer rejected by validation:\n- ' + '\n- '.join(wrong))
+        raise schemas.AnswerError('Answer rejected by validation:\n- ' + '\n- '.join(wrong))
     if role == 'producer':
         spec.check(packet, payload)
     return payload

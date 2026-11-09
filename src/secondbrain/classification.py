@@ -8,8 +8,14 @@ from types import SimpleNamespace
 from . import jobs, labels
 from .catalog import category_pairs, taxonomy_packet
 from .evidence import check_verbatim
+from .schemas import AnswerError
 from .store import Change, Conflict, apply_changes, digest, read_bytes
 from .vault import Card, Snapshot, card_packet, parse_note, patch_frontmatter, read_snapshot
+
+
+class AnswerConflict(Conflict, AnswerError):
+    """An answer a check refuses because it names a state other than the one the job froze (a conflict the answer
+    makes): the answer's refusal, counted like any other."""
 
 
 def writable_snapshot(snapshot: Snapshot) -> None:
@@ -77,7 +83,7 @@ def validate(packet: dict, proposal: dict, *, check_evidence: bool = True,
              check_assignment: bool = True) -> list[dict]:
     rows = proposal.get('items')
     if not isinstance(rows, list):
-        raise ValueError('A classification proposal must be {items:[...]}')
+        raise AnswerError('A classification proposal must be {items:[...]}')
     expected = {c['id']: c for c in packet['cards']}
     ids = [r.get('id') for r in rows if isinstance(r, dict)]
     if len(ids) != len(rows) or len(ids) != len(set(ids)) or set(ids) != set(expected):
@@ -93,7 +99,7 @@ def validate(packet: dict, proposal: dict, *, check_evidence: bool = True,
             detail.append('repeated: ' + ', '.join(dupes[:8]))
         if unknown:
             detail.append('not in this batch: ' + ', '.join(unknown[:8]))
-        raise ValueError('A classification proposal must cover every id of the batch exactly once (' + '; '.join(detail) + ')')
+        raise AnswerError('A classification proposal must cover every id of the batch exactly once (' + '; '.join(detail) + ')')
     version_errors = []
     for row in rows:
         card = expected[row['id']]
@@ -114,20 +120,20 @@ def validate(packet: dict, proposal: dict, *, check_evidence: bool = True,
                 f'(submitted part {got[max(0, pos - 4):pos + 8]!r}, length {len(got)}; '
                 f'check for invisible or full-width characters and the length)')
     if version_errors:
-        raise Conflict('Wrong input_sha256 in the proposal (expected values listed; fix them from the frozen packet '
+        raise AnswerConflict('Wrong input_sha256 in the proposal (expected values listed; fix them from the frozen packet '
                        'and submit again): ' + '; '.join(version_errors))
     for row in rows:
         card = expected[row['id']]
         if row.get('disposition') not in {'assigned', 'taxonomy_gap', 'needs_domain_review'}:
-            raise ValueError(f'No valid disposition: {row["id"]}')
+            raise AnswerError(f'No valid disposition: {row["id"]}')
         if check_evidence:
             problem = check_verbatim(card['body'], row.get('evidence_quote'))
             if problem:
-                raise ValueError(f'Evidence is not a verbatim quote of the card body: {row["id"]} ({problem})')
+                raise AnswerError(f'Evidence is not a verbatim quote of the card body: {row["id"]} ({problem})')
         if not isinstance(row.get('reason'), str) or not row['reason'].strip():
-            raise ValueError(f'Classification reason missing: {row["id"]}')
+            raise AnswerError(f'Classification reason missing: {row["id"]}')
         if check_assignment and row['disposition'] == 'assigned' and (not row.get('pillar') or not row.get('topic')):
-            raise ValueError(f'Fill both pillar and topic, not only one: {row["id"]}')
+            raise AnswerError(f'Fill both pillar and topic, not only one: {row["id"]}')
     return rows
 
 
@@ -143,18 +149,18 @@ def _frozen_category_pairs(packet: dict, domain: str) -> set[tuple[str, str]]:
 
 def _validate_candidate_shape(packet: dict, candidate: dict) -> list[dict]:
     if not isinstance(candidate, dict) or not isinstance(candidate.get('items'), list):
-        raise ValueError('A classification proposal must be {items:[...]}')
+        raise AnswerError('A classification proposal must be {items:[...]}')
     rows = candidate['items']
     for row in rows:
         if not isinstance(row, dict):
-            raise ValueError('Every item of a classification proposal must be an object')
+            raise AnswerError('Every item of a classification proposal must be an object')
         cid = row.get('id')
         if not isinstance(cid, str) or not cid:
-            raise ValueError('Every classification proposal id must be a non-empty string')
+            raise AnswerError('Every classification proposal id must be a non-empty string')
         disposition = row.get('disposition')
         if not isinstance(disposition, str) or disposition not in {
                 'assigned', 'taxonomy_gap', 'needs_domain_review'}:
-            raise ValueError(f'No valid disposition: {cid}')
+            raise AnswerError(f'No valid disposition: {cid}')
     return rows
 
 
@@ -167,17 +173,17 @@ def validate_submission(packet: dict, payload: dict, *, role: str,
         for row in rows:
             for key in ('pillar', 'topic'):
                 if key in row and row[key] is not None and not isinstance(row[key], str):
-                    raise ValueError(f'{key} must be null or a string: {row["id"]}')
+                    raise AnswerError(f'{key} must be null or a string: {row["id"]}')
             card = next(c for c in packet['cards'] if c['id'] == row['id'])
             if 'domain' in row and (not isinstance(row['domain'], str)
                                     or row['domain'] != card.get('domain')):
-                raise Conflict(f'A classification submission cannot move a card to another domain: {row["id"]}')
+                raise AnswerConflict(f'A classification submission cannot move a card to another domain: {row["id"]}')
             if row['disposition'] == 'assigned':
                 if (not isinstance(row.get('pillar'), str) or not row['pillar'].strip()
                         or not isinstance(row.get('topic'), str) or not row['topic'].strip()):
-                    raise ValueError(f'An assigned item needs non-empty pillar and topic strings: {row["id"]}')
+                    raise AnswerError(f'An assigned item needs non-empty pillar and topic strings: {row["id"]}')
                 if (row['pillar'], row['topic']) not in _frozen_category_pairs(packet, card.get('domain')):
-                    raise ValueError(f'Classification is not in the frozen taxonomy: {row["id"]}')
+                    raise AnswerError(f'Classification is not in the frozen taxonomy: {row["id"]}')
         return payload
     if role != 'reviewer':
         raise ValueError(f'Unknown submission role: {role}')
@@ -187,32 +193,32 @@ def validate_submission(packet: dict, payload: dict, *, role: str,
     validate(packet, candidate, check_evidence=False, check_assignment=False)
     review_items = payload.get('items') if isinstance(payload, dict) else None
     if not isinstance(review_items, list):
-        raise ValueError('A review must be {items:[{id,decision,reason}]}')
+        raise AnswerError('A review must be {items:[{id,decision,reason}]}')
     for finding in review_items:
         if not isinstance(finding, dict) or not isinstance(finding.get('id'), str) or not finding['id']:
-            raise ValueError('Every review item id must be a non-empty string')
+            raise AnswerError('Every review item id must be a non-empty string')
         if (not isinstance(finding.get('decision'), str)
                 or finding['decision'] not in {'accept', 'revise'}
                 or not isinstance(finding.get('reason'), str)
                 or not finding['reason'].strip()):
-            raise ValueError('Every review item needs a decision and a specific reason')
+            raise AnswerError('Every review item needs a decision and a specific reason')
     findings = review_rows(candidate_rows, payload)
     inputs = {c['id']: c for c in packet['cards']}
     for row in candidate_rows:
         card = inputs[row['id']]
         if 'domain' in row and (not isinstance(row['domain'], str)
                                 or row['domain'] != card.get('domain')):
-            raise Conflict(f'A classification submission cannot move a card to another domain: {row["id"]}')
+            raise AnswerConflict(f'A classification submission cannot move a card to another domain: {row["id"]}')
         if findings[row['id']]['decision'] != 'accept':
             continue
         for key in ('pillar', 'topic'):
             if key in row and row[key] is not None and not isinstance(row[key], str):
-                raise ValueError(f'{key} must be null or a string: {row["id"]}')
+                raise AnswerError(f'{key} must be null or a string: {row["id"]}')
         if check_verbatim(card['body'], row.get('evidence_quote')):
-            raise ValueError(f'Evidence of an accepted item is not a verbatim quote of the card body: {row["id"]}')
+            raise AnswerError(f'Evidence of an accepted item is not a verbatim quote of the card body: {row["id"]}')
         if row['disposition'] == 'assigned':
             if (row['pillar'], row['topic']) not in _frozen_category_pairs(packet, card.get('domain')):
-                raise ValueError(f'Classification is not in the frozen taxonomy: {row["id"]}')
+                raise AnswerError(f'Classification is not in the frozen taxonomy: {row["id"]}')
     return payload
 
 

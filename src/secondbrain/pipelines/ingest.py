@@ -58,6 +58,10 @@ class IngestError(ValueError):
     """Input or validation problem in the ingest chain."""
 
 
+class IngestAnswerError(IngestError, schemas.AnswerError):
+    """An ingest answer the check refuses (any other ``IngestError`` while an answer is taken is the program's)."""
+
+
 # --------------------------------------------------------------------------
 # S1 read source, S2 chunk, prepare (freeze input)
 # --------------------------------------------------------------------------
@@ -1057,14 +1061,14 @@ def validate_candidate(packet: dict, payload: dict, *, slot: str, other_cards: l
     bare_id = re.compile(re.escape(prefix) + r'[A-Za-z0-9]') if prefix else None
     relation_types = set(_relation_types(catalog))
     if not isinstance(payload, dict):
-        raise IngestError('candidate must be a JSON object')
+        raise IngestAnswerError('candidate must be a JSON object')
     cards = payload.get('cards')
     topics = payload.get('new_topics', [])
     coverage = payload.get('coverage')
     if not isinstance(cards, list) or not isinstance(topics, list):
-        raise IngestError('cards and new_topics must be lists')
+        raise IngestAnswerError('cards and new_topics must be lists')
     if not isinstance(coverage, list) or not coverage:
-        raise IngestError('coverage must list how every part of the chunk is handled')
+        raise IngestAnswerError('coverage must list how every part of the chunk is handled')
     other_slugs = {c['slug'] for c in other_cards}
     other_titles = {plain(c.get('title')) for c in other_cards}
     domain_of = dict(target_domains or {})
@@ -1266,7 +1270,7 @@ def validate_candidate(packet: dict, payload: dict, *, slot: str, other_cards: l
     if missing:
         errors.append(f'every card needs a coverage row; missing {sorted(missing)}')
     if errors:
-        raise IngestError('Candidate rejected by validation:\n- ' + '\n- '.join(errors))
+        raise IngestAnswerError('Candidate rejected by validation:\n- ' + '\n- '.join(errors))
     return payload
 
 
@@ -1352,12 +1356,12 @@ def validate_review(candidate: dict, review: dict, existing_ids: set, domains=()
     """
     errors = []
     if not isinstance(review, dict):
-        raise IngestError('review must be a JSON object')
+        raise IngestAnswerError('review must be a JSON object')
     slugs = [c['slug'] for c in candidate.get('cards', [])]
     by_slug = {c['slug']: c for c in candidate.get('cards', []) if isinstance(c, dict)}
     rows = review.get('cards')
     if not isinstance(rows, list):
-        raise IngestError('review.cards must be a list')
+        raise IngestAnswerError('review.cards must be a list')
     known = overlap.KnownIds(existing_ids, 'existing')
     seen = []
     for row in rows:
@@ -1407,7 +1411,7 @@ def validate_review(candidate: dict, review: dict, existing_ids: set, domains=()
             not isinstance(cov.get('reason'), str) or not cov['reason'].strip():
         errors.append('coverage must be {decision: accept|revise, reason}')
     if errors:
-        raise IngestError('Review rejected by validation:\n- ' + '\n- '.join(errors))
+        raise IngestAnswerError('Review rejected by validation:\n- ' + '\n- '.join(errors))
     return review
 
 
@@ -1426,7 +1430,7 @@ def _check_focused(packet: dict, state: dict, chunk: str, review: dict) -> None:
                           f'not fixed (fixed: [{{"finding": ..., "fixed": false}}]) or a blocking problem (blocking: '
                           f'{", ".join(schemas.BLOCKING)}); put other problems in notes')
     if errors:
-        raise IngestError('Review rejected by validation:\n- ' + '\n- '.join(errors))
+        raise IngestAnswerError('Review rejected by validation:\n- ' + '\n- '.join(errors))
 
 
 def _made_amends(root: Path, packet: dict, state: dict, chunk: str, candidate: dict, review: dict,
@@ -1442,7 +1446,7 @@ def _made_amends(root: Path, packet: dict, state: dict, chunk: str, candidate: d
         errors.append('this job takes no mechanical fixes ([review] amend is off): revise the card instead')
     errors += [f'{r["slug"]}: a mechanical fix comes only with accept' for r in given if r.get('decision') != 'accept']
     if errors:
-        raise IngestError('Review rejected by validation:\n- ' + '\n- '.join(errors))
+        raise IngestAnswerError('Review rejected by validation:\n- ' + '\n- '.join(errors))
     cards = {c['slug']: c for c in candidate.get('cards') or []}
     others = {c['slug']: c.get('domain') for c in _other_cards(root, state, packet, _base(chunk))}
     domains = {**existing_domains, **{s: c.get('domain') for s, c in cards.items()}, **others,
@@ -1605,7 +1609,7 @@ def validate_submission(packet: dict, payload: dict, *, role: str, candidate=Non
     draft = _draft(state, chunk) if role == 'producer' else None
     wrong = schemas.type_problems(payload, schemas.CARD_FIX if draft else _answer_schema(chunk, role))
     if wrong:  # before anything puts a value in a set or sorts it: a model may send an object for a name
-        raise IngestError(('Review' if role == 'reviewer' else 'Candidate') + ' rejected by validation:\n- '
+        raise IngestAnswerError(('Review' if role == 'reviewer' else 'Candidate') + ' rejected by validation:\n- '
                           + '\n- '.join(wrong))
     spec = answer_role(chunk, role)
     records: list = []
@@ -1731,7 +1735,7 @@ def _producer_answer(packet: dict, state: dict, slot: str, fixed: dict, records:
             return {**kept, 'program_repairs': records + dropped,
                     'held_cards': [{'slug': s, 'title': (given.get(s) or {}).get('title'), 'problems': by_card[s],
                                     **({'card': given[s]} if s in given else {})} for s in sorted(by_card)]}
-        refused = IngestError(f'{len(by_card)} card(s) failed the checks; the others passed and are kept. '
+        refused = IngestAnswerError(f'{len(by_card)} card(s) failed the checks; the others passed and are kept. '
                               f'Answer again with these cards only, fixed: {", ".join(sorted(by_card))}\n'
                               + '\n'.join(f'- {line}' for line in lines))
         refused.keep = {'payload': fixed, 'held': by_card, 'repairs': records}
@@ -2353,13 +2357,13 @@ REJUDGE_SCHEMA = {'type': 'object', 'required': ['slug', 'overlap', 'with', 'rea
 @schemas.shape_checked(lambda: REJUDGE_SCHEMA, what='judgement again')
 def _validate_rejudge(frozen: dict, payload, existing_ids: set) -> dict:
     if not isinstance(payload, dict) or payload.get('slug') != frozen['card']['slug']:
-        raise IngestError(f'the answer must judge {frozen["card"]["slug"]}')
+        raise IngestAnswerError(f'the answer must judge {frozen["card"]["slug"]}')
     problem = overlap.with_problem(payload.get('overlap'), payload.get('with') or [],
                                    overlap.KnownIds(existing_ids, 'existing'))
     if problem:
-        raise IngestError(f'{payload["slug"]}: {problem}')
+        raise IngestAnswerError(f'{payload["slug"]}: {problem}')
     if not isinstance(payload.get('reason'), str) or not payload['reason'].strip():
-        raise IngestError(f'{payload["slug"]}: give a concrete reason')
+        raise IngestAnswerError(f'{payload["slug"]}: give a concrete reason')
     return payload
 
 

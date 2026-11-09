@@ -131,17 +131,17 @@ def review_packet(packet: dict, unit: dict, candidate: dict) -> dict:
 def _validate_write(unit: dict, payload: dict) -> dict:
     parts = payload.get('parts')
     if not isinstance(parts, list):
-        raise ValueError('the answer needs a "parts" list')
+        raise schemas.AnswerError('the answer needs a "parts" list')
     want = [p['part'] for p in unit['parts']]
     got = [p.get('part') if isinstance(p, dict) else None for p in parts]
     if got != want:
-        raise ValueError(f'parts must be exactly {want} in this order, got {got}')
+        raise schemas.AnswerError(f'parts must be exactly {want} in this order, got {got}')
     clean = []
     for part in parts:
         paras = part.get('paragraphs')
         if not isinstance(paras, list) or not paras or \
                 not all(isinstance(t, str) and t.strip() for t in paras):
-            raise ValueError(f"part {part['part']} needs a list of non-empty paragraphs")
+            raise schemas.AnswerError(f"part {part['part']} needs a list of non-empty paragraphs")
         clean.append({'part': part['part'], 'paragraphs': [t.strip() for t in paras]})
     return {'parts': clean}
 
@@ -157,39 +157,39 @@ def smooth_paragraphs(candidate: dict) -> list[tuple[str, str]]:
 def _validate_review(candidate: dict, payload: dict, want: list[str] | None = None) -> dict:
     items = payload.get('items')
     if not isinstance(items, list):
-        raise ValueError('the review needs an "items" list')
+        raise schemas.AnswerError('the review needs an "items" list')
     want = [pid for pid, _, _ in paragraphs(candidate)] if want is None else want
     got = [x.get('id') if isinstance(x, dict) else None for x in items]
     if sorted(got, key=str) != sorted(want):
         missing = sorted(set(want) - set(got))
         extra = sorted(set(map(str, got)) - set(want))
-        raise ValueError(f'one review item per paragraph; missing {missing}, unknown or repeated {extra}')
+        raise schemas.AnswerError(f'one review item per paragraph; missing {missing}, unknown or repeated {extra}')
     for x in items:
         if x.get('decision') not in {'accept', 'revise'} or not str(x.get('reason') or '').strip():
-            raise ValueError(f"item {x.get('id')}: decision must be accept or revise, with a reason")
+            raise schemas.AnswerError(f"item {x.get('id')}: decision must be accept or revise, with a reason")
     wrong = [p for x in items for p in review_notes.problems(x.get('notes'), f"item {x.get('id')}")]
     if wrong:
-        raise ValueError('the review was rejected by validation:\n- ' + '\n- '.join(wrong))
+        raise schemas.AnswerError('the review was rejected by validation:\n- ' + '\n- '.join(wrong))
     # a paragraph accepted with a note of a blocking kind goes back, the note its reason (D-18 3)
     return {**payload, 'items': [review_notes.turned(x) for x in items]}
 
 
 def _validate_smooth(packet: dict, payload: dict, allowed_drops: set) -> dict:
     if not isinstance(payload.get('intro'), str) or not payload['intro'].strip():
-        raise ValueError('the answer needs a non-empty "intro"')
+        raise schemas.AnswerError('the answer needs a non-empty "intro"')
     names = [s['pillar'] for s in packet['sections']][1:]
     transitions = payload.get('transitions')
     if not isinstance(transitions, list):
-        raise ValueError('"transitions" must be a list')
+        raise schemas.AnswerError('"transitions" must be a list')
     seen = set()
     for row in transitions:
         if not isinstance(row, dict) or row.get('section') not in names or row['section'] in seen \
                 or not str(row.get('text') or '').strip():
-            raise ValueError(f'each transition names one later section once ({names}) and has text')
+            raise schemas.AnswerError(f'each transition names one later section once ({names}) and has text')
         seen.add(row['section'])
     drop = payload.get('drop')
     if not isinstance(drop, list) or not set(drop) <= allowed_drops:
-        raise ValueError(f'"drop" may only name paragraphs listed in duplicates: {sorted(allowed_drops)}')
+        raise schemas.AnswerError(f'"drop" may only name paragraphs listed in duplicates: {sorted(allowed_drops)}')
     return payload
 
 

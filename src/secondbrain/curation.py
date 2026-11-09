@@ -32,6 +32,7 @@ from pathlib import Path
 
 from . import jobs
 from .classification import snapshot_checks, taxonomy_fingerprint, writable_snapshot
+from .schemas import AnswerError
 from .store import Change, Conflict, digest, read_bytes
 from .vault import read_snapshot
 
@@ -43,6 +44,10 @@ OWNED_KEYS = {"title", "narrative", "pillars", "bridges"}
 
 class CurationError(ValueError):
     """Structural curation errors (never a semantic judgement)."""
+
+
+class CurationAnswerError(CurationError, AnswerError):
+    """A curation answer the check refuses."""
 
 
 # ---------------------------------------------------------------------------
@@ -219,7 +224,7 @@ def _deep_keys_equal_preserved(current, proposed, domain):
                 if key not in known and (key not in new or new[key] != value):
                     missing.append(f'unknown field {collection}.{old.get(identity)}.{key} was removed or changed')
     if missing:
-        raise CurationError(f"{domain}: " + "; ".join(sorted(missing)))
+        raise CurationAnswerError(f"{domain}: " + "; ".join(sorted(missing)))
 
 
 def _moc_card_ids(packet, domain, catalog):
@@ -233,11 +238,11 @@ def validate(packet: dict, proposal: dict) -> list[dict]:
     """Mechanical checks only — never a semantic self-approval."""
     rows = proposal.get("items")
     if not isinstance(rows, list):
-        raise CurationError("A curation proposal must be {items:[...]}")
+        raise CurationAnswerError("A curation proposal must be {items:[...]}")
     expected = set(packet["domains"])
     ids = [r.get("domain") for r in rows if isinstance(r, dict)]
     if len(ids) != len(rows) or len(ids) != len(set(ids)) or set(ids) != expected:
-        raise CurationError("A curation proposal must cover every prepared domain exactly once")
+        raise CurationAnswerError("A curation proposal must cover every prepared domain exactly once")
     taxon = packet.get("taxonomy") or {}
     packet_tax = taxon.get("taxonomies") or {}
     by_moc = {}
@@ -247,12 +252,12 @@ def validate(packet: dict, proposal: dict) -> list[dict]:
         _normalise_taxonomy(row.get("taxonomy"), domain, moc)
         reason = row.get("reason")
         if not isinstance(reason, str) or not reason.strip():
-            raise CurationError(f"{domain}: the reason must be a specific string")
+            raise CurationAnswerError(f"{domain}: the reason must be a specific string")
         coverage = row.get("coverage_ids")
         if not isinstance(coverage, list) or not coverage:
-            raise CurationError(f"{domain}: cite existing cards of this map in coverage_ids as evidence")
+            raise CurationAnswerError(f"{domain}: cite existing cards of this map in coverage_ids as evidence")
         if row.get('source_quotes'):
-            raise CurationError(f"{domain}: curation takes existing cards as evidence; source_quotes are not accepted")
+            raise CurationAnswerError(f"{domain}: curation takes existing cards as evidence; source_quotes are not accepted")
         known = _moc_card_ids(packet, domain, packet.get("catalog"))
         # Models often copy an id with the wrong separator (- or _). Compare ids without
         # separators: a unique match is replaced by the real id; no match or several matches
@@ -272,7 +277,7 @@ def validate(packet: dict, proposal: dict) -> list[dict]:
                 close = difflib.get_close_matches(str(cid), sorted(known), n=3, cutoff=0.6)
                 bad.append(f'{cid} (closest: {", ".join(close) or "none"})')
         if bad:
-            raise CurationError(f"{domain}: coverage_ids that are not existing cards of this map: {'; '.join(bad)}")
+            raise CurationAnswerError(f"{domain}: coverage_ids that are not existing cards of this map: {'; '.join(bad)}")
         # Top-level fields that curation does not design (for example `source` in an existing
         # file) are copied from the current file, as _merge_taxonomy keeps them; the model
         # writes the curated fields only and does not copy metadata.
@@ -287,7 +292,7 @@ def validate(packet: dict, proposal: dict) -> list[dict]:
     for moc, txs in by_moc.items():
         base = txs[0]
         if any(tx != base for tx in txs[1:]):
-            raise CurationError(f"The domains of map {moc!r} propose different taxonomies; rejected")
+            raise CurationAnswerError(f"The domains of map {moc!r} propose different taxonomies; rejected")
     return rows
 
 
