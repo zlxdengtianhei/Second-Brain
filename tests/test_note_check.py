@@ -224,6 +224,45 @@ def test_an_answer_out_of_form_is_refused(given, problem):
         notecheck.validate(frozen, given, noted())
 
 
+#: A card with words in every field a yes may quote, no sentence repeating another.
+EVERY_FIELD = {
+    'title': 'Tide bell schedule',
+    'essence': 'A harbour bell rings once for each hour the water rises.',
+    'intuition': 'Like a kitchen timer wound by the moon instead of a cook.',
+    'propositions': ['The bell keeps quiet through every ebb.', 'Two keepers haul on a spring tide.'],
+    'confusions': ['Unlike a fog horn, it answers to water levels and ignores weather.'],
+    'flashcards': [{'q': 'What marks one rising hour?', 'a': 'A single stroke.'},
+                   {'q': 'Who works the bell at a spring tide?', 'a': 'A pair of keepers.'}],
+}
+
+
+def checked(quote):
+    """The note check's answer, a yes quoting ``quote`` of :data:`EVERY_FIELD`, as validated."""
+    frozen = {'cards': [{'slug': 'lit-marker-cost', 'card': EVERY_FIELD, 'notes': [{'id': 'N1', 'text': CUED}]}]}
+    return notecheck.validate(frozen, answer('yes', 'fact', quote=quote), noted())
+
+
+@pytest.mark.parametrize('quote', ['Tide bell schedule', 'rings once for each hour the water rises',
+                                   'kitchen timer wound by the moon', 'Two keepers haul',
+                                   'answers to water levels and ignores weather', 'What marks one rising hour?',
+                                   'A pair of keepers.'],
+                         ids=['title', 'essence', 'intuition', 'proposition', 'confusion', 'review question',
+                              'review answer'])
+def test_a_yes_may_quote_the_words_of_any_field_of_the_card(quote):
+    assert json.dumps(EVERY_FIELD).count(quote) == 1  # in one field only: each case tests its own field
+    assert notecheck.on_card(quote, EVERY_FIELD)
+    kept = checked(quote)
+    assert kept['answers'][0]['quote'] == quote
+    assert [r['slug'] for r in kept['turned']] == ['lit-marker-cost']
+
+
+def test_a_yes_quoting_words_on_no_field_of_the_card_is_refused():
+    quote = 'rings twice for each hour the water rises'
+    assert not notecheck.on_card(quote, EVERY_FIELD)
+    with pytest.raises(ValueError, match=f'{quote!r} is not on the card'):
+        checked(quote)
+
+
 # --- host mode: the same role, the same entry -------------------------------------------------------------------
 def submit(root, job_id, tmp_path, handoff, payload, model):
     path = tmp_path / f'{handoff["run_id"]}.json'
