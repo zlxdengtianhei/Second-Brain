@@ -1,6 +1,7 @@
 """sb ingest --retry: a child job redoes only the pending items of a partial job."""
 from __future__ import annotations
 
+import copy
 import json
 from dataclasses import replace
 
@@ -77,7 +78,7 @@ def test_an_overlap_hint_naming_a_card_the_parent_wrote_names_it_by_its_id(tmp_p
     root = build_ingest_vault(tmp_path / 'vault')
     parent = partial_job(root)
     child = ingest.retry(root, parent)
-    answer = retry_answer()
+    answer = copy.deepcopy(retry_answer())  # its card is a shared constant
     answer['cards'][0]['overlap_hint'] = {'overlap': 'extends', 'with': ['lit-marker-cost']}
     review = {'cards': [{'slug': 'marker-dimming', 'decision': 'accept', 'overlap': 'distinct', 'reason': 'right now'}],
               'new_topics': [], 'coverage': {'decision': 'accept', 'reason': 'only the open card was missing'}}
@@ -90,6 +91,27 @@ def test_an_overlap_hint_naming_a_card_the_parent_wrote_names_it_by_its_id(tmp_p
     assert taken['cards'][0]['overlap_hint'] == {'overlap': 'extends', 'with': [written]}
     [record] = [r for r in taken['program_repairs'] if r['rule'] == 'overlap_hint']
     assert record['before']['with'] == ['lit-marker-cost'] and record['after']['with'] == [written]
+
+
+@pytest.mark.parametrize('named', [['lit-marker-cost', 'lit-marker-cost'], ['lit-marker-cost', 'kc_lit-marker-cost']])
+def test_an_overlap_hint_that_names_a_written_card_twice_names_it_once(tmp_path, named):
+    """By its slug twice, or by its slug and its id: once named by its id the hint names one card, as an ``extends``
+    hint must, and the answer is taken at the first ask (the producer answers once)."""
+    root = build_ingest_vault(tmp_path / 'vault')
+    parent = partial_job(root)
+    child = ingest.retry(root, parent)
+    answer = copy.deepcopy(retry_answer())  # its card is a shared constant
+    answer['cards'][0]['overlap_hint'] = {'overlap': 'extends', 'with': list(named)}
+    review = {'cards': [{'slug': 'marker-dimming', 'decision': 'accept', 'overlap': 'distinct', 'reason': 'right now'}],
+              'new_topics': [], 'coverage': {'decision': 'accept', 'reason': 'only the open card was missing'}}
+    produce, respond, seen = scripted([answer], [review], {'marker-dimming': DIMMING_IR})
+    done = ingest.advance(root, child['job_id'], producer=FakeExecutor('gpt-test', responder=produce),
+                          reviewer=FakeExecutor('claude-test', responder=respond))
+    assert done['status'] == 'applied', done.get('pending')
+    written = {c.title: c.id for c in read_snapshot(root).cards.values()}['Lit marker memory cost']
+    assert written == 'kc_lit-marker-cost' and len(seen['producer']) == 1
+    taken = jobs.artifact(root, jobs.load(root, child['job_id']), 'candidate', 'c01')
+    assert taken['cards'][0]['overlap_hint']['with'] == [written]
 
 
 #: A passage the parent's producer handled as a duplicate of an existing card (no card written).
