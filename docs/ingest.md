@@ -115,7 +115,7 @@ Each candidate row names its route in `via`:
 
 | `via` | The card |
 |---|---|
-| `named` | The producer named it: a relation target, a conflict, an `overlap_hint` or a `same` coverage row. |
+| `named` | The producer named it: a relation target, a conflict, an `overlap_hint` or a `same` coverage row; for the reviewer also a card the card's text names by `[[Title]]`, a source of what it says (shown whole even with `review_named` off; the check of a review's notes gets these cards too, as `named_cards`). |
 | `written` | In a retry: a card that an earlier job of the same source wrote. |
 | `words` | A search hit: one of the 15 best cards of a lexical (BM25) search over the whole vault. |
 | `hop` | A card that a search hit links. Off by default (`candidates_hop = 0`). |

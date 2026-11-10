@@ -4,7 +4,7 @@ You reviewed the cards of a chunk and accepted each card in `cards` with a `mino
 
 <!-- notes.definition -->
 
-For each note, read the card (`card`), the chunk (`chunk.text`) and the cards of this source the card names (`other_chunks_cards`), and decide whether the problem the note names makes the card:
+For each note, read the card (`card`), the chunk (`chunk.text`), the cards of this source the card names (`other_chunks_cards`) and the existing cards it names by `[[title]]` (`named_cards`), and decide whether the problem the note names makes the card:
 
 - `fact`: unfaithful to the chunk: a statement the chunk contradicts or does not say, one that says more or less than the chunk, or one that leaves out a condition, a limit or a case the chunk gives;
 - `unreadable`: not readable without the source: it points at the source, or leaves out what it relies on (what a symbol stands for, the premises of an example, what "it" or "this" is);

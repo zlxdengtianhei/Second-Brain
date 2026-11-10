@@ -115,7 +115,7 @@ sb ingest <file> --domain <slug> --pillar "<pillar>"   # 把卡片放到这里�
 
 | `via` | 这张卡 |
 |---|---|
-| `named` | 生产者点名的卡：关系目标、冲突对象、`overlap_hint` 里的卡，或 `same` 覆盖行里的卡。 |
+| `named` | 生产者点名的卡：关系目标、冲突对象、`overlap_hint` 里的卡，或 `same` 覆盖行里的卡；给复核者的还有卡片正文用 `[[标题]]` 点名的卡，它是卡上说法的出处（`review_named` 关着也整张给；对 `minor` 备注的核对同样拿到这些卡，在 `named_cards` 里）。 |
 | `written` | 重试时：这份来源以前的任务写入的卡。 |
 | `words` | 检索命中的卡：在整个知识库上做词面检索（BM25），取前 15 张。 |
 | `hop` | 检索命中的卡所链接的卡。默认不开（`candidates_hop = 0`）。 |

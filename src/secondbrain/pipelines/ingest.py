@@ -861,7 +861,8 @@ def _note_answers(root: Path, state: dict, slot: str) -> list[dict]:
 
 def _note_check_input(root: Path, state: dict, packet: dict, reviewed: str) -> dict:
     """What the reviewer answers the check on: each card asked about as accepted (its mechanical fixes made), the
-    notes asked about, the chunk and its note, and the cards of the source the cards name."""
+    notes asked about, the chunk and its note, the cards of the source the cards name, and the vault's cards they
+    name by ``[[title]]`` (``named_cards``, whole)."""
     from ..runner import withhold_reasons
     review = jobs.artifact(root, state, 'review', reviewed)
     rows = {r['slug']: r for r in review.get('cards') or []}
@@ -874,9 +875,13 @@ def _note_check_input(root: Path, state: dict, packet: dict, reviewed: str) -> d
         shown.append({'slug': slug, 'card': withhold_reasons(card) if withhold else card,
                       'notes': [{'id': i['id'], 'text': i['note']} for i in asked if i['slug'] == slug]})
     base = _base(reviewed)
+    snapshot = read_snapshot(root)
+    id_of_title = {card.title: cid for cid, card in snapshot.cards.items()}
+    sources = dict.fromkeys(i for c in shown for i in text_named_ids(c['card'], id_of_title))
     return {'chunk': {'id': base, 'text': _chunk_text(packet, base)}, **_note_part(root, state, packet, base),
             'cards': shown,
-            'other_chunks_cards': _other_cards(root, state, packet, base, named_titles([c['card'] for c in shown]))}
+            'other_chunks_cards': _other_cards(root, state, packet, base, named_titles([c['card'] for c in shown])),
+            **({'named_cards': {i: cardfmt.view(snapshot.cards[i], 'full') for i in sources}} if sources else {})}
 
 
 def note_check_prompt(job_id: str) -> str:
@@ -995,6 +1000,12 @@ def named_ids(card: dict, existing: set, aliases: dict | None = None) -> list[st
     return [i for i in dict.fromkeys(out) if isinstance(i, str) and i in existing]
 
 
+def text_named_ids(card: dict, id_of_title: dict) -> list[str]:
+    """The existing cards a proposed card names by ``[[title]]`` in its text (``id_of_title``: title -> id of the
+    vault's cards): a source of what it says (decision D-33), which its reviewer must see."""
+    return [id_of_title[t] for t in sorted(named_titles([card])) if t in id_of_title]
+
+
 def coverage_named(candidate: dict, existing: set) -> list[str]:
     """The existing cards the coverage rows say already hold a passage."""
     out = []
@@ -1022,16 +1033,20 @@ def _review_candidates(root: Path, snapshot, packet: dict, cards: list, coverage
     # a retry: the cards earlier jobs of the source wrote are judged here too (via: written), ranked among themselves
     written = replace(snapshot, cards={i: snapshot.cards[i] for i in _written_ids(packet) if i in snapshot.cards})
     written_k = retrieval.k_for(_frozen(packet, 'candidates_k'), 'written')
+    id_of_title = {card.title: cid for cid, card in snapshot.cards.items()}
     per_card = {}
     for c in cards:
         if not (isinstance(c, dict) and isinstance(c.get('slug'), str)):
             continue
         shelf_of = (c.get('domain'), c.get('pillar'), c.get('topic')) if _frozen(packet, 'candidates_shelf') else None
         linked_written = [i for i in named_ids(c, existing, _written_slugs(packet)) if i in written.cards]
+        # a vault card its text names by [[title]] is a source of it: shown whole, whatever review_named says
+        sources = text_named_ids(c, id_of_title)
         per_card[c['slug']] = retrieval.candidates(
             root, snapshot, retrieval.card_query(c), k=k, hop_from=_frozen(packet, 'candidates_hop'),
-            named=named_ids(c, existing, _written_slugs(packet)) if named else linked_written, shelf_of=shelf_of,
-            written=written if written.cards else None, written_k=written_k)
+            named=list(dict.fromkeys((named_ids(c, existing, _written_slugs(packet)) if named else linked_written)
+                                     + sources)),
+            shelf_of=shelf_of, written=written if written.cards else None, written_k=written_k)
     if named and coverage:
         per_card[COVERAGE_KEY] = [{'id': i, 'rank': n, 'via': ['named']} for n, i in enumerate(coverage, 1)]
     levels = {**REVIEWER_LEVELS, 'words': _frozen(packet, 'review_words_view')}
