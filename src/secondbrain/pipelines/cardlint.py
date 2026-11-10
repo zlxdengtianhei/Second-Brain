@@ -158,7 +158,7 @@ def symbols(card: dict) -> list[str]:
 # --- a minor note that may name a blocking problem ------------------------------------------------------------------
 #: Words of a reviewer's ``minor`` note that say the card leaves something out, says more than the chunk, or points
 #: at the source. On the accepted cards of one arm of a blind judging they marked 11 of 105, 5 of them problem cards;
-#: a note about wording alone ("could be clearer") has none of them.
+#: a note about wording alone ("could be tighter") has none of them.
 CUES = re.compile(r'没说|没写明|没交代|没有交代|没说明|没有说明|没给|没有给|未给|没有引入|没引入|块文没有|原文没有|chunk 没|原文不|'
                   r'省了|省去|去掉了|丢了|漏了|指向|是哪个|指代|挂错|不清|说得宽|说得比|更宽|过于|绝对|没有出处|无出处')
 

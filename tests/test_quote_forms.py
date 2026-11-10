@@ -15,7 +15,7 @@ import pytest
 from secondbrain.pipelines import answerfix
 from tests.test_answer_repair import CATALOG, card
 
-CHUNK = ('他说"可以"，然后离开了。\n'
+CHUNK = ('她答"好的"，随后挂了电话。\n'
          '规则：A=1、B=2——编号从 1 开始。\n'
          '- 第一步：读入 `query` 向量\n'
          '- 第二步：按 $\\\\cos$ 排序\n'
@@ -29,9 +29,9 @@ def snapped(quote, text=CHUNK):
 
 
 @pytest.mark.parametrize('quote, slice_', [
-    ('他说“可以”，然后离开了', '他说"可以"，然后离开了'),                    # curly double quotes
-    ('他说「可以」，然后离开了', '他说"可以"，然后离开了'),                    # corner brackets
-    ('他说＂可以＂，然后离开了', '他说"可以"，然后离开了'),                    # full-width quote
+    ('她答“好的”，随后挂了电话', '她答"好的"，随后挂了电话'),                # curly double quotes
+    ('她答「好的」，随后挂了电话', '她答"好的"，随后挂了电话'),                # corner brackets
+    ('她答＂好的＂，随后挂了电话', '她答"好的"，随后挂了电话'),                # full-width quote
     ('规则:A=1、B=2——编号从 1 开始', '规则：A=1、B=2——编号从 1 开始'),      # a colon for a full-width one
     ('规则：A=1、B=2--编号从 1 开始', '规则：A=1、B=2——编号从 1 开始'),      # hyphens for a dash
     ('第一步：读入 query 向量', '第一步：读入 `query` 向量'),                # a backtick dropped
@@ -46,9 +46,9 @@ def test_a_quote_in_another_form_of_its_marks_becomes_the_chunks_text(quote, sli
 
 
 def test_two_passages_that_differ_only_in_their_quotation_marks_are_not_taken_for_one():
-    text = '他说"可以"。后来他说「可以」。'
-    out, records = snapped('他说“可以”', text)
-    assert out == '他说“可以”' and records == []
+    text = '她答"好的"。后来她答「好的」。'
+    out, records = snapped('她答“好的”', text)
+    assert out == '她答“好的”' and records == []
 
 
 def test_a_sentence_the_chunk_has_twice_is_not_taken():
@@ -58,8 +58,8 @@ def test_a_sentence_the_chunk_has_twice_is_not_taken():
 
 
 def test_a_quote_the_chunk_does_not_have_in_any_form_is_left_to_the_check():
-    out, records = snapped('他说“不行”，然后离开了')
-    assert out == '他说“不行”，然后离开了' and records == []
+    out, records = snapped('她答“不行”，随后挂了电话')
+    assert out == '她答“不行”，随后挂了电话' and records == []
 
 
 def test_in_a_job_such_an_answer_is_taken_with_its_repairs_recorded(tmp_path):

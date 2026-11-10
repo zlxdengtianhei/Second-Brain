@@ -23,7 +23,7 @@ from tests.test_answer_repair import lantern_job
 from tests.test_review_rules import run, with_rows
 
 CUED = '没写明一个标记占几个字'
-WORDING = '可写得更清楚'
+WORDING = '这句可以写得更紧凑'
 
 
 def noted(text=CUED):
@@ -59,7 +59,7 @@ def accept_both():
 
 
 # --- which notes ------------------------------------------------------------------------------------------------------
-@pytest.mark.parametrize('text', [CUED, '省了块文的条件', '块文没有这个数', '没说是哪个索引', '比原文说得宽',
+@pytest.mark.parametrize('text', [CUED, '漏了块里给的限定', '块文没有这个数', '没说是哪个索引', '比原文说得宽',
                                   '去掉了“近似”二字', '指向原文的例子'])
 def test_a_minor_note_with_a_cue_word_is_asked_about(text):
     assert cardlint.cued(text)

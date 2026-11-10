@@ -24,16 +24,16 @@ def card(*propositions, **fields):
 
 
 @pytest.mark.parametrize('text', ['原文说两种索引等价。', '按教材的分法，检索分两段。', '表中第二行是召回率。',
-                                  '例中 A 先被选中。', '第 3 章讲过这个阈值。', '本节只讲稀疏向量。', '那张卡写了公式。'])
+                                  '例中 K 比 J 先到。', '第 3 章讲过这个阈值。', '本节只讲稀疏向量。', '那张卡写了公式。'])
 def test_a_phrase_that_points_at_the_source_is_asked_about(text):
     assert cardlint.pointers(card(text))
 
 
 @pytest.mark.parametrize('text, other', [
-    ('索引只存 id，原文另存。', None),                       # 原文 as a word of the subject
+    ('库里只放向量，原文放在别处。', None),                       # 原文 as a word of the subject
     ('上下文窗口决定能看多远。', None),                      # 上下文 is not 下文
     ('表中第二行是召回率。', '| 方法 | 召回 |\n|---|---|\n| A | 0.9 |'),  # the card has the table
-    ('例中 A 先被选中。', '例：三个候选 A、B、C，按分数排。'),    # the card sets the example up
+    ('例中 K 比 J 先到。', '例：两个请求 J、K，按到达时间排。'),    # the card sets the example up
     ('教材 08 的练习。', None),                              # a numbered textbook item
     ('词表中没有这个词。', None),                            # 词表 is a word
 ])
