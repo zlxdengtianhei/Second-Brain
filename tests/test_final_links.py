@@ -20,7 +20,8 @@ import pytest
 from secondbrain import cards as cardfmt
 from secondbrain.vault import read_snapshot
 from tests.helpers import EXISTING
-from tests.test_patch_set import job, producer, reviewer, run
+from tests.ingest_helpers import keep_all
+from tests.test_patch_set import LANTERN, job, producer, reviewer, run
 
 LINE = 'A lantern queue keeps arrival order, as [[{}]] states.'
 
@@ -141,3 +142,29 @@ def test_items_alike_once_relinked_go_into_the_existing_card_once(tmp_path, shap
                                   old_line=('- P1. Old proposition 1 about routing readers.', f'- P1. {plain}'))
     assert props.count(plain) == 1 and not any(NOBODY in p for p in props)
 
+
+def test_a_link_in_a_patchs_review_card_is_relinked(tmp_path):
+    card = {'q': f'Which card keeps the order rule? {NOBODY}', 'a': 'The card on arrival order.'}
+    done, _, flashcards = patching(tmp_path, flashcards=[card])
+    assert {'q': 'Which card keeps the order rule? A card no one filed', 'a': card['a']} in flashcards
+    assert [u['link'] for u in done['links_unlinked'] if u.get('into') == EXISTING] == ['A card no one filed']
+
+
+def test_a_link_in_a_review_card_swap_is_relinked(tmp_path):
+    swap = {'flashcard': 'Q1', 'q': 'How does a reader pass old items?', 'a': f'By a jump ahead, as {NOBODY} says.'}
+    check = lambda p: keep_all(p, _patches={EXISTING: {'propositions': list(LANTERN['propositions']),  # noqa: E731
+                                                        'flashcards': list(LANTERN['flashcards']),
+                                                        'flashcard_replace': [swap]}})
+    done, _, flashcards = patching(tmp_path, check=check)
+    assert flashcards[0] == {'q': swap['q'], 'a': 'By a jump ahead, as A card no one filed says.'}
+    assert [u['link'] for u in done['links_unlinked'] if u.get('into') == EXISTING] == ['A card no one filed']
+
+
+def test_a_link_in_a_replaced_proposition_is_relinked(tmp_path):
+    by = LANTERN['propositions'][0].rstrip('.') + f', as {NOBODY} says.'
+    check = lambda p: keep_all(p, _patches={EXISTING: {'propositions': list(LANTERN['propositions'][1:]),  # noqa: E731
+                                                        'flashcards': list(LANTERN['flashcards']),
+                                                        'replace': [{'proposition': 'P2', 'by': by}]}})
+    done, props, _ = patching(tmp_path, check=check, first=by)  # the merge check replaces with the card's words
+    assert props[1] == by.replace(NOBODY, 'A card no one filed')
+    assert [u['link'] for u in done['links_unlinked'] if u.get('into') == EXISTING] == ['A card no one filed']
