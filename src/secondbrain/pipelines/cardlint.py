@@ -74,11 +74,11 @@ _GREEK = {'alpha': 'α', 'beta': 'β', 'gamma': 'γ', 'delta': 'δ', 'epsilon': 
 _LETTER = r'[A-Za-zα-ωℓℏ]'
 _WORDCMD = re.compile(r'\\(?:text|operatorname|mathrm|mathbf|mathit|mathcal|textbf|boldsymbol)\s*\{[^{}]*\}'
                       r'|\\mathbb\s*\{?[A-Z]\}?')
-_OP = r'[=×*/^_<>≤≥≠±+(（|·\[]'
+_OP = re.compile(r'[=×*/^_<>≤≥≠±+(（|·\[]').pattern
 _MATH = re.compile(r'\$\$?([^$]+)\$\$?')
-_NOUN_END = (r'(?:数|量|参数|个数|维数|维度|向量|矩阵|节点|点|层|层数|词|文档|集合|长度|阈值|温度|常数|系数|权重|分数|概率|值|'
+_NOUN_END = re.compile(r'(?:数|量|参数|个数|维数|维度|向量|矩阵|节点|点|层|层数|词|文档|集合|长度|阈值|温度|常数|系数|权重|分数|概率|值|'
              r'规则|查询|中心|样本|序列|位置|token|模型|空间|大小|宽度|上限|数目|数量|函数|损失|状态|编码|码本|输入|输出|结果|'
-             r'距离|半径|角|超平面|平面|库|语料|列表|分|为|是|等于|记为|叫)')
+             r'距离|半径|角|超平面|平面|库|语料|列表|分|为|是|等于|记为|叫)').pattern
 _PARAM = r'(?<![A-Za-z\\])\$?{s}\$?\s*(?:=\s*\d|×|\\times|\^)|(?:×|\\times)\s*\$?{s}(?![A-Za-z])'
 
 
@@ -106,18 +106,27 @@ def _text_letters(line: str) -> set:
     return out
 
 
+# the pieces of :func:`_defined`'s patterns, around the symbol (each its own pattern, so the Chinese stands in patterns)
+_SUB = re.compile(r'(?:_\{?[^\s$，。；、]*\}?)?(?:\^\{?[^\s$，。；、]*\}?)?(?:\s*\([^()]{0,12}\))?').pattern
+_LISTED = re.compile(r'(?:\s*[、,，和与及]\s*\$?[^\s$。；]{1,14}?\$?){0,5}').pattern
+_IS = re.compile(r'\s*(?:都|分别|就)?(?:是|为|表示|指|代表|即|叫|记作|对应|[：:](?!\s*\d))').pattern
+_GLOSS = re.compile(r'\s*[（(][^）)]*[\u4e00-\u9fff]').pattern
+_LET = re.compile(r'(?:其中|设|令|记|这里|字母|符号)\s*\$?\s*').pattern
+_COUNTED = re.compile(r'\s*(?:个|维|层|次|条|篇|项|位|轮|步|段|簇|桶|张表|比特|bit)').pattern
+_ORDINAL = re.compile(r'第\s*\$?\s*').pattern
+_ORDINAL_UNIT = re.compile(r'\s*\$?\s*(?:个|层|维|次|项|段|位|轮|步|行|列)').pattern
+
+
 def _defined(sym: str, text: str) -> bool:
     s = re.escape(sym)
-    sub = r'(?:_\{?[^\s$，。；、]*\}?)?(?:\^\{?[^\s$，。；、]*\}?)?(?:\s*\([^()]{0,12}\))?'
-    lead = r'(?<![A-Za-z\\])\|?\$?\s*' + s + sub + r'\s*\|?\$?'
-    listed = r'(?:\s*[、,，和与及]\s*\$?[^\s$。；]{1,14}?\$?){0,5}'
+    lead = r'(?<![A-Za-z\\])\|?\$?\s*' + s + _SUB + r'\s*\|?\$?'
     patterns = (
-        lead + listed + r'\s*(?:都|分别|就)?(?:是|为|表示|指|代表|即|叫|记作|对应|[：:](?!\s*\d))',
-        lead + r'\s*[（(][^）)]*[\u4e00-\u9fff]',
+        lead + _LISTED + _IS,
+        lead + _GLOSS,
         _NOUN_END + r'\s*\$?\s*' + s + r'(?![A-Za-z])',
-        r'(?:其中|设|令|记|这里|字母|符号)\s*\$?\s*' + s + r'(?![A-Za-z])',
-        lead + r'\s*(?:个|维|层|次|条|篇|项|位|轮|步|段|簇|桶|张表|比特|bit)',
-        r'第\s*\$?\s*' + s + r'\s*\$?\s*(?:个|层|维|次|项|段|位|轮|步|行|列)',
+        _LET + s + r'(?![A-Za-z])',
+        lead + _COUNTED,
+        _ORDINAL + s + _ORDINAL_UNIT,
     )
     return any(re.search(p, text) for p in patterns)
 

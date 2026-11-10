@@ -15,9 +15,10 @@ from pathlib import Path
 PACKAGE = Path(__file__).resolve().parents[1] / 'src' / 'secondbrain'
 CJK = re.compile(r'[　-〿一-鿿＀-￯]')
 SKIP = {'labels.py', 'cards.py', 'review_registry.py'}   # language tables; separately owned
-#: Files whose Chinese may stand only in raw string literals, the patterns of rules measured on Chinese text; their
-#: names, questions and messages are checked as any other.
-RAW_ONLY = {'pipelines/cardlint.py'}
+#: Files whose Chinese may stand only in patterns, the rules measured on Chinese text: a literal that is the pattern
+#: of a call to ``re`` (``re.compile(r'...')``); their names, questions and messages are checked as any other.
+PATTERN_ONLY = {'pipelines/cardlint.py'}
+RE_CALLS = {'compile', 'search', 'match', 'fullmatch', 'finditer', 'findall', 'sub', 'subn', 'split'}
 ALLOWED = {
     ('pipelines/chunking.py', '(?<=[。！？!?；;])|(?<=[.!?])(?=\\s)'),   # sentence ends
     ('rendering.py', '　-〿㐀-䶿一-鿿豈-﫿＀-￯‘’“”—–'),
@@ -42,18 +43,18 @@ def literals(path):
             yield node.lineno, node.value
 
 
-def unraw_chinese(path):
-    """``(line, text)`` of each string token with Chinese that is not a raw string (an f-string's text counts)."""
+def outside_patterns(path):
+    """``(line, text)`` of each string literal with Chinese that is not the pattern of a call to ``re`` (an f-string's
+    text is never one)."""
+    tree = ast.parse(path.read_text(encoding='utf-8'))
+    patterns = {id(node.args[0]) for node in ast.walk(tree)
+                if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr in RE_CALLS
+                and isinstance(node.func.value, ast.Name) and node.func.value.id == 're' and node.args}
     out = []
-    for token in tokenize.generate_tokens(io.StringIO(path.read_text(encoding='utf-8')).readline):
-        if token.type == tokenize.STRING:
-            raw = 'r' in re.match(r'[A-Za-z]*', token.string).group(0).lower()
-        elif token.type == getattr(tokenize, 'FSTRING_MIDDLE', -1):
-            raw = False
-        else:
-            continue
-        if CJK.search(token.string) and not raw:
-            out.append((token.start[0], token.string))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str) and CJK.search(node.value) \
+                and id(node) not in patterns:
+            out.append((node.lineno, node.value))
     return out
 
 
@@ -63,8 +64,8 @@ def test_no_chinese_message_literals_outside_the_language_tables():
         rel = path.relative_to(PACKAGE).as_posix()
         if rel.startswith('diagrams/') or path.name in SKIP:
             continue
-        if rel in RAW_ONLY:
-            found += [f'{rel}:{line}: {text[:60]!r}' for line, text in unraw_chinese(path)]
+        if rel in PATTERN_ONLY:
+            found += [f'{rel}:{line}: {text[:60]!r}' for line, text in outside_patterns(path)]
             continue
         for line, text in literals(path):
             if CJK.search(text) and (rel, text) not in ALLOWED:
@@ -76,12 +77,15 @@ def test_no_chinese_message_literals_outside_the_language_tables():
 QUOTED_LABELS = {('moc.py', '［跨域→…］')}
 
 
-def test_a_file_of_patterns_holds_chinese_only_in_raw_strings(tmp_path):
-    """The check of :data:`RAW_ONLY` turns red on a question with Chinese in it, not on a pattern."""
+def test_a_file_of_patterns_holds_chinese_only_in_patterns(tmp_path):
+    """The check of :data:`PATTERN_ONLY` turns red on a question or a message with Chinese in it, in any form of
+    string, and not on the pattern of a call to ``re``."""
     path = tmp_path / 'rules.py'
-    path.write_text("RX = r'例中|上例'\nQ = f'The card says {w} (例中): does it point at the source?'\nN = '表中'\n",
-                    encoding='utf-8')
-    assert [line for line, _ in unraw_chinese(path)] == [2, 3]
+    path.write_text("import re\nRX = re.compile(r'例中|上例')\nHIT = re.search(r'表中', 'x')\n"
+                    "A = 'Does the card point at 原文 here?'\nB = lambda w: f'这张卡提到 {w}，它指向来源吗？'\n"
+                    "C = r'这张卡是否指向来源？'\nD = lambda w: rf'这张卡提到 {w}，它指向来源吗？'\n"
+                    "E = r'第' + re.compile(r'\\s*章').pattern\n", encoding='utf-8')
+    assert sorted({line for line, _ in outside_patterns(path)}) == [4, 5, 6, 7, 8]
 
 
 def test_comments_and_docstrings_are_english():
