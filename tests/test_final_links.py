@@ -6,13 +6,18 @@ one (``same``), is written under a title made unique, or waits for the owner. Th
 title no card has. Now, once titles and merges are final, each link is pointed at the title its card is in the vault
 under (recorded in ``links_moved``); a link to a card that is not written is left as plain text (``links_unlinked``)
 and its card is written needs-review with the reason ``dangling_link``, on the owner's list. Only the link changes,
-never the words around it. The cards are invented.
+never the words around it.
+
+The same holds in a patch an existing card takes: it is relinked once, and the write checks and writes the same
+words (before, the check read the patch as given and the write the relinked words, and the write stopped every
+time). A link that names, under another title, the existing card it goes into is plain text. The cards are invented.
 """
 from __future__ import annotations
 
 import pytest
 
 from secondbrain.vault import read_snapshot
+from tests.helpers import EXISTING
 from tests.test_patch_set import job, producer, reviewer, run
 
 LINE = 'A lantern queue keeps arrival order, as [[{}]] states.'
@@ -63,3 +68,34 @@ def test_a_link_to_a_card_that_is_nowhere_is_plain_text_and_its_card_waits_for_t
     assert [u['link'] for u in done['links_unlinked']] == ['A card nobody wrote']
     [item] = [i for i in Service(root).owner_items() if i['owner_reason'] == 'dangling_link']
     assert 'arrival order, as' in (root / item['path']).read_text(encoding='utf-8')
+
+
+PATCH_LINE = 'A lantern queue lights its markers in turn, as [[{}]] says.'
+
+
+@pytest.mark.parametrize('title', ['A queue card no one wrote', 'Arrival order in lantern queues'])
+def test_a_link_in_a_patch_is_relinked_once_and_the_existing_card_takes_the_patch(tmp_path, title):
+    """lantern-queue extends the vault's card, which takes its propositions as a patch; one of them names a card no
+    one wrote, or the card judged the same as that very vault card."""
+    root, job_id, _ = job(tmp_path)
+    base = producer()
+
+    def produce(task):
+        answer = base(task)
+        for c in answer.get('cards') or []:
+            if isinstance(c, dict) and c.get('slug') == 'lantern-queue':
+                c['propositions'] = list(c.get('propositions') or []) + [PATCH_LINE.format(title)]
+        return answer
+    done = run(root, job_id, reviewer(), produce)
+    assert done['status'] == 'applied', done.get('pending')
+    assert done['patch_set'] == {'lantern-queue': 'patched'}
+    old = read_snapshot(root).cards[EXISTING]
+    text = (root / old.path).read_text(encoding='utf-8')
+    assert f'as {title} says.' in text and f'[[{title}' not in text  # the words stay, the link is plain text
+    moved = [m for m in done['links_moved'] if m.get('into') == EXISTING]
+    unlinked = [u for u in done['links_unlinked'] if u.get('into') == EXISTING]
+    if title == 'A queue card no one wrote':
+        assert (moved, unlinked) == ([], [{'into': EXISTING, 'cards': ['lantern-queue'], 'link': title}])
+    else:  # judged the same as the vault card: it names the card it stands in
+        assert (moved, unlinked) == ([{'into': EXISTING, 'cards': ['lantern-queue'], 'from': title, 'to': old.title}],
+                                     [])

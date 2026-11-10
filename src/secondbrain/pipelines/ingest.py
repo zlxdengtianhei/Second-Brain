@@ -3445,14 +3445,22 @@ def _apply_job(root: Path, job_id: str, settled: list[dict] | None = None) -> di
         links_unlinked += [{'card': slug, 'link': x} for x in gone]
         if gone:
             card['_unlinked'] = gone
+    by_target: dict = {}
     for slug, fate in fates.items():
-        if fate.get('how') == 'patched':  # the propositions and review cards a patch adds to an existing card
-            fix = _relinker(relinks, set(title_of.values()), title_of.get(fate['target']))
-            fate['add'] = [fix(x) for x in fate.get('add') or []]
-            fate['add_flashcards'] = [{**f, 'q': fix(f.get('q')), 'a': fix(f.get('a'))} if isinstance(f, dict) else f
-                                      for f in fate.get('add_flashcards') or []]
-            links_moved += [{'card': slug, 'from': a, 'to': b} for a, b in fix.moved]
-            links_unlinked += [{'card': slug, 'link': x, 'into': fate['target']} for x in fix.gone]
+        if fate['how'] == 'patched':
+            by_target.setdefault(fate['target'], []).append(slug)
+    for target, slugs in sorted(by_target.items()):
+        # the patch an existing card takes is relinked once, here: the write checks (``taken``) and writes (``add``,
+        # ``add_flashcards``) the same words
+        fate = fates[slugs[0]]
+        fix = _relinker(relinks, set(title_of.values()), title_of.get(target))
+        taken = _relinked_patch(fate.get('patch') or check['patches'][target], fix)
+        add = [fix(x) for x in fate.get('add') or []]
+        add_f = [_relinked_qa(f, fix) for f in fate.get('add_flashcards') or []]
+        for slug in slugs:
+            fates[slug].update(taken=taken, add=add, add_flashcards=add_f)
+        links_moved += [{'into': target, 'cards': slugs, 'from': a, 'to': b} for a, b in dict.fromkeys(fix.moved)]
+        links_unlinked += [{'into': target, 'cards': slugs, 'link': x} for x in dict.fromkeys(fix.gone)]
     changes: list[Change] = []
     updated: dict = {}
     produced = []
@@ -3460,16 +3468,11 @@ def _apply_job(root: Path, job_id: str, settled: list[dict] | None = None) -> di
     # existing cards that take the merge check's patch; the cards that extend them are not written, and their
     # relations move to the existing card (old review cards and old propositions keep their words and numbers)
     merged_into_existing, patch_edges = [], []
-    by_target: dict = {}
-    for slug, fate in fates.items():
-        if fate['how'] == 'patched':
-            by_target.setdefault(fate['target'], []).append(slug)
     repeat_cards = {s: _final_card(entries, s, c) for o in settled for s, c in o.get('repeats', {}).items()}
     for target in sorted(by_target):
         # the merge check's patch; or, beside split cards, the review cards of the cards it says all of (D-24)
         old, slugs = snapshot.cards[target], by_target[target]
-        patch = fates[slugs[0]].get('patch') or check['patches'][target]
-        add, add_f = fates[slugs[0]]['add'], fates[slugs[0]]['add_flashcards']
+        patch, add, add_f = fates[slugs[0]]['taken'], fates[slugs[0]]['add'], fates[slugs[0]]['add_flashcards']
         swaps = {int(r['proposition'][1:]): r['by'] for r in patch.get('replace') or []}
         old_props = cardfmt.propositions_of(old.body)
         _, swapped = source_check.swap_flashcards(cardfmt.flashcards_of(old.body), patch.get('flashcard_replace') or [])
@@ -3904,17 +3907,39 @@ def _relinker(relinks: dict, known: set, own: str | None):
         if target in known and target != own:
             return m.group(0)
         to = relinks.get(target) if target not in known else target
-        if to is not None and to != own:
-            fix.moved.append((target, to))
-            return f'[[{to}{m.group(2)}{m.group(3)}]]'
         if to is None:
             fix.gone.append(target)
+        elif to != own:
+            fix.moved.append((target, to))
+            return f'[[{to}{m.group(2)}{m.group(3)}]]'
+        elif target != own:  # it names, under another title, the card it stands in: plain text, moved to that card
+            fix.moved.append((target, to))
         return m.group(3)[1:] if m.group(3) else target  # plain text: the alias, or the title
 
     def fix(text):
         return _WIKILINK.sub(sub, text) if isinstance(text, str) else text
     fix.moved, fix.gone = [], []
     return fix
+
+
+def _relinked_qa(card, fix):
+    """A review card (``{q, a}``, or a swap ``{flashcard, q, a}``) with its links pointed by ``fix``."""
+    return {**card, 'q': fix(card.get('q')), 'a': fix(card.get('a'))} if isinstance(card, dict) else card
+
+
+def _relinked_patch(patch: dict, fix) -> dict:
+    """``patch`` (the merge check's patch for an existing card) with the links of every item it writes pointed by
+    ``fix`` (:func:`_relinker`): its propositions, review cards, the new words of a replaced proposition and the
+    new question and answer of a swapped review card."""
+    out = dict(patch)
+    if isinstance(patch.get('propositions'), list):
+        out['propositions'] = [fix(x) for x in patch['propositions']]
+    for key in ('flashcards', 'flashcard_replace'):
+        if isinstance(patch.get(key), list):
+            out[key] = [_relinked_qa(f, fix) for f in patch[key]]
+    if isinstance(patch.get('replace'), list):
+        out['replace'] = [{**r, 'by': fix(r.get('by'))} if isinstance(r, dict) else r for r in patch['replace']]
+    return out
 
 
 def _relink_card(card: dict, relinks: dict, known: set, own: str) -> tuple[list, list]:
@@ -3927,8 +3952,7 @@ def _relink_card(card: dict, relinks: dict, known: set, own: str) -> tuple[list,
         if isinstance(card.get(key), list):
             card[key] = [fix(x) for x in card[key]]
     if isinstance(card.get('flashcards'), list):
-        card['flashcards'] = [{**f, 'q': fix(f.get('q')), 'a': fix(f.get('a'))} if isinstance(f, dict) else f
-                              for f in card['flashcards']]
+        card['flashcards'] = [_relinked_qa(f, fix) for f in card['flashcards']]
     return fix.moved, list(dict.fromkeys(fix.gone))
 
 
