@@ -30,9 +30,15 @@ def noted(text=CUED):
     return with_rows(first_review(), **{'lit-marker-cost': {'notes': [{'category': 'minor', 'text': text}]}})
 
 
-def answer(value, category=None, rid='N1'):
-    return {'answers': [{'id': rid, 'answer': value, 'category': category,
-                         'reason': 'the card relies on a size it never gives' if value == 'yes'
+#: Words of lit-marker-cost a yes quotes.
+QUOTED = 'Each marker costs one word of memory'
+
+
+def answer(value, category=None, rid='N1', quote=QUOTED, problem='it never says how large a word is'):
+    yes = value == 'yes'
+    return {'answers': [{'id': rid, 'answer': value, 'category': category, 'quote': quote if yes else None,
+                         'problem': problem if yes else None,
+                         'reason': 'the card relies on a size it never gives' if yes
                          else 'the size is on the card already'}]}
 
 
@@ -102,7 +108,9 @@ def test_a_yes_sends_the_card_back_and_its_repair_takes_a_round_as_any_revise(tm
     findings = seen['producer'][1].packet['review_findings']['cards']
     row = next(r for r in findings if r['slug'] == 'lit-marker-cost')
     assert row['decision'] == 'revise' and row['blocking'] == 'unreadable' and CUED in row['reason']
-    assert row['turned']['check'] == [{'id': 'N1', 'category': 'unreadable',
+    assert QUOTED in row['reason'] and 'it never says how large a word is' in row['reason']
+    assert row['turned']['check'] == [{'id': 'N1', 'category': 'unreadable', 'quote': QUOTED,
+                                      'problem': 'it never says how large a word is',
                                       'reason': 'the card relies on a size it never gives'}]
     assert verdicts(root, job_id, 'lit-marker-cost') == [('c01', 'accept', None), ('nc-c01', 'revise', 'note_check'),
                                                          ('c01.r1', 'accept', 'repair_round')]
@@ -119,7 +127,7 @@ def test_a_no_leaves_the_card_accepted(tmp_path):
     assert verdicts(root, job_id, 'lit-marker-cost') == [('c01', 'accept', None)]
     assert done['outcomes']['lit-marker-cost'] == 'write'
     assert done['notes_checked'] == [{'chunk': 'c01', 'slot': 'c01', 'slug': 'lit-marker-cost', 'note': CUED,
-                                      'id': 'N1', 'answer': 'no', 'category': None,
+                                      'id': 'N1', 'answer': 'no', 'category': None, 'quote': None, 'problem': None,
                                       'reason': 'the size is on the card already'}]
     assert not any(t['slug'] == 'lit-marker-cost' for t in done['notes_turned'])
     stored = jobs.artifact(root, jobs.load(root, job_id), 'review', 'nc-c01')
@@ -171,15 +179,47 @@ def test_a_fault_of_the_program_reading_the_checks_answer_sets_that_answer_aside
     assert (fault['slot'], fault['role'], fault['set_aside']) == ('nc-c01', 'reviewer', True)
 
 
+def test_a_yes_whose_quote_is_not_on_the_card_is_asked_again_and_given_up_leaves_the_card_accepted(tmp_path):
+    wrong = answer('yes', 'fact', quote='Each marker costs two words')  # not the card's words
+    root, job_id, done, seen = run(tmp_path, [first_candidate(), repair_candidate()],
+                                   [noted(), wrong, wrong, wrong, dimming_accepted()], max_invalid_retries=2)
+    assert done['status'] == 'applied', done.get('pending')
+    assert [t.chunk for t in seen['reviewer']] == ['c01', 'nc-c01', 'nc-c01', 'nc-c01', 'c01.r1']
+    info = jobs.load(root, job_id)['chunks']['nc-c01']
+    assert info['skipped'] and "'Each marker costs two words' is not on the card" in info['last_review_error']
+    assert done['outcomes']['lit-marker-cost'] == 'write'  # given up: as a no
+
+
+def test_the_check_asks_for_the_words_and_a_no_for_a_note_that_says_the_card_is_not_wrong():
+    from secondbrain.pipelines.ingest import note_check_prompt
+    text = note_check_prompt('ingest-x1')
+    assert 'quote in `quote`, word for word, the words of the card that are wrong' in text
+    assert 'A note that says itself the card is not wrong, or still reads well: answer `no`, unless you can point ' \
+           'to the very words of the card that are wrong.' in text
+
+
+ON_CARD = {'quote': QUOTED, 'problem': 'it never says how large a word is'}
+
+
 @pytest.mark.parametrize('given, problem', [
-    ({'answers': [{'id': 'N1', 'answer': 'yes', 'category': None, 'reason': 'r'}]}, 'a yes names the kind'),
-    ({'answers': [{'id': 'N1', 'answer': 'yes', 'category': 'minor', 'reason': 'r'}]}, 'a yes names the kind'),
+    ({'answers': [{'id': 'N1', 'answer': 'yes', 'category': None, 'reason': 'r', **ON_CARD}]}, 'a yes names the kind'),
+    ({'answers': [{'id': 'N1', 'answer': 'yes', 'category': 'minor', 'reason': 'r', **ON_CARD}]},
+     'a yes names the kind'),
+    ({'answers': [{'id': 'N1', 'answer': 'yes', 'category': 'fact', 'reason': 'r', 'quote': None,
+                   'problem': 'p'}]}, 'a yes quotes, word for word'),
+    ({'answers': [{'id': 'N1', 'answer': 'yes', 'category': 'fact', 'reason': 'r', 'quote': 'one word of fog',
+                   'problem': 'p'}]}, "'one word of fog' is not on the card"),
+    ({'answers': [{'id': 'N1', 'answer': 'yes', 'category': 'fact', 'reason': 'r', 'quote': 'cos',
+                   'problem': 'p'}]}, 'characters or more'),  # too short to name words of the card
+    ({'answers': [{'id': 'N1', 'answer': 'yes', 'category': 'fact', 'reason': 'r', 'quote': QUOTED,
+                   'problem': ' '}]}, 'says what the quoted words lack'),
     ({'answers': [{'id': 'N1', 'answer': 'no', 'reason': ' '}]}, 'give the reason'),
     ({'answers': [{'id': 'N9', 'answer': 'no', 'reason': 'r'}]}, 'is not a note this check asks about'),
     ({'answers': [{'id': 'N1', 'answer': 'no', 'reason': 'r'}] * 2}, 'answered twice'),
 ])
 def test_an_answer_out_of_form_is_refused(given, problem):
-    frozen = {'cards': [{'slug': 'lit-marker-cost', 'notes': [{'id': 'N1', 'text': CUED}]}]}
+    frozen = {'cards': [{'slug': 'lit-marker-cost', 'card': CARDS['lit-marker-cost'],
+                         'notes': [{'id': 'N1', 'text': CUED}]}]}
     with pytest.raises(ValueError, match=problem):
         notecheck.validate(frozen, given, noted())
 

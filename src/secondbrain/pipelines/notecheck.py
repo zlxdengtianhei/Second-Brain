@@ -9,7 +9,10 @@ each such note. Does the problem the note names make the card unfaithful to the 
 without the source (``unreadable``), or not one unit (``not_a_unit``)?
 
 - A yes sends the card back as a revise of that kind, with the note and the answer as its reason. It counts toward
-  the content repair rounds like any revise, and once they are used up the card waits for the owner.
+  the content repair rounds like any revise, and once they are used up the card waits for the owner. A yes quotes,
+  word for word, the words of the card that are wrong (``quote``) and says what they lack or get wrong
+  (``problem``); the program finds the quote on the card, or refuses the answer and asks again (in a replay, most
+  yes answers fell on cards the judges found right, a few on notes that said themselves the card was not wrong).
 - A no leaves the card accepted. A ``minor`` note without a cue word is not asked about.
 - The check is not a repair round of the chunk: its slot is not a round. An answer that keeps failing the checks
   is given up, and the cards stay as the review accepted them.
@@ -30,11 +33,38 @@ KINDS = ('fact', 'unreadable', 'not_a_unit')
 _SLOT = re.compile(r'nc-c\d+(?:-\d+)*(?:\.r[1-9]\d*)?')
 _STR = {'type': 'string'}
 
+_TEXT = {'type': ['string', 'null']}
+#: The shortest quote a yes may give (fewer characters name no sentence).
+MIN_QUOTE = 4
+
 #: The reviewer's answer.
 SCHEMA = {'type': 'object', 'required': ['answers'], 'properties': {'answers': {'type': 'array', 'items': {
     'type': 'object', 'required': ['id', 'answer', 'reason'],
     'properties': {'id': _STR, 'answer': {'type': 'string', 'enum': ['yes', 'no']},
-                   'category': {'type': ['string', 'null'], 'enum': [*KINDS, None]}, 'reason': _STR}}}}}
+                   'category': {'type': ['string', 'null'], 'enum': [*KINDS, None]},
+                   'quote': _TEXT, 'problem': _TEXT, 'reason': _STR}}}}}
+
+
+def _text_of(card: dict) -> list[str]:
+    """The words of ``card`` a yes may quote: its title, essence, intuition, propositions, confusions and review
+    cards."""
+    out = [card.get('title'), card.get('essence'), card.get('intuition')]
+    out += list(card.get('propositions') or []) + list(card.get('confusions') or [])
+    for f in card.get('flashcards') or []:
+        if isinstance(f, dict):
+            out += [f.get('q'), f.get('a')]
+    return [x for x in out if isinstance(x, str)]
+
+
+def _spaced(text: str) -> str:
+    return ' '.join(text.split())
+
+
+def on_card(quote, card: dict) -> bool:
+    """Whether ``quote`` (at least :data:`MIN_QUOTE` characters) is words of ``card``, word for word (spaces aside)."""
+    if not isinstance(quote, str) or len(quote.strip()) < MIN_QUOTE:
+        return False
+    return any(_spaced(quote) in _spaced(t) for t in _text_of(card))
 
 
 def slot_for(reviewed: str) -> str:
@@ -70,6 +100,7 @@ def validate(frozen: dict, payload, chunk_review: dict) -> dict:
     with its kind, each with a reason. Returns it with the rows of ``chunk_review`` (the review asked about) it
     turns."""
     asked = {n['id']: (c['slug'], n['text']) for c in frozen['cards'] for n in c['notes']}
+    cards = {c['slug']: c.get('card') or {} for c in frozen['cards']}
     errors, given = [], {}
     for i, row in enumerate(payload.get('answers') or []):
         if not isinstance(row, dict):
@@ -84,6 +115,11 @@ def validate(frozen: dict, payload, chunk_review: dict) -> dict:
         given[rid] = row
         if row.get('answer') == 'yes' and row.get('category') not in KINDS:
             errors.append(f'{rid}: a yes names the kind of problem: category one of {", ".join(KINDS)}')
+        if row.get('answer') == 'yes' and not on_card(row.get('quote'), cards[asked[rid][0]]):
+            errors.append(f'{rid}: a yes quotes, word for word, the words of card {asked[rid][0]} that are wrong '
+                          f'(quote, {MIN_QUOTE} characters or more); {row.get("quote")!r} is not on the card')
+        if row.get('answer') == 'yes' and (not isinstance(row.get('problem'), str) or not row['problem'].strip()):
+            errors.append(f'{rid}: a yes says what the quoted words lack or get wrong (problem)')
         if not isinstance(row.get('reason'), str) or not row['reason'].strip():
             errors.append(f'{rid}: give the reason in one sentence')
     missing = [rid for rid in asked if rid not in given]
@@ -92,7 +128,8 @@ def validate(frozen: dict, payload, chunk_review: dict) -> dict:
     if errors:
         raise AnswerError('Note check rejected by validation:\n- ' + '\n- '.join(errors))
     answers = [{'id': rid, 'answer': given[rid]['answer'],
-                'category': given[rid].get('category') if given[rid]['answer'] == 'yes' else None,
+                **{k: given[rid].get(k) if given[rid]['answer'] == 'yes' else None
+                   for k in ('category', 'quote', 'problem')},
                 'reason': given[rid]['reason']} for rid in asked]
     return {'answers': answers, 'turned': _turned(chunk_review, asked, answers)}
 
@@ -112,10 +149,11 @@ def _turned(review: dict, asked: dict, answers: list[dict]) -> list[dict]:
         note = {'category': first['category'], 'text': asked[first['id']][1]}
         kept = {k: v for k, v in row.items() if k not in ('amend', 'decision', 'reason', 'blocking')}
         out.append({**kept, 'decision': 'revise', 'blocking': first['category'],
-                    'reason': f"the check of a minor note found a {first['category']} problem: {note['text']} "
-                              f"({first['reason']})",
+                    'reason': f"the check of a minor note found a {first['category']} problem in "
+                              f"\"{first['quote']}\": {first['problem']} (the note: {note['text']})",
                     'turned': {'from': 'accept', 'reason': row.get('reason'), 'note': note,
-                               'check': [{k: a[k] for k in ('id', 'category', 'reason')} for a in found]}})
+                               'check': [{k: a[k] for k in ('id', 'category', 'quote', 'problem', 'reason')}
+                                         for a in found]}})
     return out
 
 

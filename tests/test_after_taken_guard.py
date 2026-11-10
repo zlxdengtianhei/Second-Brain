@@ -246,6 +246,8 @@ def ingest_note_check_flow(tmp_path, monkeypatch):
         asked.append(task.chunk)
         yes = len(asked) == 1
         return {'answers': [{'id': n['id'], 'answer': 'yes' if yes else 'no', 'category': 'unreadable' if yes else None,
+                             'quote': 'Each marker costs one word of memory' if yes else None,
+                             'problem': 'it never says how large a word is' if yes else None,
                              'reason': 'the card does not give the size'} for c in task.packet['cards']
                             for n in c['notes']]}
     return root, job_id, lambda: tp.run(root, job_id, review)
