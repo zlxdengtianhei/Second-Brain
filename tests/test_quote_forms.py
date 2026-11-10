@@ -51,6 +51,15 @@ def test_two_passages_that_differ_only_in_their_quotation_marks_are_not_taken_fo
     assert out == '她答“好的”' and records == []
 
 
+def test_single_and_double_quotation_marks_are_two_kinds():
+    """A chunk that writes a word in single quotes only: a quote that puts it in double quotes is not its text."""
+    text = "她答'好的'，随后挂了电话。"
+    out, records = snapped('她答“好的”，随后挂了电话', text)
+    assert out == '她答“好的”，随后挂了电话' and records == []
+    out, [record] = snapped('她答‘好的’，随后挂了电话', text)  # curly single quotes are single quotes
+    assert out == "她答'好的'，随后挂了电话" and record['after'] == out
+
+
 def test_a_sentence_the_chunk_has_twice_is_not_taken():
     text = '规则：先读"甲"，再读"乙"。中间隔了一段话。规则：先读"甲"，再读"乙"。'
     out, records = snapped('规则：先读“甲”，再读“乙”', text)
