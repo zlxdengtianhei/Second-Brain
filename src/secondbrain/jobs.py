@@ -514,6 +514,9 @@ def _reply_text(raw, answer, result) -> str | None:
 
 #: Where a refused producer answer is kept, under the job's state (never in the vault, never in an export).
 REJECTED = 'rejected'
+#: How much of a refused reply is kept: its first 256 KiB, in whole characters, with its length and the hash of all
+#: of it. A producer's reply is far shorter; one refused for its size (over :data:`MAX_ANSWER_BYTES`) is not.
+KEPT_REPLY_BYTES = 256 * 1024
 
 
 def _keep_rejected(root: Path, job_id: str, state: dict, run: dict, exc: BaseException, step: str, message: str,
@@ -531,15 +534,28 @@ def _keep_rejected(root: Path, job_id: str, state: dict, run: dict, exc: BaseExc
 
 def _write_rejected(root: Path, job_id: str, state: dict, run: dict, exc: BaseException, step: str, message: str,
                     seen: dict) -> None:
+    """The record of :func:`_keep_rejected`, bounded: the reply's first :data:`KEPT_REPLY_BYTES` (``reply_bytes``
+    and ``reply_sha256`` are of all of it); no answer as read when it was refused for its size; the answer before
+    and after the repairs only where it differs from the answer as read (``same_as_payload`` names the ones left
+    out)."""
     text = seen.get('text')
+    whole = text.encode('utf-8') if isinstance(text, str) else None
+    kept = whole[:KEPT_REPLY_BYTES].decode('utf-8', errors='ignore') if whole is not None else None
+    payload = None if step == 'size' else seen.get('payload')
+    report = dict(getattr(exc, 'rejected', None) or {})
+    same = [k for k in ('payload_before_repair', 'payload_after_repair') if k in report and report[k] == payload]
     attempt = int(run.get('rejected_submits', 0)) + 1
-    record = {'schema': 'secondbrain-rejected/1', 'job_id': job_id, 'run_id': run['run_id'], 'chunk': run.get('chunk'),
+    record = {'schema': 'secondbrain-rejected/2', 'job_id': job_id, 'run_id': run['run_id'], 'chunk': run.get('chunk'),
               'attempt': attempt, 'step': step, 'model_requested': run.get('model_requested'),
               'model_reported': seen.get('model_reported') or run.get('model_reported'),
               'task_sha256': run.get('task_sha256'), 'input_sha256': state.get('input_sha256'),
-              'reply_text': text, 'reply_sha256': digest(text.encode('utf-8')) if isinstance(text, str) else None,
-              'payload': seen.get('payload'), 'refusal': message[:20000],
-              **(getattr(exc, 'rejected', None) or {})}
+              'reply_text': kept, 'reply_bytes': None if whole is None else len(whole),
+              'reply_truncated': whole is not None and len(whole) > KEPT_REPLY_BYTES,
+              'reply_sha256': None if whole is None else digest(whole),
+              'payload': payload, **({'payload_left_out': 'the answer was refused for its size'} if step == 'size'
+                                     else {}),
+              'refusal': message[:20000],
+              **{k: v for k, v in report.items() if k not in same}, **({'same_as_payload': same} if same else {})}
     where = location(job_id, REJECTED, f"{run['run_id']}-{attempt}.json")
     write_json(root, where, record)
     run['output_sha256'] = record['reply_sha256']

@@ -7,6 +7,9 @@ in an export), with who gave it, the reply as it came (before a code fence was s
 answer as read, before and after the program's repairs with the repairs, each error line with the field it names and
 its kind (a quote also with its own text, the longest stretch of it the chunk has, its length and where that stretch
 starts), and the coverage rows as given. The texts are invented.
+
+A record is bounded: the reply's first 256 KiB (with its length and the hash of all of it), no answer as read when it
+was refused for its size, and the answer before and after the repairs only where it differs from the answer as read.
 """
 from __future__ import annotations
 
@@ -47,8 +50,11 @@ def test_a_refused_answer_is_kept_with_its_reply_and_its_error_lines(tmp_path):
     kept = json.loads(read_state(root, where))
     assert kept['reply_text'] == text                                    # as it came, the fence and words included
     assert run['output_sha256'] == kept['reply_sha256'] == hashlib.sha256(text.encode()).hexdigest()
-    assert kept['payload'] == answer and kept['payload_before_repair'] == answer
-    assert kept['payload_after_repair']['cards'][0]['source_quotes'] == [WRONG]  # no repair could make it a slice
+    assert (kept['reply_bytes'], kept['reply_truncated']) == (len(text.encode()), False)
+    # no repair could make the quote a slice: before and after the repairs it is the answer as read, kept once
+    assert kept['payload'] == answer and kept['payload']['cards'][0]['source_quotes'] == [WRONG]
+    assert kept['same_as_payload'] == ['payload_before_repair', 'payload_after_repair']
+    assert 'payload_before_repair' not in kept and 'payload_after_repair' not in kept
     assert (kept['run_id'], kept['chunk'], kept['base_chunk'], kept['round'], kept['attempt']) == \
         (run['run_id'], 'c01', 'c01', 0, 1)
     assert kept['task_sha256'] == run['task_sha256'] and kept['input_sha256'] and kept['chunk_sha256']
@@ -86,3 +92,31 @@ def test_an_executors_reply_text_is_kept_on_its_result():
     assert json.loads(api_anthropic.answer_text(tool)) == {'cards': []}
     assert jobs._reply_text(None, jobs._NO_ANSWER, Result(status='completed', output={'a': 1}, text='raw')) == 'raw'
     assert json.loads(jobs._reply_text(None, jobs._NO_ANSWER, Result(status='completed', output={'a': 1}))) == {'a': 1}
+
+
+def test_an_answer_refused_for_its_size_is_kept_as_its_first_bytes_and_the_hash_of_all_of_it(tmp_path):
+    root, job_id, _ = lantern_job(tmp_path)
+    answer = copy.deepcopy(first_candidate())
+    answer['cards'][0]['essence'] = '灯' * (3 * 1024 * 1024)  # 9 MB in UTF-8: past the answer limit
+    text = json.dumps(answer, ensure_ascii=False)
+    code, run = submit(root, job_id, tmp_path, text)
+    where = run['rejected_answers'][0]
+    kept = json.loads(read_state(root, where))
+    assert code != 0 and kept['step'] == 'size' and 'larger than 8 MB' in kept['refusal']
+    assert kept['reply_truncated'] and kept['reply_bytes'] == len(text.encode())
+    assert kept['reply_sha256'] == run['output_sha256'] == hashlib.sha256(text.encode()).hexdigest()
+    assert len(kept['reply_text'].encode()) <= jobs.KEPT_REPLY_BYTES and text.startswith(kept['reply_text'])
+    assert kept['payload'] is None and kept['payload_left_out']
+    assert len(read_state(root, where)) < jobs.KEPT_REPLY_BYTES + 64 * 1024  # the record is bounded
+
+
+def test_the_answer_the_repairs_changed_is_kept_beside_the_answer_as_read(tmp_path):
+    root, job_id, _ = lantern_job(tmp_path)
+    answer = copy.deepcopy(first_candidate())
+    answer['cards'][0]['title'] = answer['cards'][0]['title'] + ' / order'  # repaired: a full-width slash
+    answer['cards'][1]['source_quotes'] = [WRONG]                          # not repaired: refused
+    code, run = submit(root, job_id, tmp_path, json.dumps(answer, ensure_ascii=False))
+    kept = json.loads(read_state(root, run['rejected_answers'][0]))
+    assert code != 0 and kept['payload'] == answer and kept['same_as_payload'] == ['payload_before_repair']
+    assert kept['payload_after_repair']['cards'][0]['title'].endswith(' ／ order')
+    assert any(r['rule'] == 'title' for r in kept['repairs'])
