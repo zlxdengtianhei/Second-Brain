@@ -15,7 +15,8 @@ The reviewer answers each question yes or no with a reason (``answers`` in the r
 
 One more table reads a reviewer's own words: the cue words of a ``minor`` note that may name a blocking problem
 (:func:`cued`; :mod:`.notecheck` asks the reviewer about such a note). The pattern tables are Chinese, the language
-the checks were measured on; this module is one of the language tables.
+the checks were measured on; this module is one of the language tables. Its Chinese stands only in raw string
+literals, the patterns (``tests/test_messages_english.py`` holds it to that); every name and message is English.
 """
 from __future__ import annotations
 
@@ -23,17 +24,17 @@ import re
 
 # --- points at the source ------------------------------------------------------------------------------------------
 POINTERS = (
-    ('原文', re.compile(r'原文(?:里|中)?(?:说|强调|把|写|称|提到|指出|认为|列为|讲|的说法)')),
-    ('教材', re.compile(r'(?:按|据|照)教材|教材(?:里|中)?(?:说|把|按|将|的概括|这句|论断|列|称|强调|写|归)')),
-    ('对话', re.compile(r'对话(?=曾|里|中|说|第|提到|写|把)')),
-    ('讲义/本节', re.compile(r'讲义|本节|本章|上一节|下一节')),
-    ('上文/前文', re.compile(r'(?<!上)下文(?!本)|(?<![的])上文|前文')),
-    ('表中', re.compile(r'(?<![词码])表中|上表|下表|这张表|该表')),
-    ('例中', re.compile(r'(?<![正负])例中|这一例|上例|该例|示意算例|那个例子')),
-    ('那卡/该题', re.compile(r'那卡|那张卡|该题|此题')),
-    ('总图/前三类', re.compile(r'总图|前三类|前两类|前几类')),
-    ('第N章', re.compile(r'第\s*\d+\s*章')),
-    ('脚本', re.compile(r'脚本(?!\s*[`\w./-]*\.py)')),
+    ('the source says', re.compile(r'原文(?:里|中)?(?:说|强调|把|写|称|提到|指出|认为|列为|讲|的说法)')),
+    ('a textbook', re.compile(r'(?:按|据|照)教材|教材(?:里|中)?(?:说|把|按|将|的概括|这句|论断|列|称|强调|写|归)')),
+    ('a dialogue', re.compile(r'对话(?=曾|里|中|说|第|提到|写|把)')),
+    ('a handout or section', re.compile(r'讲义|本节|本章|上一节|下一节')),
+    ('the text above or below', re.compile(r'(?<!上)下文(?!本)|(?<![的])上文|前文')),
+    ('a table', re.compile(r'(?<![词码])表中|上表|下表|这张表|该表')),
+    ('an example', re.compile(r'(?<![正负])例中|这一例|上例|该例|示意算例|那个例子')),
+    ('that card', re.compile(r'那卡|那张卡|该题|此题')),
+    ('an overview', re.compile(r'总图|前三类|前两类|前几类')),
+    ('a chapter', re.compile(r'第\s*\d+\s*章')),
+    ('a script', re.compile(r'脚本(?!\s*[`\w./-]*\.py)')),
 )
 _TABLE = re.compile(r'^\s*\|.*\|\s*$\n^\s*\|\s*:?-{2,}', re.M)
 _EXAMPLE_LINE = re.compile(r'(?:^|\n)\s*(?:- P\d+\.\s*)?(?:例|示例|算例)[：:]|例如|比如')
@@ -59,9 +60,9 @@ def pointers(card: dict) -> list[tuple[str, str]]:
             m = rx.search(line)
             if not m:
                 continue
-            if name == '表中' and _TABLE.search(text):
+            if name == 'a table' and _TABLE.search(text):
                 continue
-            if name == '例中' and _EXAMPLE_LINE.search(text.replace(line, '')):
+            if name == 'an example' and _EXAMPLE_LINE.search(text.replace(line, '')):
                 continue
             hits.append((name, line[max(0, m.start() - 8):m.end() + 8].strip()))
     return hits

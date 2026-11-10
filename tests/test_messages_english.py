@@ -14,7 +14,10 @@ from pathlib import Path
 
 PACKAGE = Path(__file__).resolve().parents[1] / 'src' / 'secondbrain'
 CJK = re.compile(r'[　-〿一-鿿＀-￯]')
-SKIP = {'labels.py', 'cards.py', 'review_registry.py', 'cardlint.py'}   # language tables; separately owned
+SKIP = {'labels.py', 'cards.py', 'review_registry.py'}   # language tables; separately owned
+#: Files whose Chinese may stand only in raw string literals, the patterns of rules measured on Chinese text; their
+#: names, questions and messages are checked as any other.
+RAW_ONLY = {'pipelines/cardlint.py'}
 ALLOWED = {
     ('pipelines/chunking.py', '(?<=[。！？!?；;])|(?<=[.!?])(?=\\s)'),   # sentence ends
     ('rendering.py', '　-〿㐀-䶿一-鿿豈-﫿＀-￯‘’“”—–'),
@@ -39,11 +42,29 @@ def literals(path):
             yield node.lineno, node.value
 
 
+def unraw_chinese(path):
+    """``(line, text)`` of each string token with Chinese that is not a raw string (an f-string's text counts)."""
+    out = []
+    for token in tokenize.generate_tokens(io.StringIO(path.read_text(encoding='utf-8')).readline):
+        if token.type == tokenize.STRING:
+            raw = 'r' in re.match(r'[A-Za-z]*', token.string).group(0).lower()
+        elif token.type == getattr(tokenize, 'FSTRING_MIDDLE', -1):
+            raw = False
+        else:
+            continue
+        if CJK.search(token.string) and not raw:
+            out.append((token.start[0], token.string))
+    return out
+
+
 def test_no_chinese_message_literals_outside_the_language_tables():
     found = []
     for path in sorted(PACKAGE.rglob('*.py')):
         rel = path.relative_to(PACKAGE).as_posix()
         if rel.startswith('diagrams/') or path.name in SKIP:
+            continue
+        if rel in RAW_ONLY:
+            found += [f'{rel}:{line}: {text[:60]!r}' for line, text in unraw_chinese(path)]
             continue
         for line, text in literals(path):
             if CJK.search(text) and (rel, text) not in ALLOWED:
@@ -53,6 +74,14 @@ def test_no_chinese_message_literals_outside_the_language_tables():
 
 #: Docstrings that quote a zh page label as an example.
 QUOTED_LABELS = {('moc.py', '［跨域→…］')}
+
+
+def test_a_file_of_patterns_holds_chinese_only_in_raw_strings(tmp_path):
+    """The check of :data:`RAW_ONLY` turns red on a question with Chinese in it, not on a pattern."""
+    path = tmp_path / 'rules.py'
+    path.write_text("RX = r'例中|上例'\nQ = f'The card says {w} (例中): does it point at the source?'\nN = '表中'\n",
+                    encoding='utf-8')
+    assert [line for line, _ in unraw_chinese(path)] == [2, 3]
 
 
 def test_comments_and_docstrings_are_english():
