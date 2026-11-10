@@ -1853,8 +1853,9 @@ def _repaired(packet: dict, state: dict, root, slot: str, spec: AnswerRole, payl
         if not isinstance(payload.get('card'), dict):
             return payload, []
         whole = {'cards': [payload['card']]}
+    written = _written_slugs(packet)
     context = answerfix.Context(text=text, catalog=packet['catalog'], prefix=packet['settings']['id_prefix'],
-                                title_of=_existing_titles(root), targets=targets | set(_written_slugs(packet)))
+                                title_of=_existing_titles(root), targets=targets | set(written), written=written)
     fixed, records = answerfix.repair(whole, context, rules=spec.repair_rules)
     if spec.cards == 'card':
         return {**payload, 'card': fixed['cards'][0]}, records

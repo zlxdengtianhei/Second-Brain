@@ -44,6 +44,7 @@ class Context:
     prefix: str
     targets: set = field(default_factory=set)  # existing ids and slugs of other cards a relation may name
     title_of: dict = field(default_factory=dict)  # {id: title} of existing cards
+    written: dict = field(default_factory=dict)  # {slug: id} of the cards earlier jobs of this source wrote (a retry)
 
 
 @dataclass(frozen=True)
@@ -235,8 +236,14 @@ def _overlap_hints(payload: dict, ctx: Context) -> list:
         hint = c.get('overlap_hint')
         if not isinstance(hint, dict) or not isinstance(hint.get('with'), list):
             continue
-        kept = [x for x in hint['with'] if not _source_card(x, ctx, own)]
-        if len(kept) == len(hint['with']):
+        kept = []
+        for x in hint['with']:
+            if isinstance(x, str) and x in ctx.written and x not in own:  # written by an earlier job: by its id
+                kept.append(ctx.written[x])
+            elif not _source_card(x, ctx, own):
+                kept.append(x)
+        kept = list(dict.fromkeys(kept))
+        if kept == hint['with']:
             continue
         out.append({'rule': 'overlap_hint', 'card': _slug(c), 'before': dict(hint),
                     'after': {**hint, 'with': kept} if kept else None})
@@ -352,7 +359,8 @@ RULES = (
                   'full-width punctuation, backticks, `$`, a doubled backslash and a list mark at the start of a line '
                   'are set aside, there once, becomes that slice', _quotes),
     Rule('overlap_hint', 'a card of this source named in an overlap hint, which names existing cards, is taken out '
-                         '(the hint goes when it names none)', _overlap_hints),
+                         '(the hint goes when it names none); one an earlier job of the source wrote is named by its '
+                         'id', _overlap_hints),
     Rule('coverage_cards', 'a card of another chunk named in a card row of the coverage, next to a card of this '
                            'answer, is taken out', _coverage_cards),
     Rule('relation_target', 'a relation to a card that is neither an existing card nor a card of the source is '

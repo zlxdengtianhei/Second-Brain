@@ -71,6 +71,27 @@ def test_retry_redoes_only_the_pending_card(tmp_path):
     assert tree(root) == before
 
 
+def test_an_overlap_hint_naming_a_card_the_parent_wrote_names_it_by_its_id(tmp_path):
+    """In a retry, the producer's overlap hint names a card the parent wrote by its slug: the program names it by its
+    id (a card of the source not written yet would be taken out), and records the repair."""
+    root = build_ingest_vault(tmp_path / 'vault')
+    parent = partial_job(root)
+    child = ingest.retry(root, parent)
+    answer = retry_answer()
+    answer['cards'][0]['overlap_hint'] = {'overlap': 'extends', 'with': ['lit-marker-cost']}
+    review = {'cards': [{'slug': 'marker-dimming', 'decision': 'accept', 'overlap': 'distinct', 'reason': 'right now'}],
+              'new_topics': [], 'coverage': {'decision': 'accept', 'reason': 'only the open card was missing'}}
+    produce, respond, _ = scripted([answer], [review], {'marker-dimming': DIMMING_IR})
+    done = ingest.advance(root, child['job_id'], producer=FakeExecutor('gpt-test', responder=produce),
+                          reviewer=FakeExecutor('claude-test', responder=respond))
+    assert done['status'] == 'applied', done.get('pending')
+    written = {c.title: c.id for c in read_snapshot(root).cards.values()}['Lit marker memory cost']
+    taken = jobs.artifact(root, jobs.load(root, child['job_id']), 'candidate', 'c01')
+    assert taken['cards'][0]['overlap_hint'] == {'overlap': 'extends', 'with': [written]}
+    [record] = [r for r in taken['program_repairs'] if r['rule'] == 'overlap_hint']
+    assert record['before']['with'] == ['lit-marker-cost'] and record['after']['with'] == [written]
+
+
 #: A passage the parent's producer handled as a duplicate of an existing card (no card written).
 SKIM_ROW = {'source_quote': 'A reader that holds a marker can jump straight to it without scanning the items',
             'disposition': 'same', 'with': [EXISTING], 'reason': 'the existing card says it'}
