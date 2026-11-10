@@ -10,12 +10,14 @@ never the words around it.
 
 The same holds in a patch an existing card takes: it is relinked once, and the write checks and writes the same
 words (before, the check read the patch as given and the write the relinked words, and the write stopped every
-time). A link that names, under another title, the existing card it goes into is plain text. The cards are invented.
+time). A link that names, under another title, the existing card it goes into is plain text. What a patch adds is
+read from the relinked patch, so two items alike once relinked go in once. The cards are invented.
 """
 from __future__ import annotations
 
 import pytest
 
+from secondbrain import cards as cardfmt
 from secondbrain.vault import read_snapshot
 from tests.helpers import EXISTING
 from tests.test_patch_set import job, producer, reviewer, run
@@ -99,3 +101,43 @@ def test_a_link_in_a_patch_is_relinked_once_and_the_existing_card_takes_the_patc
     else:  # judged the same as the vault card: it names the card it stands in
         assert (moved, unlinked) == ([{'into': EXISTING, 'cards': ['lantern-queue'], 'from': title, 'to': old.title}],
                                      [])
+
+
+NOBODY = '[[A card no one filed]]'
+
+
+def patching(tmp_path, propositions=(), flashcards=(), check=None, old_line=None, first=None):
+    """Run the two-chunk job; lantern-queue (which extends the vault's card) gets ``propositions`` and ``flashcards``
+    more (and ``first`` for its first proposition), the merge check answers with ``check``, and ``old_line`` (old,
+    new) rewrites a line of the vault's card."""
+    root, job_id, _ = job(tmp_path)
+    if old_line:
+        path = next((root / '10_Knowledge').rglob(f'{EXISTING}.md'))
+        path.write_text(path.read_text(encoding='utf-8').replace(*old_line), encoding='utf-8')
+    base = producer()
+
+    def produce(task):
+        answer = base(task)
+        for c in answer.get('cards') or []:
+            if isinstance(c, dict) and c.get('slug') == 'lantern-queue':
+                c['propositions'] = ([first] if first else []) + list(c.get('propositions') or [])[1 if first else 0:] \
+                    + list(propositions)
+                c['flashcards'] = list(c.get('flashcards') or []) + list(flashcards)
+        return answer
+    done = run(root, job_id, reviewer(check=check) if check else reviewer(), produce)
+    assert done['status'] == 'applied', done.get('pending')
+    old = read_snapshot(root).cards[EXISTING]
+    return done, cardfmt.propositions_of(old.body), cardfmt.flashcards_of(old.body)
+
+
+@pytest.mark.parametrize('shape', ['two items', 'an item and the card'])
+def test_items_alike_once_relinked_go_into_the_existing_card_once(tmp_path, shape):
+    plain = 'A lantern queue dims its markers past A card no one filed here.'
+    linked = plain.replace('A card no one filed', NOBODY)
+    if shape == 'two items':
+        done, props, _ = patching(tmp_path, propositions=[linked, plain])
+    else:  # the vault's card says it already, in plain words
+        done, props, _ = patching(tmp_path, propositions=[linked],
+                                  old_line=('- P1. Old proposition 1 about routing readers.', f'- P1. {plain}'))
+    assert props.count(plain) == 1 and not any(NOBODY in p for p in props)
+

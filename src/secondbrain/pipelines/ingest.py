@@ -3451,13 +3451,18 @@ def _apply_job(root: Path, job_id: str, settled: list[dict] | None = None) -> di
         if fate['how'] == 'patched':
             by_target.setdefault(fate['target'], []).append(slug)
     for target, slugs in sorted(by_target.items()):
-        # the patch an existing card takes is relinked once, here: the write checks (``taken``) and writes (``add``,
-        # ``add_flashcards``) the same words
+        # the patch an existing card takes is relinked once, here, and what it adds is read from the relinked patch:
+        # the write checks (``taken``) and writes (``add``, ``add_flashcards``, a part of ``taken``) the same words, and
+        # an item that repeats the card or another item once relinked goes in once
         fate = fates[slugs[0]]
         fix = _relinker(relinks, set(title_of.values()), title_of.get(target))
         taken = _relinked_patch(fate.get('patch') or check['patches'][target], fix)
-        add = [fix(x) for x in fate.get('add') or []]
-        add_f = [_relinked_qa(f, fix) for f in fate.get('add_flashcards') or []]
+        problem, add, add_f = _patch_fits(snapshot.cards[target], taken)
+        # relinking only makes items alike, so the patch still fits; 'too_large' is left to pass: an item the card held
+        # with a link that is now plain text is one more, and the card takes it rather than the job stopping
+        if problem not in (None, 'too_large'):
+            raise WriteStopped(f'{target} could take its patch before its links were pointed and not after: {problem}. '
+                               'Nothing was written; this is a fault of the program, not of the answer')
         for slug in slugs:
             fates[slug].update(taken=taken, add=add, add_flashcards=add_f)
         links_moved += [{'into': target, 'cards': slugs, 'from': a, 'to': b} for a, b in dict.fromkeys(fix.moved)]
