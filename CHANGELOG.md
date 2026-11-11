@@ -4,6 +4,7 @@
 
 First public version.
 
+- README: a language line under the title and status badges; the curate and test extras accept networkx 3.5 and later, so they install on Python 3.11.
 - Ingest chain: inbox status, frozen sources and chunks, producer and independent reviewer, deterministic checks, repair rounds (two by default), review gate, one recoverable vault transaction, optional git commit.
 - Ingest gate: relation types opened per domain, one relation per pair of cards, a card that only repeats existing cards not written, and disagreements with existing cards recorded in `_data/secondbrain/conflicts.jsonl` and listed by `sb status`.
 - Executors: host hand-off for sub-agents of a coding-agent harness; API clients for OpenAI-compatible and Anthropic endpoints, with a model-family check. Transport and gateway errors (rate limits, server errors, 401/403 behind a gateway, timeouts, empty response bodies) are retried inside the executor with back-off (`max_retries`, 0 to 10); they are not answers and use none of `max_invalid_retries`.
