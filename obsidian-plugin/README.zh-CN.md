@@ -1,6 +1,6 @@
 # SecondBrain Review（Obsidian 插件）
 
-[English](README.md)
+[English](README.md) | 简体中文
 
 每天复习 Second Brain 知识库的入口。它显示今天要复习什么，做翻卡复习和问答复习，并用大模型讲解卡片。
 每次复习都追加到库里的事件日志；调度（FSRS）由这份日志重放得出，所以卡片文件永远不被修改。

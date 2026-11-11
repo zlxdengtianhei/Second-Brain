@@ -21,8 +21,8 @@ const LABELS = (lang: "en" | "zh") => [
 
 describe("plugin READMEs", () => {
 	it("link to each other", () => {
-		expect(README.en).toContain("[中文说明](README.zh-CN.md)");
-		expect(README.zh).toContain("[English](README.md)");
+		expect(README.en).toContain("English | [简体中文](README.zh-CN.md)");
+		expect(README.zh).toContain("[English](README.md) | 简体中文");
 	});
 	it("have the same sections and checklist steps", () => {
 		expect(headings(README.zh)).toBe(headings(README.en));

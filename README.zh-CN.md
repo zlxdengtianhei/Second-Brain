@@ -1,8 +1,10 @@
 # Second Brain
 
-把 Obsidian 收件箱里的笔记变成经过核对、互相关联的知识卡片，并每天复习。
+[English](README.md) | 简体中文
 
-[English](README.md)
+[![CI](https://github.com/zlxdengtianhei/Second-Brain/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/zlxdengtianhei/Second-Brain/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE) [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](pyproject.toml)
+
+把 Obsidian 收件箱里的笔记变成经过核对、互相关联的知识卡片，并每天复习。
 
 ![Second Brain 知识库星图动画：卡片按日期逐日出现，卡片之间的关系逐条点亮，MOC 把卡片分进各个领域，镜头进入一个领域和一张卡片，再退回全图](docs/media/second-brain-atlas-zh.gif)
 

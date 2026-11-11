@@ -1,8 +1,10 @@
 # Second Brain
 
-Turn notes in an Obsidian inbox into checked, linked knowledge cards, and review them every day.
+English | [简体中文](README.zh-CN.md)
 
-[中文说明](README.zh-CN.md)
+[![CI](https://github.com/zlxdengtianhei/Second-Brain/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/zlxdengtianhei/Second-Brain/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE) [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](pyproject.toml)
+
+Turn notes in an Obsidian inbox into checked, linked knowledge cards, and review them every day.
 
 ![Animated atlas of a Second Brain vault: cards appear day by day, relations light up between them, the maps of content sort them into domains, the view moves into one domain and one card, then pulls back to the whole map](docs/media/second-brain-atlas-en.gif)
 
