@@ -1,4 +1,4 @@
-# Second Brain
+<h1><picture><source media="(prefers-color-scheme: dark)" srcset="docs/media/logo-dark.svg"><img src="docs/media/logo.svg" alt="Second Brain" width="312" height="64"></picture></h1>
 
 [English](README.md) | 简体中文
 
