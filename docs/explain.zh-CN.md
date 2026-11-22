@@ -1,5 +1,7 @@
 # 三层存储、支柱之间的图与下钻讲解
 
+[English](explain.md)
+
 ## 三层存储
 
 库可以只存三层：领域、支柱、卡。分类文件里没写 `topics` 的支柱，卡直接放在支柱下。这样的支柱有一个隐含的主题，名字就是支柱名：读分类的程序都看得到它（放卡、书架、复习顺序、录入的检查照旧），存下来的东西都不写它：卡没有 `topic` 一行，登记表里没有，分类文件里也没有 `topics` 列表。自己带主题的支柱仍是四层；两种支柱可以在一个库里并存。
@@ -9,9 +11,9 @@
 把一张地图改成三层：
 
 ```sh
-sb flatten --domain <slug>            # 只看计划：改什么，每张卡原来的主题
-sb flatten --domain <slug> --apply    # 一次可回滚的事务
-sb recover <job> --rollback           # 每个字节还原
+sb flatten --domain <slug>            # plan: what changes, and the topics each card had
+sb flatten --domain <slug> --apply    # one recoverable transaction
+sb recover <job> --rollback           # every byte back
 ```
 
 它只改：`topics` 列表、每张已分类卡的 `topic` 一行（卡的其余字节不动）、它们在登记表里的 `topic`、地图页。新地图不再有的支柱页会删掉，原字节留在回滚日志里。结果里的 `topics_before` 记着每张卡原来的主题。
@@ -27,10 +29,10 @@ sb recover <job> --rollback           # 每个字节还原
 ## 下钻讲解：`sb explain`
 
 ```sh
-sb explain "<概念>"                       # 取最匹配的卡；也可给卡 id、支柱名、领域
-sb explain --pillar "<支柱>" [--domain <slug>]
+sb explain "<concept>"                    # its best card; or a card id, a pillar, a domain
+sb explain --pillar "<pillar>" [--domain <slug>]
 sb explain --domain <slug>
-sb explain "<概念>" --executor api        # 用 [explain.writer] 与 [explain.reviewer]
+sb explain "<concept>" --executor api     # [explain.writer] and [explain.reviewer]
 ```
 
 程序先为概念建一棵树：领域、支柱、卡，再沿卡的前提与组成（`depends_on`、`has_part`）往下到基础卡（`--depth`，默认卡下 3 层；`--max-children`，默认 5）。第二次碰到的卡只写成“见上”，指向它已在的位置。整个支柱会按关系切成几组相关的卡。树只是视图，不存，存储仍是三层。

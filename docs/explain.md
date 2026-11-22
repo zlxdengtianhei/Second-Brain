@@ -1,5 +1,7 @@
 # Three levels, the graph of pillars, and drill-down explanations
 
+[中文](explain.zh-CN.md)
+
 ## Three levels in storage
 
 A vault may keep three levels: domain, pillar, card. A pillar written without `topics` in its taxonomy file files its
