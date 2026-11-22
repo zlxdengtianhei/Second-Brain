@@ -302,11 +302,12 @@ def _taxonomy_structure(taxonomy, moc_title, issues):
 # --------------------------------------------------------------------------
 # Page slicing
 # --------------------------------------------------------------------------
-def _slice_entries(entries):
+def _slice_entries(entries, topic_cap=MAX_TOPIC):
     """Slice ``[(topic, [cards])]`` into pages respecting the three budgets.
 
-    A topic longer than ``MAX_TOPIC`` continues onto the next page (page number
-    is a browse slice within the same pillar, never a new semantic level).
+    A topic longer than ``topic_cap`` (``MAX_TOPIC``; a flat pillar's one implicit topic is capped by the page
+    alone) continues onto the next page (page number is a browse slice within the same pillar, never a new
+    semantic level).
     """
     pages = []
     cur, cur_cards, cur_lines = [], 0, 5
@@ -314,7 +315,7 @@ def _slice_entries(entries):
         pos, n = 0, len(cards)
         while pos < n:
             already = sum(len(c) for t, c in cur if t == topic)
-            allow = min(MAX_TOPIC - already, MAX_CARDS - cur_cards,
+            allow = min(topic_cap - already, MAX_CARDS - cur_cards,
                         MAX_LINES - cur_lines - 1)
             if allow <= 0:
                 if cur:
@@ -399,7 +400,7 @@ def _render_residual(moc_title, header, chunk, root_rel, ctx, domain_to_moc):
 
 def _render_root(moc_title, moc_domains, narrative, pillars, pillar_counts,
                  pillar_links, residual_link_label, residual_total, bridges,
-                 root_rel, flat_page_links):
+                 root_rel, flat_page_links, links_between=()):
     L = labels.moc()
     text = [BC_FRONTMATTER + "# %s" % moc_title, ""]
     text.append(L["covers"] % (L["domain_sep"].join(moc_domains), len(flat_page_links) + 1))
@@ -422,6 +423,13 @@ def _render_root(moc_title, moc_domains, narrative, pillars, pillar_counts,
     if residual_total:
         text.append(L["residual_line"] % (_link(residual_link_label[1], L["residual"]), residual_total))
     text.append("")
+    if links_between:
+        text.append(L["pillar_links"])
+        text.append("")
+        text.append(L["pillar_links_note"])
+        text.append("")
+        text.extend(links_between)
+        text.append("")
     if bridges:
         text.append(L["bridges"])
         text.append("")
@@ -450,10 +458,11 @@ def _render_root(moc_title, moc_domains, narrative, pillars, pillar_counts,
 # --------------------------------------------------------------------------
 # Per-MOC build
 # --------------------------------------------------------------------------
-def _process_moc(snapshot, moc_title, moc_domains, domain_to_moc, issues):
+def _process_moc(snapshot, moc_title, moc_domains, domain_to_moc, issues, graph=None):
     domain_set = set(moc_domains)
     cards = [c for c in snapshot.cards.values() if c.domain in domain_set]
     ordered, _ = learning_order(cards)  # cycles are reported once for the whole vault (build_mocs)
+    graph = graph or PillarGraph(snapshot)
 
     ctx = {cid: (c.path, c.title, c.domain) for cid, c in snapshot.cards.items()}
     taxonomy = snapshot.taxonomies.get(moc_title)
@@ -491,7 +500,8 @@ def _process_moc(snapshot, moc_title, moc_domains, domain_to_moc, issues):
     for name, order, why, topics in pillars:
         entries = [(t, list(buckets[(name, t)])) for t in topics if (name, t) in buckets]
         stem = _pillar_stem(name)
-        slice_pages = _slice_entries(entries)
+        flat_pillar = topics == [name]
+        slice_pages = _slice_entries(entries, MAX_CARDS if flat_pillar else MAX_TOPIC)
         if not slice_pages:
             # A pillar with no assigned cards still gets one page so the root
             # page has a stable link and every pillar stays reachable.
@@ -502,7 +512,7 @@ def _process_moc(snapshot, moc_title, moc_domains, domain_to_moc, issues):
             rel = prefix + _pillar_filename(order, stem, pi)
             text = _render_pillar_pages_here(
                 rel, moc_title, name, why, pg, pi, total, root_rel, ctx, domain_to_moc,
-                order, stem)
+                order, stem, flat=flat_pillar, neighbours=graph.neighbours(moc_title, name))
             files[rel] = text.encode("utf-8")
             links.append(rel)
             cards_n = sum(len(c) for _, c in pg)
@@ -540,7 +550,8 @@ def _process_moc(snapshot, moc_title, moc_domains, domain_to_moc, issues):
             break
     root_text = _render_root(moc_title, moc_domains, narrative, pillars,
                              pillar_counts, pillar_links, residual_link,
-                             residual_total, bridges, root_rel, flat_links)
+                             residual_total, bridges, root_rel, flat_links,
+                             links_between=graph.lines(moc_title))
     files[root_rel] = root_text.encode("utf-8")
 
     pages_metrics = [{"path": root_rel, "label": "root", "cards": 0,
@@ -566,7 +577,7 @@ def _process_moc(snapshot, moc_title, moc_domains, domain_to_moc, issues):
 
 
 def _render_pillar_pages_here(rel, moc_title, pname, why, pg, page_idx, total,
-                              root_rel, ctx, domain_to_moc, order, stem):
+                              root_rel, ctx, domain_to_moc, order, stem, *, flat=False, neighbours=None):
     L = labels.moc()
     text = [BC_FRONTMATTER + "# %s · %s" % (moc_title, pname), ""]
     if total > 1:
@@ -575,10 +586,15 @@ def _render_pillar_pages_here(rel, moc_title, pname, why, pg, page_idx, total,
     if why and page_idx == 1:
         text.append(why)
         text.append("")
-    for i, (topic, cards) in enumerate(pg):
-        continued = any(t == topic for t, _ in pg[:i])
-        text.append("## %s%s" % (topic, L["continued"] if continued else ""))
+    if neighbours and page_idx == 1:
+        text.append(L["pillar_neighbours"] % L["neighbour_sep"].join(
+            L["pillar_neighbour"] % (link, n) for link, n in neighbours))
         text.append("")
+    for i, (topic, cards) in enumerate(pg):
+        if not flat:  # a flat pillar's cards stand directly under it: no topic heading
+            continued = any(t == topic for t, _ in pg[:i])
+            text.append("## %s%s" % (topic, L["continued"] if continued else ""))
+            text.append("")
         for card in cards:
             text.append(_card_line(card, ctx, moc_title, domain_to_moc))
         text.append("")
@@ -597,6 +613,94 @@ def _render_pillar_pages_here(rel, moc_title, pname, why, pg, page_idx, total,
     text.append(" · ".join(cols))
     text.append("")
     return "\n".join(text) + "\n"
+
+
+#: Relation types counted from their own side when they have an inverse: the other side is the same edge.
+_FORWARD = ("depends_on", "part_of", "example_of", "follows")
+#: At most this many pillar pairs on a map's root page, and neighbours on a pillar page.
+MAX_PILLAR_LINKS = 30
+MAX_NEIGHBOURS = 8
+
+
+class PillarGraph:
+    """The graph of pillars: card relations summed per pair of pillars (any maps).
+
+    A card sits under one pillar, so the pillars of a map form a list; the relations of their cards, across
+    pillars and across maps, make the list a graph. A relation with an inverse is counted once, from its forward
+    side (:data:`_FORWARD`, else the alphabetically first of the pair); a symmetric one once per pair of cards.
+    """
+
+    def __init__(self, snapshot):
+        catalog = snapshot.catalog if isinstance(snapshot.catalog, dict) else {}
+        inverse = catalog.get("inverse_relations") or {}
+        moc_of = {s: m.get("moc") for s, m in (catalog.get("domains") or {}).items() if isinstance(m, dict)}
+        moc_root = snapshot.layout.mocs if getattr(snapshot, "layout", None) else MOC_ROOT
+        self.page = {}
+        for moc, tax in (snapshot.taxonomies or {}).items():
+            pillars, _, _, _ = _taxonomy_structure(tax, moc, [])
+            seg = _safe_segment(moc, "moc")
+            for name, order, _why, _topics in pillars:
+                self.page[(moc, name)] = "%s/%s/%s" % (moc_root, seg, _pillar_filename(order, _pillar_stem(name), 1))
+        where = {}
+        for cid, card in snapshot.cards.items():
+            key = (moc_of.get(card.domain), card.fm.get("pillar"))
+            if key in self.page:
+                where[cid] = key
+        self.counts = {}  # (a, b, directed) -> {type: n}
+        seen_sym = set()
+        for cid, card in snapshot.cards.items():
+            a = where.get(cid)
+            if a is None:
+                continue
+            for rel in _relations(card):
+                typ, tgt = rel.get("type"), rel.get("target")
+                b = where.get(tgt)
+                if not isinstance(typ, str) or b is None or b == a:
+                    continue
+                inv = inverse.get(typ)
+                if inv is None or inv == typ:
+                    pair = (typ,) + tuple(sorted((cid, tgt)))
+                    if pair in seen_sym:
+                        continue
+                    seen_sym.add(pair)
+                    key = tuple(sorted((a, b))) + (False,)
+                else:
+                    forward = typ in _FORWARD or (inv not in _FORWARD and typ < inv)
+                    if not forward:
+                        continue
+                    key = (a, b, True)
+                self.counts.setdefault(key, {}).setdefault(typ, 0)
+                self.counts[key][typ] += 1
+
+    def _label(self, key, moc_title):
+        moc, name = key
+        text = name if moc == moc_title else "%s·%s" % (moc, name)
+        return _link(self.page[key], text)
+
+    def lines(self, moc_title):
+        """The root page's lines: each pair with a pillar of ``moc_title``, most relations first."""
+        L = labels.moc()
+        rows = [(k, v) for k, v in self.counts.items() if moc_title in (k[0][0], k[1][0])]
+        rows.sort(key=lambda kv: (-sum(kv[1].values()), kv[0][0][1], kv[0][1][1]))
+        out = []
+        for (a, b, directed), types in rows[:MAX_PILLAR_LINKS]:
+            arrow = "→" if directed else "↔"
+            shown = L["type_count_sep"].join("%s %d" % (t, n) for t, n in sorted(types.items(), key=lambda x: (-x[1], x[0])))
+            out.append(L["pillar_link_line"] % (self._label(a, moc_title), arrow, self._label(b, moc_title), shown))
+        if len(rows) > MAX_PILLAR_LINKS:
+            out.append(L["pillar_links_more"] % (len(rows) - MAX_PILLAR_LINKS))
+        return out
+
+    def neighbours(self, moc_title, pillar):
+        """``[(link, relations)]`` of the pillars linked to ``(moc_title, pillar)``, most relations first."""
+        me = (moc_title, pillar)
+        total = {}
+        for (a, b, _d), types in self.counts.items():
+            if me in (a, b):
+                other = b if a == me else a
+                total[other] = total.get(other, 0) + sum(types.values())
+        ranked = sorted(total.items(), key=lambda kv: (-kv[1], kv[0][0], kv[0][1]))[:MAX_NEIGHBOURS]
+        return [(self._label(k, moc_title), n) for k, n in ranked]
 
 
 @dataclass
@@ -657,8 +761,9 @@ def build_mocs(snapshot, *, affected_domains=None):
     metrics_mocs = {}
     covered = set()
     total_pages = 0
+    graph = PillarGraph(snapshot)
     for moc in sorted(scoped):
-        res = _process_moc(snapshot, moc, moc_to_domains[moc], domain_to_moc, issues)
+        res = _process_moc(snapshot, moc, moc_to_domains[moc], domain_to_moc, issues, graph)
         files.update(res["files"])
         metrics_mocs[moc] = res["metrics"]
         covered.update(res["metrics"]["card_ids"])

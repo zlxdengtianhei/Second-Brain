@@ -15,6 +15,22 @@ from .moc import MAX_TOPIC
 
 #: Groups smaller than this are not proposed as topics of their own.
 MIN_GROUP = 5
+#: A pillar without topics of its own (three levels, :mod:`secondbrain.levels`) is looked at again from this many
+#: cards: its split is proposed the same way as a topic's. The number is the owner's reference line (40 cards are
+#: kept together; at 50 the owner looks again), not a limit of the program.
+PILLAR_REVIEW_AT = 50
+
+
+def _flat_pillars(snapshot) -> set:
+    """``{(domain, pillar)}`` of the pillars that file their cards directly."""
+    from .levels import is_flat
+    out = set()
+    for domain, meta in ((snapshot.catalog or {}).get('domains') or {}).items():
+        tax = snapshot.taxonomies.get(meta.get('moc') if isinstance(meta, dict) else None) or {}
+        for pillar in tax.get('pillars') or []:
+            if isinstance(pillar, dict) and is_flat(pillar):
+                out.add((domain, pillar.get('name')))
+    return out
 #: The seed of the Louvain run (the H12 experiment's first seed); the same vault gives the same proposal.
 SEED = 20261108
 
@@ -45,12 +61,28 @@ def hints(snapshot) -> dict:
     topic their taxonomy does not list."""
     counts = sizes(snapshot)
     curated = _curated(snapshot)
-    oversize = [{'domain': d, 'pillar': p, 'topic': t, 'cards': n, 'limit': MAX_TOPIC,
-                 'command': f'sb curate --domain {d}'}
-                for (d, p, t), n in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0])) if n > MAX_TOPIC]
+    flat = _flat_pillars(snapshot)
+    oversize = []
+    for (d, p, t), n in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0])):
+        if (d, p) in flat and t == p:
+            if n >= PILLAR_REVIEW_AT:
+                proposal = split_proposal(snapshot, d, p, t)
+                oversize.append({'domain': d, 'pillar': p, 'level': 'pillar', 'cards': n, 'limit': PILLAR_REVIEW_AT,
+                                 'proposal': _brief(proposal)})
+        elif n > MAX_TOPIC:
+            oversize.append({'domain': d, 'pillar': p, 'topic': t, 'cards': n, 'limit': MAX_TOPIC,
+                             'command': f'sb curate --domain {d}'})
     empty = [{'domain': d, 'pillar': p, 'topic': t} for (d, p, t) in sorted(curated) if not counts.get((d, p, t))]
     outside = sum(n for key, n in counts.items() if key not in curated)
     return {'oversize': oversize, 'empty': empty, 'outside_taxonomy': outside}
+
+
+def _brief(proposal: dict) -> dict:
+    """A split proposal as `sb status` shows it: each group's size and first titles."""
+    if 'unavailable' in proposal:
+        return proposal
+    return {'groups': [{'size': g['size'], 'first': [c['title'] for c in g['cards'][:3]]} for g in proposal['groups']],
+            'scattered': len(proposal['scattered']), 'seed': proposal['seed']}
 
 
 def _graph(snapshot, ids: set):
@@ -98,12 +130,14 @@ def split_proposal(snapshot, domain: str, pillar: str, topic: str, *, seed: int 
         return {'id': cid, 'title': snapshot.cards[cid].title}
     groups = sorted(([shown(c) for c in sorted(m)] for m in members), key=lambda g: (-len(g), g[0]['id']))
     return {'domain': domain, 'pillar': pillar, 'topic': topic, 'cards': len(ids), 'seed': seed,
-            'groups': [{'size': len(g), 'cards': g, 'needs_second_round': len(g) > MAX_TOPIC} for g in groups],
+            'groups': [{'size': len(g), 'cards': g,
+                        'needs_second_round': len(g) > (PILLAR_REVIEW_AT if topic == pillar else MAX_TOPIC)}
+                       for g in groups],
             'scattered': [shown(c) for c in sorted(scattered)]}
 
 
 def proposals(snapshot, domains) -> list[dict]:
     """A split proposal for every topic of ``domains`` past :data:`MAX_TOPIC` cards, largest first."""
     wanted = set(domains)
-    return [split_proposal(snapshot, h['domain'], h['pillar'], h['topic'])
+    return [split_proposal(snapshot, h['domain'], h['pillar'], h.get('topic', h['pillar']))
             for h in hints(snapshot)['oversize'] if h['domain'] in wanted]

@@ -328,7 +328,8 @@ def _taxonomy_path(root, moc_title):
 
 
 def _serialise_taxonomy(merged):
-    text = yaml.safe_dump(merged, allow_unicode=True, sort_keys=False,
+    from .levels import stored_taxonomy  # a flat pillar's implicit topic is not written
+    text = yaml.safe_dump(stored_taxonomy(merged), allow_unicode=True, sort_keys=False,
                           default_flow_style=False)
     return text.encode("utf-8")
 

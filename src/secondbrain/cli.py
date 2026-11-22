@@ -74,6 +74,10 @@ def parser():
         q.add_argument('--parallel', type=int, default=1, help='Concurrent batches (1-3)')
         q.add_argument('--max-batches', type=int)
         q.add_argument('--executor', choices=['api', 'host'], help='Override [executor].default')
+    flatten = sub.add_parser('flatten', help="Move a domain's map to three levels (domain, pillar, card); "
+                             'preview unless --apply')
+    flatten.add_argument('--domain', required=True); flatten.add_argument('--apply', action='store_true')
+    flatten.add_argument('--job')
     refresh = sub.add_parser('refresh', help='Deterministic MOC projection; preview unless --apply')
     refresh.add_argument('--domain', action='append'); refresh.add_argument('--apply', action='store_true'); refresh.add_argument('--job')
     for name, text in [('today', "Today's review page"),
@@ -496,6 +500,9 @@ def main(argv=None):
             result = service.read_cards(args.ids)
         elif cmd in MODEL_KINDS:
             result = _run_model_command(args, root)
+        elif cmd == 'flatten':
+            from .flatten import run as flatten
+            result = flatten(root, domain=args.domain, apply=args.apply, job_id=args.job)
         elif cmd == 'refresh':
             from .service import refresh
             result = refresh(root, job_id=args.job or f'moc-{uuid.uuid4().hex[:16]}', domains=args.domain, apply=args.apply)

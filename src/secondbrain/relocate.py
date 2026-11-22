@@ -29,8 +29,8 @@ from .evidence import check_verbatim
 from .schemas import AnswerError
 from .classification import projection_changes, taxonomy_fingerprint, writable_snapshot
 from .store import Change, Conflict, digest, read_bytes
-from .vault import (Card, card_packet, parse_note,
-                    patch_frontmatter, read_snapshot)
+from .vault import (Card, card_packet, parse_note, patch_frontmatter, pillars_of, placement_updates,
+                    read_snapshot, with_topic)
 
 METHOD_VERSION = 'relocation/1'
 _MDPATH_RE = re.compile(r'\[[^\[\]]*\]\(([^)]*)\)')
@@ -235,7 +235,8 @@ def _stage_moves(root_, snapshot, packet, moves):
         changes.append(Change(new_path, None, new_raw))
         changes.append(Change(card.path, card.sha256, None))
         updated[card.id] = replace(card, path=new_path, domain=dest, raw=new_raw,
-                                   fm=new_fm, body=new_body, sha256=digest(new_raw))
+                                   fm=with_topic(new_fm, pillars_of(snapshot, dest)), body=new_body,
+                                   sha256=digest(new_raw))
         moved.append((card, dest))
         affected.update({card.domain, dest})
     return changes, replace(snapshot, cards=updated), moved, affected
@@ -243,7 +244,7 @@ def _stage_moves(root_, snapshot, packet, moves):
 
 def _relocated_bytes(card, dest, row):
     """Change only domain, pillar, topic and the domain part of the flashcards tag; body and review data stay."""
-    patches = {'domain': dest, 'pillar': row['pillar'], 'topic': row['topic']}
+    patches = {'domain': dest, **placement_updates(row['pillar'], row['topic'])}
     old_tag = f'flashcards/{card.domain}'
     tags = card.fm.get('tags')
     if isinstance(tags, list):

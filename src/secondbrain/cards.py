@@ -18,6 +18,7 @@ from dataclasses import dataclass
 
 import yaml
 
+from . import levels
 from .rendering import normalize_markdown
 
 HEADINGS = {
@@ -460,6 +461,7 @@ def render_frontmatter(meta: dict) -> str:
     """YAML frontmatter text; key order follows the card contract."""
     order = ['id', 'title', 'kind', 'domain', 'pillar', 'topic', 'tags', 'aliases', 'sources',
              'relations', 'status', 'created']
+    meta = {k: v for k, v in meta.items() if k != 'topic' or levels.stored_topic(meta.get('pillar'), v) is not None}
     ordered = {k: meta[k] for k in order if k in meta}
     ordered.update({k: v for k, v in meta.items() if k not in ordered})
     text = yaml.safe_dump(ordered, allow_unicode=True, sort_keys=False,

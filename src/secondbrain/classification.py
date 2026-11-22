@@ -10,7 +10,8 @@ from .catalog import category_pairs, taxonomy_packet
 from .evidence import check_verbatim
 from .schemas import AnswerError
 from .store import Change, Conflict, apply_changes, digest, read_bytes
-from .vault import Card, Snapshot, card_packet, parse_note, patch_frontmatter, read_snapshot
+from .vault import (Card, Snapshot, card_packet, parse_note, patch_frontmatter, pillars_of, placement_updates,
+                    read_snapshot, with_topic)
 
 
 class AnswerConflict(Conflict, AnswerError):
@@ -278,8 +279,11 @@ def stage_changes(snapshot: Snapshot, packet: dict, rows: list[dict], findings: 
         patches = {k: row[k] for k in ['pillar', 'topic'] if not card.fm.get(k) or (may_repair and card.fm.get(k) != row[k])}
         if not patches:
             continue
+        if 'topic' in patches:  # a flat pillar's implicit topic is not stored (levels)
+            patches['topic'] = placement_updates(row['pillar'], row['topic'])['topic']
         raw = patch_frontmatter(card.raw, patches)
         fm, body = parse_note(raw)
+        fm = with_topic(fm, pillars_of(snapshot, card.domain))
         if body != card.body:
             raise ValueError(f'The classification patch would change the card body: {card.id}')
         changes.append(Change(card.path, card.sha256, raw))

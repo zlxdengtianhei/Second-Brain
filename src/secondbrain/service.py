@@ -55,7 +55,7 @@ class Service:
             else:  # what `sb refresh` reports about the maps (counts only; it lists each one)
                 map_issues = Counter(i['code'] for i in build_mocs(s).issues)
         from .pipelines.ingest import open_conflicts
-        from .topics import hints
+        from .topics import PILLAR_REVIEW_AT, hints
         conflicts = open_conflicts(self.root, s)
         waiting = self.needs_review()
         owner = Counter(i['owner_reason'] for i in self.owner_items(scanned=items, conflicts=conflicts))
@@ -66,7 +66,12 @@ class Service:
                 'topics': {'oversize': topic_hints['oversize'], 'empty': len(topic_hints['empty']),
                            'outside_taxonomy': topic_hints['outside_taxonomy']},
                 **({'topics_hint': f'topics past one map page ({MAX_TOPIC} cards): sb curate --domain <domain> '
-                                   'gets proposals for how to split them'} if topic_hints['oversize'] else {}),
+                                   'gets proposals for how to split them'}
+                   if any(h.get('level') != 'pillar' for h in topic_hints['oversize']) else {}),
+                **({'pillars_hint': f'pillars without topics of their own at {PILLAR_REVIEW_AT} cards or more: '
+                                    'look again whether to split them; each has a proposal by its relations '
+                                    '(the line is a reference, 40 cards stay together)'}
+                   if any(h.get('level') == 'pillar' for h in topic_hints['oversize']) else {}),
                 'missing_by_domain': dict(sorted(missing.items())), 'issues': issues,
                 'map_issues': dict(sorted(map_issues.items())),
                 **({'map_issues_hint': 'sb refresh lists each one'} if map_issues else {}),
