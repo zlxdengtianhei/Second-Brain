@@ -44,7 +44,7 @@ PROJECTION_KIND = "projection"
 #: that fail the program's checks at the one gate (:data:`REFUSAL_RECORDERS`, :func:`receive`); a test reads this
 #: table, and finds each ``jobs.create`` call in the package, so a new kind cannot be left out.
 KINDS = {'ingest': True, 'export': True, 'classification': True, 'curation': True, 'relocation': True,
-         'domcreate': True, 'classification-batch': False, PROJECTION_KIND: False}
+         'domcreate': True, 'explain': True, 'classification-batch': False, PROJECTION_KIND: False}
 
 #: Kind -> "module:function" validating a submission before it is persisted.
 #: Signature: ``fn(packet, payload, *, role, candidate, root, chunk, state) -> payload``;
@@ -59,6 +59,7 @@ SUBMISSION_VALIDATORS = {
     'curation': 'secondbrain.runner:validate_submission',
     'relocation': 'secondbrain.runner:validate_submission',
     'domcreate': 'secondbrain.runner:validate_submission',
+    'explain': 'secondbrain.runner:validate_submission',
 }
 
 TERMINAL_STATUSES = {'applying', 'applied', 'partial', 'published', 'rolled_back', 'superseded'}
@@ -172,6 +173,7 @@ REFUSAL_RECORDERS = {
     'curation': 'secondbrain.runner:record_refusal',
     'relocation': 'secondbrain.runner:record_refusal',
     'domcreate': 'secondbrain.runner:record_refusal',
+    'explain': 'secondbrain.runner:record_refusal',
 }
 
 

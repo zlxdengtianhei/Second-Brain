@@ -150,6 +150,86 @@ def review_time(today: date) -> datetime:
     return datetime.combine(today, time(12), tzinfo=datetime.now().astimezone().tzinfo)
 
 
+#: Relation types shown when today's cards of a pillar are tied together (a forward side of each pair).
+_TIE_TYPES = ('depends_on', 'part_of', 'example_of', 'contrasts_with', 'similar_to')
+
+
+def back_up(snapshot, ids, T) -> list[str]:
+    """The review page's way back up: for each pillar of today's cards (in queue order), what the pillar answers
+    and what ties the cards together: the recap of the newest applied `sb explain --pillar` of that pillar, and
+    the relations among today's cards."""
+    from .moc import PillarGraph
+    domains = (snapshot.catalog or {}).get('domains') or {}
+    graph = PillarGraph(snapshot)
+    groups: dict = {}
+    for cid in ids:
+        card = snapshot.cards.get(cid)
+        moc = (domains.get(card.domain) or {}).get('moc') if card else None
+        if card is not None and (moc, card.fm.get('pillar')) in graph.page:
+            groups.setdefault((moc, card.domain, card.fm.get('pillar')), []).append(card)
+    if not groups:
+        return []
+    recaps = _pillar_recaps(snapshot.root)
+    out = []
+    for (moc, domain, pillar), cards in groups.items():
+        tax = snapshot.taxonomies.get(moc) or {}
+        why = next((p.get('why') for p in tax.get('pillars') or [] if isinstance(p, dict) and p.get('name') == pillar), '')
+        out.append(T['back_up_pillar'].format(pillar=pillar, page=graph.page[(moc, pillar)][:-3], n=len(cards),
+                                              titles=T['domain_sep'].join(c.title for c in cards)))
+        if why:
+            out.append(T['back_up_why'].format(why=why))
+        recap = recaps.get((domain, pillar))
+        if recap:
+            out.append(T['back_up_recap'].format(recap=recap))
+        here = {c.id: c for c in cards}
+        links = []
+        for c in cards:
+            for rel in c.fm.get('relations') or []:
+                if isinstance(rel, dict) and rel.get('type') in _TIE_TYPES and rel.get('target') in here \
+                        and rel['target'] != c.id:
+                    pair = (rel['type'], *sorted((c.id, rel['target']))) if rel['type'] in ('similar_to', 'contrasts_with') \
+                        else (rel['type'], c.id, rel['target'])
+                    if pair not in [x[0] for x in links]:
+                        links.append((pair, T['back_up_link'].format(a=c.title, type=rel['type'],
+                                                                     b=here[rel['target']].title)))
+        if links:
+            out.append(T['back_up_links'].format(links=T['domain_sep'].join(x[1] for x in links[:4])))
+        elif not recap:
+            out.append(T['back_up_alone'])
+    return out
+
+
+def _pillar_recaps(root) -> dict:
+    """``{(domain, pillar): recap}`` of the newest applied whole-pillar explanation of each pillar."""
+    out, when = {}, {}
+    try:
+        listed = jobs.list_jobs(root)
+    except (OSError, ValueError):
+        return out
+    for row in listed:
+        if row.get('kind') != 'explain' or row.get('status') != 'applied':
+            continue
+        try:
+            packet = jobs.read_input(root, row['job_id'])
+            state = jobs.load(root, row['job_id'])
+            anchor = packet.get('anchor') or {}
+            if anchor.get('kind') != 'pillar':
+                continue
+            pillar_node = next(n['id'] for n in packet['nodes'] if n['kind'] == 'pillar')
+            text = next(r.get('recap') for r in jobs.artifact(root, state, 'candidate')['nodes']
+                        if r.get('id') == pillar_node)
+        except (OSError, ValueError, KeyError, StopIteration):
+            continue
+        key = (anchor.get('domain'), anchor.get('pillar'))
+        if text and state.get('updated_at', '') >= when.get(key, ''):
+            from .explain import MARKER
+            titles = {n['id']: n.get('title') for n in packet['nodes']}
+            names = {r['id']: r.get('title') for r in jobs.artifact(root, state, 'candidate')['nodes'] if r.get('title')}
+            out[key] = MARKER.sub(lambda m: f"「{names.get(m.group(1)) or titles.get(m.group(1)) or m.group(1)}」", text)
+            when[key] = state.get('updated_at', '')
+    return out
+
+
 def review_projection(snapshot, today: date, *, extra_targets=(), generated_at=None,
                       reads=None) -> Projection:
     """Today's review page from the review registry: the same due and new cards as `sb review queue`."""
@@ -188,6 +268,9 @@ def review_projection(snapshot, today: date, *, extra_targets=(), generated_at=N
         lines.append('')
     lines.extend([T['new_left'].format(available=queue['new_available'], n=len(new), date=today.isoformat(),
                                        hour=reviews.day_start_hour()), ''])
+    back = back_up(snapshot, [r['id'] for r in due + new], T)
+    if back:
+        lines.extend([f"## {T['back_up']}", '', T['back_up_intro'], '', *back, ''])
     trend = []
     for i in range(6, -1, -1):
         rel = f'{lay.projections}/review_state_{(today - timedelta(days=i)).isoformat()}.json'

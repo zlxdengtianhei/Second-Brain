@@ -5,6 +5,8 @@ BC-list-note-field: down
 
 How to reason about uncertain events and update beliefs with evidence.
 
+Connected pillars: [[20_MOCs/Computing Foundations/02Datastructures--01.md|Computing Foundations·Data structures]] (2 relations)
+
 ## Conditional probability
 
 - [[10_Knowledge/statistics/Conditional probability.md|Conditional probability]] · contrasts_with→ [[10_Knowledge/statistics/Confusion of the inverse.md|Confusion of the inverse]] · required_by→ [[10_Knowledge/statistics/Bayes' rule.md|Bayes' rule]]

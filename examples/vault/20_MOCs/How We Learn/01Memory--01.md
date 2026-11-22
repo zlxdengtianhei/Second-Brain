@@ -5,6 +5,8 @@ BC-list-note-field: down
 
 What happens to what we learn over time, and how much we can hold at once.
 
+Connected pillars: [[20_MOCs/How We Learn/02Studystrategies--01.md|Study strategies]] (4 relations)
+
 ## Forgetting
 
 - [[10_Knowledge/learning/The forgetting curve.md|The forgetting curve]] · required_by→ [[10_Knowledge/learning/The spacing effect.md|The spacing effect]] · similar_to→ [[10_Knowledge/learning/Memory stability.md|Memory stability]]

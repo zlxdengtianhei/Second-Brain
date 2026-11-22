@@ -5,6 +5,8 @@ BC-list-note-field: down
 
 How the layout of data decides which operations are cheap.
 
+Connected pillars: [[20_MOCs/Reasoning with Data/01Probability--01.md|Reasoning with Data·Probability]] (2 relations) · [[20_MOCs/Computing Foundations/03Systems--01.md|Systems]] (1 relations)
+
 ## Hashing
 
 - [[10_Knowledge/computing/What makes a good hash function for a table.md|What makes a good hash function for a table]] · required_by→ [[10_Knowledge/computing/Bloom filter operation and its one-sided error.md|Bloom filter operation and its one-sided error]]; [[10_Knowledge/computing/Hash table lookup and its average and worst case cost.md|Hash table lookup and its average and worst case cost]]
