@@ -502,6 +502,7 @@ document.querySelectorAll('[data-go]').forEach(b=>b.onclick=()=>show(at+Number(b
 document.querySelectorAll('.tabs button').forEach(b=>b.onclick=()=>{document.querySelectorAll('.tabs button').forEach(x=>x.setAttribute('aria-selected',x===b));
 document.querySelectorAll('section[data-tab]').forEach(s=>s.hidden=s.dataset.tab!==b.dataset.tab);});
 document.querySelectorAll('a.ref').forEach(a=>a.onclick=()=>{let d=document.querySelector(a.getAttribute('href'));while(d){if(d.tagName==='DETAILS')d.open=true;d=d.parentElement;}});
+if(location.hash==='#review')document.querySelector('.tabs button[data-tab=path]').click();
 show(0);
 """
 

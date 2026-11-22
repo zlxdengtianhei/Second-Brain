@@ -129,3 +129,20 @@ def test_a_flat_pillar_is_looked_at_again_from_50_cards_not_at_40(vault):
     big = topics.hints(with_cards(50))['oversize']
     assert [(h['pillar'], h['level'], h['cards'], h['limit']) for h in big] == [(pillar, 'pillar', 50, 50)]
     assert 'groups' in big[0]['proposal'] or 'unavailable' in big[0]['proposal']
+
+
+def test_ingest_refuses_a_new_topic_under_a_pillar_without_topics(tmp_path):
+    import copy as copy_module
+    from secondbrain.pipelines import ingest
+    from tests import test_owner_items as t
+    root = t.build_ingest_vault(tmp_path / 'vault')
+    candidate = copy_module.deepcopy(t.first_candidate())
+    pillar = candidate['new_topics'][0]['pillar']
+    for path in (root / '20_MOCs' / '_pillars').glob('*.yaml'):
+        tax = yaml.safe_load(path.read_text(encoding='utf-8'))
+        for p in tax['pillars']:
+            if p['name'] == pillar:
+                p.pop('topics', None)
+        path.write_text(yaml.safe_dump(tax, allow_unicode=True, sort_keys=False), encoding='utf-8')
+    with pytest.raises(ingest.IngestError, match='files its cards directly'):
+        t.check(root, candidate)
