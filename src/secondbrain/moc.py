@@ -424,9 +424,10 @@ def _render_root(moc_title, moc_domains, narrative, pillars, pillar_counts,
         text.append(L["residual_line"] % (_link(residual_link_label[1], L["residual"]), residual_total))
     text.append("")
     if links_between:
-        text.append(L["pillar_links"])
+        G = labels.moc_graph()
+        text.append(G["pillar_links"])
         text.append("")
-        text.append(L["pillar_links_note"])
+        text.append(G["pillar_links_note"])
         text.append("")
         text.extend(links_between)
         text.append("")
@@ -587,8 +588,9 @@ def _render_pillar_pages_here(rel, moc_title, pname, why, pg, page_idx, total,
         text.append(why)
         text.append("")
     if neighbours and page_idx == 1:
-        text.append(L["pillar_neighbours"] % L["neighbour_sep"].join(
-            L["pillar_neighbour"] % (link, n) for link, n in neighbours))
+        G = labels.moc_graph()
+        text.append(G["pillar_neighbours"] % G["neighbour_sep"].join(
+            G["pillar_neighbour"] % (link, n) for link, n in neighbours))
         text.append("")
     for i, (topic, cards) in enumerate(pg):
         if not flat:  # a flat pillar's cards stand directly under it: no topic heading
@@ -679,7 +681,7 @@ class PillarGraph:
 
     def lines(self, moc_title):
         """The root page's lines: each pair with a pillar of ``moc_title``, most relations first."""
-        L = labels.moc()
+        L = labels.moc_graph()
         rows = [(k, v) for k, v in self.counts.items() if moc_title in (k[0][0], k[1][0])]
         rows.sort(key=lambda kv: (-sum(kv[1].values()), kv[0][0][1], kv[0][1][1]))
         out = []

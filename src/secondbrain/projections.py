@@ -174,7 +174,9 @@ def back_up(snapshot, ids, T) -> list[str]:
     for (moc, domain, pillar), cards in groups.items():
         tax = snapshot.taxonomies.get(moc) or {}
         why = next((p.get('why') for p in tax.get('pillars') or [] if isinstance(p, dict) and p.get('name') == pillar), '')
-        out.append(T['back_up_pillar'].format(pillar=pillar, page=graph.page[(moc, pillar)][:-3], n=len(cards),
+        rel = graph.page[(moc, pillar)]
+        page = T['back_up_page'].format(page=rel[:-3]) if (Path(snapshot.root) / rel).is_file() else ''
+        out.append(T['back_up_pillar'].format(pillar=pillar, page=page, n=len(cards),
                                               titles=T['domain_sep'].join(c.title for c in cards)))
         if why:
             out.append(T['back_up_why'].format(why=why))
@@ -225,7 +227,8 @@ def _pillar_recaps(root) -> dict:
             from .explain import MARKER
             titles = {n['id']: n.get('title') for n in packet['nodes']}
             names = {r['id']: r.get('title') for r in jobs.artifact(root, state, 'candidate')['nodes'] if r.get('title')}
-            out[key] = MARKER.sub(lambda m: f"「{names.get(m.group(1)) or titles.get(m.group(1)) or m.group(1)}」", text)
+            quote = labels.explain()['quote']
+            out[key] = MARKER.sub(lambda m: quote % (names.get(m.group(1)) or titles.get(m.group(1)) or m.group(1)), text)
             when[key] = state.get('updated_at', '')
     return out
 

@@ -146,3 +146,18 @@ def test_ingest_refuses_a_new_topic_under_a_pillar_without_topics(tmp_path):
         path.write_text(yaml.safe_dump(tax, allow_unicode=True, sort_keys=False), encoding='utf-8')
     with pytest.raises(ingest.IngestError, match='files its cards directly'):
         t.check(root, candidate)
+
+
+@pytest.mark.parametrize('language', ['zh', 'en'])
+def test_the_map_pages_reach_every_label_of_how_pillars_connect(vault, capsys, language, monkeypatch):
+    from dataclasses import replace as dc_replace
+    from secondbrain import config, labels, moc
+    config.activate(dc_replace(config.Settings(), card_language=language))
+    snapshot = read_snapshot(vault)
+    graph = moc.PillarGraph(snapshot)
+    monkeypatch.setattr(moc, 'MAX_PILLAR_LINKS', 1)  # so the "more pairs" line shows too
+    text = '\n'.join(v.decode('utf-8') for v in moc.build_mocs(snapshot).files.values())
+    for key, value in labels.moc_graph(language).items():
+        for part in [p for p in __import__('re').split(r'%[sd]', value) if p.strip()]:
+            assert part in text, (key, part)
+    assert graph.counts

@@ -26,7 +26,7 @@ import json
 import re
 from pathlib import Path
 
-from . import config, jobs
+from . import config, jobs, labels
 from . import layout as layouts
 from .cards import essence_of, flashcards_of, propositions_of
 from .moc import learning_order
@@ -57,23 +57,6 @@ REVIEW_SCHEMA = {
         'type': 'object', 'required': ['id', 'decision', 'reason'], 'additionalProperties': False,
         'properties': {'id': {'type': 'string'}, 'decision': {'enum': ['accept', 'revise']},
                        'reason': {'type': 'string'}}}}}}
-
-WORDS = {
-    'zh': {'domain': '领域', 'pillar': '支柱', 'group': '知识点', 'card': '卡', 'ref': '见上',
-           'title': '讲解：%s', 'lead': '从领域一层层下到细节卡与前提；讲解由 `sb explain` 写，另一位复核者按卡片内容核过。',
-           'drill': '下钻讲解', 'path': '复习：由细到粗', 'path_lead': '先复习最底下的卡（前提在前），每学完一组就回到上一层，用一句话串起来，最后回到领域。',
-           'back': '回到上一层「%s」：这几张卡怎样合起来？', 'elsewhere': '（在「%s」支柱）', 'seen': '已在上文：%s',
-           'unreviewed': '复核没过：%s', 'more': '同组还有：%s', 'q': '问', 'a': '答', 'show': '看答案',
-           'step': '第 %d / %d 步', 'prev': '上一步', 'next': '下一步', 'tab_drill': '讲解', 'tab_path': '复习'},
-    'en': {'domain': 'Domain', 'pillar': 'Pillar', 'group': 'Group', 'card': 'Card', 'ref': 'see above',
-           'title': 'Explained: %s', 'lead': 'From the domain down to the detail cards and their prerequisites; written by `sb explain`, checked against the cards by another reviewer.',
-           'drill': 'Drill-down', 'path': 'Review: from the details up', 'path_lead': 'Review the lowest cards first (prerequisites first); after each group go back up one level and tie it together in a sentence; end at the domain.',
-           'back': 'Back up to "%s": how do these cards fit together?', 'elsewhere': ' (pillar "%s")', 'seen': 'Above: %s',
-           'unreviewed': 'Not passed by the review: %s', 'more': 'Also in this group: %s', 'q': 'Q', 'a': 'A',
-           'show': 'Show the answer', 'step': 'Step %d of %d', 'prev': 'Previous', 'next': 'Next',
-           'tab_drill': 'Explanation', 'tab_path': 'Review'},
-}
-
 
 # --------------------------------------------------------------------------
 # The tree
@@ -380,7 +363,7 @@ def apply(root: Path, job_id: str) -> dict:
 # --------------------------------------------------------------------------
 def assemble(packet: dict, candidate: dict, unresolved: dict, snapshot) -> dict:
     """The page as data: the nodes with their texts and depth, and the review path (bottom up)."""
-    words = WORDS[packet['language']]
+    words = labels.explain(packet['language'])
     texts = {r['id']: r for r in candidate['nodes']}
     nodes = {n['id']: dict(n) for n in packet['nodes']}
     for nid, n in nodes.items():
@@ -428,7 +411,7 @@ def _md_text(page, text) -> str:
 
 
 def to_markdown(page: dict) -> str:
-    w = WORDS[page['language']]
+    w = labels.explain(page['language'])
     out = [f"# {w['title'] % page['title']}", '', f"_{w['lead']}_", '', f"## {w['drill']}", '']
 
     def node(nid, number):
@@ -448,7 +431,7 @@ def to_markdown(page: dict) -> str:
             out.extend([f"> {w['unreviewed'] % n['unresolved']}", ''])
         out.extend([_md_text(page, n['explain']), ''])
         if n.get('more'):
-            out.extend([f"_{w['more'] % '、'.join(n['more'])}_", ''])
+            out.extend([f"_{w['more'] % w['more_sep'].join(n['more'])}_", ''])
         for i, c in enumerate(n['children'], 1):
             node(c, f'{number}.{i}')
     node(page['root'], '1')
@@ -458,8 +441,8 @@ def to_markdown(page: dict) -> str:
         if step['kind'] == 'card':
             out.append(f"{i}. **{w['card']} · {n['title']}**")
             for fc in n.get('flashcards') or []:
-                out.append(f"   - {w['q']}：{fc.get('q', '')}" if page['language'] == 'zh' else f"   - {w['q']}: {fc.get('q', '')}")
-                out.append(f"     {w['a']}：{fc.get('a', '')}" if page['language'] == 'zh' else f"     {w['a']}: {fc.get('a', '')}")
+                out.append(f"   - {w['q']}{w['qa_sep']}{fc.get('q', '')}")
+                out.append(f"     {w['a']}{w['qa_sep']}{fc.get('a', '')}")
         else:
             out.append(f"{i}. **{w['back'] % n['title']}**")
             out.append(f"   {_md_text(page, n['recap'])}")
@@ -508,7 +491,7 @@ show(0);
 
 
 def to_html(page: dict) -> str:
-    w = WORDS[page['language']]
+    w = labels.explain(page['language'])
     esc = html_lib.escape
     parts = []
 
@@ -529,7 +512,7 @@ def to_html(page: dict) -> str:
             parts.append(f'<p class="warn">{esc(w["unreviewed"] % n["unresolved"])}</p>')
         parts.append(f'<p class="explain">{_html_text(page, n["explain"])}</p>')
         if n.get('more'):
-            parts.append(f'<p class="more">{esc(w["more"] % "、".join(n["more"]))}</p>')
+            parts.append(f'<p class="more">{esc(w["more"] % w["more_sep"].join(n["more"]))}</p>')
         for c in n['children']:
             node(c)
         if n.get('recap'):
@@ -544,8 +527,8 @@ def to_html(page: dict) -> str:
         nav = (f'<div class="nav"><button data-go="-1">{esc(w["prev"])}</button>'
                f'<button class="showa">{esc(w["show"])}</button><button data-go="1">{esc(w["next"])}</button></div>')
         if step['kind'] == 'card':
-            qa = ''.join(f'<div class="qa"><div class="q">{esc(w["q"])}：{_html_text(page, fc.get("q", ""))}</div>'
-                         f'<div class="a">{esc(w["a"])}：{_html_text(page, fc.get("a", ""))}</div></div>'
+            qa = ''.join(f'<div class="qa"><div class="q">{esc(w["q"] + w["qa_sep"])}{_html_text(page, fc.get("q", ""))}</div>'
+                         f'<div class="a">{esc(w["a"] + w["qa_sep"])}{_html_text(page, fc.get("a", ""))}</div></div>'
                          for fc in n.get('flashcards') or [])
             if not qa:
                 qa = f'<div class="qa"><div class="a">{_html_text(page, n["explain"])}</div></div>'
