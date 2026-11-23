@@ -26,11 +26,11 @@ Notes go on the card they are about; they are recorded for the owner and shown t
 `other_chunks_cards` lists the cards proposed for the other chunks of this source. Do not revise a card only because one of them makes the same point: once every chunk is reviewed, a check of the whole source decides which of such cards are written. A relation to one of them must still make sense.
 
 `overlap` and `with`, on every accepted card: how much it repeats the existing cards, with `with` naming the existing cards (ids from `candidate_cards`) it is compared with. You decide this for the card against the vault; the program then acts on it:
-- `same`: the card is not written; the cards in `with` already ask for everything it would. Say in the reason where they hold it.
+- `same`: the card is not written; the cards in `with` already ask for everything it would. Say in the reason where they hold it. (When the card it repeats stands in another domain, it is not written either, and the program puts a pointer to that one card on the pillar page of this card's domain: one concept, one description.)
 - `extends`: what the card adds (its propositions and review cards, word for word) goes into the one card in `with`, which keeps its own words; the card must link that card. When that card cannot take more, the card is rewritten as a narrower card next to it.
 - `distinct`: the card is written; `with` may name the related existing cards or be empty.
 
-A card of another domain than the one it repeats is never merged into it: each domain needs a card of its own. Answer the level that fits, and the program keeps both cards narrow and joins them with a bridge (`same_concept_as` for one concept, `similar_to` for a close one); give the card that relation to the card in `with` when the level is `distinct`.
+A card of another domain than the one it repeats is never merged into it. Answer the level that fits; the program acts on it: `same` across two domains writes no second card (the description stays in the card of the domain that had the concept first, and this card's pillar page gets a pointer to it), `extends` across two domains writes this card next to that one, narrow: it writes what its own domain adds, links that card instead of restating what the two share, and the bridge between them carries your reason (where the two differ). Give the card that relation to the card in `with` when the level is `distinct`.
 
 <!-- overlap.definition -->
 

@@ -103,11 +103,16 @@ def queue(root: Path, now: datetime, *, new_per_day: int | None = None, domains=
 
     def read_card(meta):
         return snapshot.cards[meta.id].body
+    from . import pointers as pointer_store
+    # a bridge whose canonical card changed after the bridge was written leaves its narrow card to be looked at
+    # again: `sb review queue` lists it first (the rows are derived; nothing is written onto the card)
+    reread = [row['narrow'] for row in pointer_store.waiting(pointer_store.load(root), snapshot.cards)
+              if row.get('narrow') in snapshot.cards]
     report = rr.queue_report(review_dir(root), card_metas(snapshot), now,
                              new_per_day=rr.DEFAULT_NEW_PER_DAY if new_per_day is None else new_per_day,
                              domains=tuple(domains or ()), read_card=read_card if questions else None,
                              limit=limit, section=section or default_section(), taxonomy=taxonomy(snapshot),
-                             cache_dir=cache_dir(root))
+                             cache_dir=cache_dir(root), waiting=reread)
     # `cycle_breaks` counts the not-yet-learned cards the queue took out of prerequisite order; the cycles
     # themselves are counted as `sb refresh` and `sb status` count them, over the whole vault
     from .moc import prerequisite_cycles

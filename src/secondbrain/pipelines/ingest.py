@@ -2174,8 +2174,12 @@ def _routed(state: dict, settled: list[dict], domain_of=None) -> list[dict]:
         for slug, card in o['accepted'].items():
             first = overlap.route(entries, slug, here)
             if first['outcome'] == 'drop':
+                # ``how`` tells the two drops apart: ``same`` inside one domain (nothing is written), and ``same``
+                # across two domains (nothing is written either, and the pillar page of this card's domain gets a
+                # pointer to the one card that holds the description)
                 dups.append({'slug': slug, 'title': card.get('title'), 'with': first['with'],
-                             'reason': first['reason'], 'chunk': o['chunk'], 'by': 'reviewer'})
+                             'reason': first['reason'], 'chunk': o['chunk'], 'by': 'reviewer',
+                             **({'how': first['how']} if first['how'] == 'point' else {})})
             elif first['outcome'] == 'patch':
                 repeats[slug] = {**card, '_with': first['with'][0], '_reason': first['reason']}
                 if slug in given_up:
@@ -3320,14 +3324,18 @@ def _apply_job(root: Path, job_id: str, settled: list[dict] | None = None) -> di
     # never differ (a card written next to its existing card: write; one its card already holds: drop; one waiting
     # for the owner: pending)
     bridged = {s: f for s, f in fates.items() if f['how'] == 'bridge'}
+    retyped_relations = []
     for slug, fate in sorted(bridged.items()):  # the bridge is the program's own step on the kept card
         kind = fate.get('type')
         if kind:
-            decisions.bridge_step(entries, slug, fate['target'], kind, slot='write')
+            done = decisions.bridge_step(entries, slug, fate['target'], kind, slot='write',
+                                         note=fate.get('note'))
+            if done['op'] == 'retype':  # the program changed a relation the producer wrote: the result says so
+                retyped_relations.append({'card': slug, 'target': fate['target'], 'was': done['was'], 'now': kind})
     for s, f in sorted(fates.items()):
         decisions.record(entries, 'outcome.program', s, _fate_record(f, outcomes[s]), role='program', slot='write')
     ran = bool(check) and check.get('status') == 'checked'
-    outcomes = {**outcomes, **{s: overlap.outcome(entries, s, checked=ran)['outcome'] for s in fates}}
+    outcomes = {**outcomes, **_fate_outcomes(entries, chunks_settled, fates, ran, _vault_domains(root))}
     recorded_fates = {s: e['data'] for s, e in decisions.values(entries, 'outcome.program').items() if s in fates}
     accepted = [(o['chunk'], s, _final_card(entries, s, c)) for o in settled for s, c in o['accepted'].items()]
     accepted += [(o['chunk'], s, {**_final_card(entries, s, c), '_not_merged': fates[s]['reason']})
@@ -3392,7 +3400,8 @@ def _apply_job(root: Path, job_id: str, settled: list[dict] | None = None) -> di
     new_domains = {ids[s]: c['domain'] for _, s, c in accepted}
     # a target the reviewer judged the same as existing cards lives on in the first of them (drill 2, P6)
     duplicate_of = {d['slug']: d['with'][0] for o in settled for d in o['duplicates']
-                    if d.get('by') == 'reviewer' and d.get('with') and d['with'][0] in snapshot.cards}
+                    if (d.get('by') == 'reviewer' or d.get('how') == 'point') and d.get('with')
+                    and d['with'][0] in snapshot.cards}
 
     def dropped(slug, r, why, op='filter', **extra):  # the program's step on a relation, kept in the record
         decisions.step(entries, 'relations', slug, op, role='program', slot='write',
@@ -3682,6 +3691,45 @@ def _apply_job(root: Path, job_id: str, settled: list[dict] | None = None) -> di
         changes.append(Change(existing.path, snapshot.cards[target].sha256, raw2))
         updated[target] = replace(existing, raw=raw2, fm=with_topic(fm2, pillars_of(snapshot, existing.domain)),
                                   body=body2, sha256=digest(raw2))
+    # one concept, one description: the pointers the pillar pages of the second domain carry to the canonical card
+    # (a card judged the ``same`` in another domain: no second card is written), and the bridges between two narrow
+    # cards of two domains, each with the digest of both cards as this write leaves them (:mod:`secondbrain.pointers`)
+    from .. import pointers as pointer_store
+    now = datetime.now(timezone.utc).isoformat(timespec='seconds')
+    pointer_rows = pointer_store.load(root)
+    new_rows, written_pointers = [], []
+    for o in settled:
+        for row in o.get('duplicates') or []:
+            if row.get('how') != 'point' or not row.get('with'):
+                continue
+            # the card in ``with`` is a slug here: one this job writes, or one the vault holds
+            cid = ids.get(row['with'][0], row['with'][0])
+            canonical = updated.get(cid) or snapshot.cards.get(cid)
+            place = decisions.fold(entries, 'classification', row['slug'])
+            if canonical is None or not place.get('domain') or not place.get('pillar'):
+                raise Conflict(f'{row["slug"]}: its pointer to {row["with"][0]} needs that card and a place in the '
+                               'taxonomy, and one of them is missing')
+            new_rows.append({'kind': pointer_store.POINTER, 'into': cid,
+                             'domain': place['domain'], 'pillar': place['pillar'],
+                             **({'topic': place['topic']} if place.get('topic') else {}),
+                             'into_sha': canonical.sha256, 'at': now, 'job_id': job_id})
+            written_pointers.append({'slug': row['slug'], 'into': cid, 'domain': place['domain'],
+                                     'pillar': place['pillar'], 'reason': row.get('reason')})
+    for _, slug, card in accepted:
+        cid = ids[slug]
+        for relation in rels[slug]:
+            if not bridgemap.is_bridge(relation['type']):
+                continue
+            other = updated.get(relation['target']) or snapshot.cards.get(relation['target'])
+            if other is None or other.domain == card['domain']:
+                continue
+            new_rows.append({'kind': pointer_store.BRIDGE, 'narrow': cid, 'into': other.id,
+                             'type': relation['type'], 'into_sha': other.sha256,
+                             'narrow_sha': updated[cid].sha256, 'at': now, 'job_id': job_id})
+    rows_after = pointer_store.merge(pointer_rows, new_rows)
+    pointer_change = pointer_store.change(root, rows_after)
+    if pointer_change is not None:
+        changes.append(pointer_change)
     # accepted new topics
     new_taxonomies = {}
     by_moc: dict = {}
@@ -3705,7 +3753,6 @@ def _apply_job(root: Path, job_id: str, settled: list[dict] | None = None) -> di
     if before is None or move:
         # an archive move must show the identical copy inside the same transaction
         changes.append(Change(source_rel, None if before is None else digest(before), source_raw))
-    now = datetime.now(timezone.utc).isoformat(timespec='seconds')
     manifest_rows = inbox._jsonl(root, lay.manifest)
     if not any(r.get('vault_path') == source_rel and r.get('sha256') == source['sha256'] for r in manifest_rows):
         changes.append(inbox.appended(root, lay.manifest, (json.dumps(
@@ -3766,10 +3813,13 @@ def _apply_job(root: Path, job_id: str, settled: list[dict] | None = None) -> di
     # projections: affected MOCs and the entry page
     projected = replace(snapshot, cards={**snapshot.cards, **updated},
                         taxonomies={**snapshot.taxonomies, **new_taxonomies})
-    affected = {c.domain for c in updated.values()} | {d for d, _, _ in topics}
+    # the domains whose map changes: the cards written or patched, the new topics, and the domain of every pillar
+    # page this write put a pointer on (no card of that domain was written)
+    affected = {c.domain for c in updated.values()} | {d for d, _, _ in topics} | \
+        {p['domain'] for p in written_pointers}
     projection_metrics = {}
     if affected:
-        projection = build_mocs(projected, affected_domains=affected)
+        projection = build_mocs(projected, affected_domains=affected, pointers=rows_after)
         changes.extend(projection_changes(root, projection))
         projection_metrics = projection.metrics
     if move:
@@ -3814,6 +3864,12 @@ def _apply_job(root: Path, job_id: str, settled: list[dict] | None = None) -> di
                                                                                                   f['target'])),
                            'domains': [f.get('domain'), f.get('target_domain')], 'type': f.get('type'),
                            'reason': f.get('reason')} for s, f in sorted(bridged.items())],
+              # one concept in two domains with one description: no second card, a pointer on the pillar page
+              'pointers': written_pointers,
+              # the program changed the type of a relation the producer wrote (the bridge took its place)
+              'retyped_relations': [{**r, 'card': ids.get(r['card'], r['card']),
+                                     'target': ids.get(r['target'], r['target'])}
+                                    for r in retyped_relations + list((check or {}).get('retyped_relations') or [])],
               'replacements_not_made': replacements_not_made,
               # [[links]] the program pointed at the title a card was written or merged under, and links to cards
               # that were not written, left as plain text (their cards are written needs-review: dangling_link)
@@ -3849,6 +3905,21 @@ def _apply_job(root: Path, job_id: str, settled: list[dict] | None = None) -> di
     return _maybe_commit(root, job_id, done)
 
 
+def _fate_outcomes(entries: list, chunks: list[dict], fates: dict, ran: bool, domain_of) -> dict:
+    """``{slug: outcome}`` of the cards of the patch set, read from the decision record like the write reads it.
+
+    ``domain_of`` maps a card id to its domain (the vault's, and this job's cards from their final place), and it
+    goes into :func:`secondbrain.overlap.outcome` here exactly as it goes into the write and the consistency check
+    (:func:`_outcomes_of`): a level the write reads as "nothing written" (``same`` across two domains) must not be
+    read as a merge here. The keys are the slugs the ``outcome.program`` steps and the checks use: the cards the
+    write goes over (``accepted``, and the patch set in ``repeats``).
+    """
+    here = _domains(entries, {s: c for o in chunks
+                              for s, c in [*(o.get('accepted') or {}).items(), *(o.get('repeats') or {}).items()]},
+                    domain_of)
+    return {s: overlap.outcome(entries, s, checked=ran, domain_of=here)['outcome'] for s in fates}
+
+
 def _repeat_fates(root: Path, state: dict, packet: dict, settled: list[dict], check: dict | None,
                   snapshot) -> dict:
     """What becomes of each card of the patch set (``repeats``): ``{slug: {"how", "target", ...}}``.
@@ -3882,9 +3953,10 @@ def _repeat_fates(root: Path, state: dict, packet: dict, settled: list[dict], ch
             if card.get('_given_up'):  # its judgement again, after a dispute, kept failing the program's checks
                 fate.update(how='pending', reason=card['_given_up'])
             elif apart['how'] == 'apart':
-                # one concept in two domains: each keeps its narrow card, joined by a bridge; never merged
+                # close concept, one narrow card each in its own domain, joined by a bridge; never merged. The
+                # bridge says where the two differ, in the judge's words when it gave any
                 fate.update(how='bridge', type=apart['type'], domain=here, target_domain=old.domain,
-                            reason=apart['reason'])
+                            note=card.get('_reason') or card.get('_not_merged'), reason=apart['reason'])
             elif slug in disputes:
                 fate.update(how='pending', reason=f'the merge check could not add it to {target}: {disputes[slug]}')
             elif target in held:  # D-20: written next to its card, needs-review, with what the program found
@@ -4058,7 +4130,8 @@ def _outcomes_of(entries: list, chunks: list[dict], routed: list[dict], check: d
     merged = (check or {}).get('merged_into') or {}
     written = {s for o in routed for s in o['accepted']}
     patched = {s for o in routed for s in o.get('repeats', {})}
-    dropped = {d['slug'] for o in routed for d in o['duplicates'] if d.get('by') == 'reviewer'}
+    dropped = {d['slug'] for o in routed for d in o['duplicates']
+               if d.get('by') == 'reviewer' or d.get('how') == 'point'}
     out = {}
     for o in chunks:
         for slug in o['accepted']:
@@ -4097,8 +4170,11 @@ def _check_report(check: dict, ids: dict) -> dict:
     name = lambda slug: ids.get(slug, slug)  # noqa: E731
     return {'status': 'checked', 'cards': check['cards'],
             'merged': [{**m, 'into': name(m['into'])} for m in check['merged']],
-            # one concept in two domains: both cards stay, joined by a bridge (the merge it would have been)
+            # one concept in two domains: a narrow card of its own joined by a bridge, or (the same concept) no
+            # second card and a pointer to the one that holds the description (the merge it would have been)
             'bridges': [{**b, 'into': name(b['into'])} for b in check.get('bridges') or []],
+            'pointers': [{**p, 'into': name(p['into'])} for p in check.get('pointers') or []],
+            'retyped_relations': check.get('retyped_relations') or [],
             'rewritten_links': check.get('rewritten_links', 0),
             'added_links': [{**r, 'from': name(r['from']), 'target': name(r['target'])} for r in check['added_links']],
             'alone': [{**a, 'id': name(a['slug'])} for a in check['alone']],

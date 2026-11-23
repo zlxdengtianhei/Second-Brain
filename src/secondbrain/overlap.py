@@ -94,19 +94,21 @@ class KnownIds(frozenset):
 #: the vault ``decide`` sends the card to the merge check's decision set, ``patch`` to the patch set of its existing
 #: card, ``drop`` removes it (not written; listed under ``duplicates``). Against the source: ``write``,
 #: ``merge_carry`` (its carried propositions and review cards go to the card in ``with``), ``merge`` (nothing carried).
-#: A card judged ``extends`` or ``same`` as a card of *another* domain is never merged: :func:`bridges.settle` keeps
-#: both narrow cards and joins them with a bridge, so it becomes a ``patch`` (written next to it, needs review) or a
-#: ``write``. The program records the fate of a card that goes into another (``outcome.program``), which may be
-#: ``write``, ``drop`` or ``pending`` (it waits for the owner: a dispute not settled, a judgement again that kept
-#: failing the checks, a split card not done).
+#: A card judged ``same`` or ``extends`` as a card of *another* domain is never merged: :func:`bridges.settle` gives
+#: the rule's answer -- ``same`` becomes a pointer (no second card; the pillar page of this card's domain points at
+#: the one card that holds the description), ``extends`` a narrow card of its own joined by a bridge. The program
+#: records the fate of a card that goes into another (``outcome.program``), which may be ``write``, ``drop`` or
+#: ``pending`` (it waits for the owner: a dispute not settled, a judgement again that kept failing the checks, a
+#: split card not done).
 OUTCOMES = {
     ('existing', 'distinct'): 'decide', ('existing', 'extends'): 'patch', ('existing', 'same'): 'drop',
     ('source', 'distinct'): 'write', ('source', 'extends'): 'merge_carry', ('source', 'same'): 'merge',
 }
 
 #: What a card judged against the vault becomes: the level's own outcome, but a card of another domain is written
-#: next to its card (:func:`bridges.settle`).
-_FROM_HOW = {'distinct': 'decide', 'merge': 'patch', 'apart': 'patch', 'drop': 'drop'}
+#: next to its card (:func:`bridges.settle`), and a ``same`` in another domain is not written at all (a pointer to
+#: the one card that holds the description).
+_FROM_HOW = {'distinct': 'decide', 'merge': 'patch', 'apart': 'patch', 'point': 'drop', 'drop': 'drop'}
 
 
 def _first(level: str, with_: list, slug: str, domain_of) -> str:
@@ -117,19 +119,34 @@ def _first(level: str, with_: list, slug: str, domain_of) -> str:
     return _FROM_HOW[settled['how']]
 
 
+def _source(level: str, with_: list, slug: str, domain_of) -> dict:
+    """The outcome of the merge check's level against the source, with the two domains told apart."""
+    into = with_[0] if with_ else None
+    settled = bridges.settle('source', level, into, domain_of(slug) if domain_of else None,
+                             domain_of(into) if domain_of and into else None)
+    if settled['how'] == 'point':
+        return {'outcome': 'drop', 'how': 'point'}
+    return {'outcome': OUTCOMES[('source', level)], 'how': settled['how']}
+
+
 def route(entries: list, slug: str, domain_of=None) -> dict:
-    """``{"outcome", "with", "reason"}`` of an accepted card by its level against the vault (before the merge check).
+    """``{"outcome", "with", "reason", "how"}`` of an accepted card by its level against the vault (before the merge
+    check).
 
     ``domain_of`` maps a card id to the domain it stands in. With it, a card the reviewer finds the ``same`` as a
-    card of another domain is not dropped: it is written next to that card, as an ``extends`` one is, and the write
-    step joins the two with a bridge (:func:`bridges.settle`).
+    card of another domain is not dropped into nothing: it is not written, and the write step puts a pointer to
+    that card on the pillar page of this card's domain (:func:`bridges.settle`).
     """
     existing = decisions.current(entries, 'overlap.existing', slug)
     if existing is None:
         raise OutcomeError(f'{slug}: no final level against the vault cards (the chunk reviewer gives it)')
     data = existing['data']
     with_ = list(data['with'])
-    return {'outcome': _first(data['overlap'], with_, slug, domain_of), 'with': with_, 'reason': data.get('reason')}
+    into = with_[0] if with_ else None
+    settled = bridges.settle('existing', data['overlap'], into, domain_of(slug) if domain_of else None,
+                             domain_of(into) if domain_of and into else None)
+    return {'outcome': _FROM_HOW[settled['how']], 'with': with_, 'reason': data.get('reason'),
+            'how': settled['how']}
 
 
 class OutcomeError(ValueError):
@@ -143,8 +160,9 @@ def outcome(entries: list, slug: str, *, checked: bool, domain_of=None) -> dict:
     reviewer's) comes first; only a ``distinct`` card has a level against the
     source (``overlap.source``, the merge check's), and it must have one when
     the merge check ran (``checked``). A hint is never read. ``domain_of`` maps
-    a card id to its domain: with it, a ``same`` across two domains is the keep
-    of :func:`route`, not a drop.
+    a card id to its domain: with it, a ``same`` across two domains is the
+    pointer of :func:`route` (nothing is written), and a ``same`` against the
+    source says the card is not written either.
     """
     existing = decisions.current(entries, 'overlap.existing', slug)
     source = decisions.current(entries, 'overlap.source', slug)
@@ -164,5 +182,5 @@ def outcome(entries: list, slug: str, *, checked: bool, domain_of=None) -> dict:
         if checked:
             raise OutcomeError(f'{slug}: the merge check ran but gave no level against the source')
         return {'outcome': 'write', 'with': [], 'by': 'reviewer'}
-    return {'outcome': OUTCOMES[('source', source['data']['overlap'])], 'with': list(source['data']['with']),
-            'by': 'merge_check'}
+    settled = _source(source['data']['overlap'], list(source['data']['with']), slug, domain_of)
+    return {'outcome': settled['outcome'], 'with': list(source['data']['with']), 'by': 'merge_check'}

@@ -36,8 +36,19 @@ def literal_parts(template):
     return [part for part in re.split(r'%[sdr]|%0\d+d', template) if part.strip()]
 
 
+#: Rows of :mod:`secondbrain.pointers` a map build has to be able to draw: a pointer to a card of the fixture, and
+#: one at a card the vault no longer holds (its line is a placeholder). The pillar is the fixture's first.
+POINTER_ROWS = ({'kind': 'pointer', 'into': 'c001', 'domain': 'da', 'into_sha': 'x',
+                 'at': '2026-10-13T09:00:00+00:00'},
+                {'kind': 'pointer', 'into': 'gone_card', 'domain': 'da', 'into_sha': 'x',
+                 'at': '2026-10-13T09:00:00+00:00'})
+
+
 def built_pages(words):
-    return {k: v.decode('utf-8') for k, v in moc.build_mocs(moc_fixture.snapshot(words)).files.items()}
+    snapshot = moc_fixture.snapshot(words)
+    pillar = words['pillars'][0][0]
+    rows = [{**row, 'pillar': pillar} for row in POINTER_ROWS]
+    return {k: v.decode('utf-8') for k, v in moc.build_mocs(snapshot, pointers=rows).files.items()}
 
 
 def test_zh_map_pages_are_byte_identical_to_the_recorded_pages():

@@ -80,7 +80,8 @@ advance`).
 The pages (Markdown and HTML, in `[layout] articles/explain/` or `--out`) have two parts:
 
 - the drill-down, top to bottom (the HTML folds each level); a card that is one end of a bridge says in its line
-  which other domain the same concept also stands in (`same_concept_as`, or `similar_to` for a close one);
+  which other domain also uses the concept and what that side says (`same_concept_as`, or `similar_to` for a close
+  one: the narrow card's essence), and a card that another domain points at says so (the description stands here);
 - the review path, bottom to top: the reviewed questions of the cards, prerequisites first, and after each group of
   children a step back up to their parent with its recap, ending at the domain.
 

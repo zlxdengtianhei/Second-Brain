@@ -61,7 +61,8 @@ class Service:
         waiting = self.needs_review()
         owner = Counter(i['owner_reason'] for i in self.owner_items(scanned=items, conflicts=conflicts))
         topic_hints = hints(s)
-        cross = bridges.report(s.cards)
+        from . import pointers as pointer_store
+        cross = bridges.report(s.cards, pointer_store.load(self.root))
         from .advise import lookup
         for h in topic_hints['oversize']:  # a pillar past the line: the kept advice, or how to ask for it
             if h.get('level') == 'pillar':
@@ -89,9 +90,14 @@ class Service:
                 # cross-domain pairs that share a cheap key and have no bridge yet (a merge check judges each)
                 'cross_domain': cross,
                 **({'cross_domain_hint': 'cards of two domains that may be the same concept: the ingest merge check '
-                                         'keeps them apart and joins each pair with a bridge (same_concept_as, or '
-                                         'similar_to when the catalog declares no strong type)'}
+                                         'decides it in one place (bridges.settle) -- the same concept gets one '
+                                         'description and a pointer on the other domain\'s pillar page, a close one '
+                                         'gets a narrow card joined by a bridge (same_concept_as, or similar_to when '
+                                         'the catalog declares no strong type)'}
                    if cross['candidates'] else {}),
+                **({'cross_domain_waiting_hint': 'the canonical card of these bridges changed: `sb review queue` '
+                                                 'lists the narrow cards to be looked at again (cross_domain.waiting)'}
+                   if cross['waiting'] else {}),
                 'needs_review': len(waiting),
                 **({'needs_review_hint': 'these cards stay out of the review queue until their status is confirmed; '
                                          'sb status --needs-review lists them'} if waiting else {}),

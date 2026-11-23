@@ -107,9 +107,19 @@ def _clip(text: str, n: int) -> str:
 
 def _card_content(card, snapshot=None) -> dict:
     found = _bridged(snapshot, card) if snapshot is not None else []
+    pointed = _pointed(snapshot, card) if snapshot is not None else []
     return {'card_id': card.id, 'title': card.title, 'domain': card.domain, 'pillar': card.fm.get('pillar'),
             'essence': essence_of(card.body), 'propositions': (propositions_of(card.body) or [])[:10],
-            **({'bridges': found} if found else {})}
+            **({'bridges': found} if found else {}), **({'pointers': pointed} if pointed else {})}
+
+
+def _pointed(snapshot, card) -> list[str]:
+    """The domains whose pillar page points at ``card``: the same concept, with no description of its own there."""
+    from . import pointers as pointer_store
+    rows = pointer_store.pointers(pointer_store.load(snapshot.root), )
+    domains = snapshot.catalog.get('domains') or {}
+    return list(dict.fromkeys((domains.get(row['domain']) or {}).get('moc') or row['domain']
+                              for row in rows if row.get('into') == card.id))
 
 
 def _bridged(snapshot, card) -> list[dict]:
@@ -123,11 +133,14 @@ def _bridged(snapshot, card) -> list[dict]:
     domain_of = {cid: c.domain for cid, c in snapshot.cards.items()}
 
     def show(other_id, other_domain, bridge):
-        return {'target': other_id, 'title': (snapshot.cards[other_id].title if other_id in snapshot.cards
-                                              else other_id),
+        other = snapshot.cards.get(other_id)
+        return {'target': other_id, 'title': (other.title if other is not None else other_id),
                 'domain': other_domain,
                 'domain_title': (domains.get(other_domain) or {}).get('moc') or other_domain,
-                'strength': bridge['strength'], 'type': bridge['type']}
+                'strength': bridge['strength'], 'type': bridge['type'],
+                # what that side says: the sentence a reader gets is "this concept is also used there, and there
+                # it says ..." (the canonical card names the narrow card, the narrow card the canonical one)
+                **({'essence': _clip(essence_of(other.body), 160)} if other is not None else {})}
 
     out = [show(b['target'], b['domain'], b)
            for b in bridges.crossing(card.fm.get('relations'), domain_of.get, card.domain)
@@ -470,11 +483,18 @@ def _once(page, text) -> str:
 
 
 def _bridge_words(w, node) -> list[str]:
-    """One sentence per bridge of a card node, saying which domain the same concept also stands in."""
+    """One sentence per bridge or pointer of a card node: which domain also uses this concept, and what it says there.
+
+    A bridge says what the narrow card of the other domain says (its essence); a pointer says that the other
+    domain has no description of its own and points here (:mod:`secondbrain.pointers`).
+    """
     out = []
     for b in node.get('bridges') or []:
         where = b.get('domain_title') or b.get('domain') or ''
-        out.append((w['bridge_same'] if b.get('strength') == 'same' else w['bridge_close']) % where)
+        says = b.get('essence') or b.get('title') or ''
+        out.append((w['bridge_same'] if b.get('strength') == 'same' else w['bridge_close']) % (where, says))
+    for where in node.get('pointers') or []:
+        out.append(w['pointer_note'] % where)
     return out
 
 
