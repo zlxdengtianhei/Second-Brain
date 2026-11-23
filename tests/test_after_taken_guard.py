@@ -344,7 +344,15 @@ def run_all_reads(kind, tmp_path, monkeypatch):
     REACHED[kind] = marks
 
 
-@pytest.mark.parametrize('kind', sorted({**FLOWS, **MORE}))
+#: The flows this test is slow on: it runs the whole flow again for every taken read, so a flow that takes many
+#: reads takes minutes -- 397 s for ingest-packets and 280 s for ingest-note-check on the VPS, 315 s for
+#: ingest-packets on a loaded Mac -- past the guard's default of 300 s. Marked ``slow``, they get SLOW_TIMEOUT; the
+#: other kinds keep the default.
+SLOW_KINDS = {'ingest-packets', 'ingest-note-check'}
+
+
+@pytest.mark.parametrize('kind', [pytest.param(k, marks=pytest.mark.slow) if k in SLOW_KINDS else k
+                                  for k in sorted({**FLOWS, **MORE})])
 def test_a_failing_read_of_a_taken_answer_at_any_stage_is_counted_or_parked_and_listed(tmp_path, monkeypatch, kind):
     for n, root, job_id, reads in run_all_reads(kind, tmp_path, monkeypatch):
         assert reads.failed, n

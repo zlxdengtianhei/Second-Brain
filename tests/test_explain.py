@@ -149,3 +149,33 @@ def test_the_review_page_goes_back_up_to_each_pillar_and_uses_a_pillar_recap(vau
                 if k.endswith('.md')).decode()
     part = text.split(f'**{pillar}**', 1)[1].split('\n- **', 1)[0]
     assert '  - Together: Together ' in part
+
+
+def test_a_child_named_before_its_marker_is_shown_once(vault):
+    """A writer that put a child's name just before its marker ("the four laws [[n4]]") is shown the name once:
+    the marker becomes that name, bold in Markdown and a link in HTML, so the copy before it goes."""
+    snapshot = read_snapshot(vault)
+    state = explain.prepare(vault, ids=[_deep_card(snapshot).id], out=vault / 'out')
+    packet = jobs.read_input(vault, state['job_id'])
+    titles = {n['id']: n.get('title') for n in packet['nodes']}
+    rows = writer(type('T', (), {'packet': packet})())['nodes']
+    named = [(r, child) for r in rows for child in explain.MARKER.findall(r['explain']) if titles.get(child)]
+    assert named, 'the writer names each child as a marker'
+    for row, child in named:  # the same name twice, as the judge read it: "索引与向量数据库 **索引与向量数据库**"
+        assert row['explain'].count(f'[[{child}]]') == 1
+        row['explain'] = row['explain'].replace(f'[[{child}]]', f'{titles[child]} [[{child}]]')
+    candidate = explain.validate(packet, {'nodes': rows})
+    page = explain.assemble(packet, candidate, {}, snapshot)
+    for _, child in named:
+        title, once = titles[child], f'{titles[child]} [[{child}]] is the next step'
+        assert explain._md_text(page, once).strip() == f'**{title}** is the next step'
+        assert explain._html_text(page, once).strip() == (
+            f'<a class="ref" href="#{child}">{title}</a> is the next step')
+        # the pair alone, bold at the head of a text: nothing stands before it, and it still goes
+        assert explain._md_text(page, f'**{title}** [[{child}]]').strip() == f'**{title}**'
+        assert explain._html_text(page, f'**{title}** [[{child}]]').strip() == (
+            f'<a class="ref" href="#{child}">{title}</a>')
+    md, html = explain.to_markdown(page), explain.to_html(page)  # the pages carry no pair either
+    for _, child in named:
+        assert f'{titles[child]} **{titles[child]}**' not in md
+        assert f'{titles[child]} <a class="ref"' not in html

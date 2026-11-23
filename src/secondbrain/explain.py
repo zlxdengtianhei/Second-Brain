@@ -406,7 +406,36 @@ def _label(page, nid) -> str:
     return page['nodes'][n['target']]['title'] if n['kind'] == 'ref' else n['title']
 
 
+def _once(page, text) -> str:
+    """The same name twice: a writer that put a child's name just before the marker that shows it gets one.
+
+    A marker becomes the child's title in bold, so a text written "from the index [[n12]]" reads "from the index
+    **the index**" once the title is "the index". The name before a marker, in bold or plain and with only spaces
+    between them, goes; the marker keeps the bold one.
+    """
+    text, out, at = text or '', [], 0
+    for m in MARKER.finditer(text):
+        nid, piece = m.group(1), text[at:m.start()]
+        label = _label(page, nid) if nid in page['nodes'] else None
+        if label:
+            gap = piece[len(piece.rstrip()):]  # the spaces between the name and the marker stay
+            head = piece[:len(piece) - len(gap)]
+            for mark in ('**', '*', '_'):
+                if len(head) >= len(label) + 2 * len(mark) and head.endswith(f'{mark}{label}{mark}'):
+                    head = head[:-len(label) - 2 * len(mark)]
+                    break
+            else:
+                if head.endswith(label):
+                    head = head[:-len(label)]
+            piece = head + gap
+        out.extend((piece, m.group(0)))
+        at = m.end()
+    out.append(text[at:])
+    return ''.join(out)
+
+
 def _md_text(page, text) -> str:
+    text = _once(page, text)
     return MARKER.sub(lambda m: f"**{_label(page, m.group(1))}**" if m.group(1) in page['nodes'] else m.group(0), text)
 
 
@@ -451,7 +480,7 @@ def to_markdown(page: dict) -> str:
 
 
 def _html_text(page, text) -> str:
-    esc = html_lib.escape(text or '')
+    esc = html_lib.escape(_once(page, text))
     esc = re.sub(r'`([^`]+)`', r'<code>\1</code>', esc)
     esc = re.sub(r'\*\*([^*]+)\*\*', r'<b>\1</b>', esc)
     return MARKER.sub(lambda m: f'<a class="ref" href="#{m.group(1)}">{html_lib.escape(_label(page, m.group(1)))}</a>'

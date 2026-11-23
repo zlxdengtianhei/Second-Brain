@@ -32,3 +32,4 @@ secondbrain = ["prompts/*.md", "export/mathjax_check.js"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = ["slow: a test that runs whole flows again and again, so the guard waits SECONDBRAIN_TEST_TIMEOUT_SLOW"]

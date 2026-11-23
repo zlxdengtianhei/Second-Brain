@@ -9,8 +9,9 @@ The reader starts at the root and goes down one level at a time. Write for that 
 
 - `explain` (every node but `ref`): what this node is, at the level of detail the reader has reached, so the next
   step down makes sense. Name **each child** as `[[<child id>]]` (for example `[[n4]]`) and say in a few words what
-  that child adds or why it is needed here. A card without children: explain the card itself in 2–4 sentences.
-  Between `limits.explain_min` and `limits.explain_max` characters.
+  that child adds or why it is needed here. The program puts a child's name in bold where its marker stands, so
+  write the name once, as the marker: `[[n4]]`, not `the four laws [[n4]]`. A card without children: explain the
+  card itself in 2–4 sentences. Between `limits.explain_min` and `limits.explain_max` characters.
 - `recap` (only nodes with children): one sentence the reader reads after finishing all the children, on the way
   back up: how the children together give this node. Name the children as `[[<child id>]]` (all of them when there
   are up to 4, at least 3 when there are more). At most `limits.recap_max` characters.

@@ -68,18 +68,24 @@ def old_review_rules(monkeypatch, tmp_path):
 #: Seconds a single test may run (SECONDBRAIN_TEST_TIMEOUT overrides; 0 turns it off). A loop that should stop
 #: after a bounded number of rounds once ran for 19 minutes under a mutant instead of failing (V1).
 TEST_TIMEOUT = int(os.environ.get('SECONDBRAIN_TEST_TIMEOUT', '300'))
+#: Seconds a test marked ``slow`` may run: it runs whole flows again and again, so its time grows with what the
+#: machine carries (ingest-packets 397 s, ingest-note-check 280 s on the VPS; 315 s on a loaded Mac). Still bounded,
+#: so a hang in a loop of it fails too (SECONDBRAIN_TEST_TIMEOUT_SLOW overrides; 0 turns it off).
+SLOW_TIMEOUT = int(os.environ.get('SECONDBRAIN_TEST_TIMEOUT_SLOW') or 3 * TEST_TIMEOUT)
 
 
 @pytest.fixture(autouse=True)
-def stop_a_hanging_test():
-    if not TEST_TIMEOUT or not hasattr(signal, 'SIGALRM'):
+def stop_a_hanging_test(request):
+    slow = request.node.get_closest_marker('slow') is not None
+    limit, name = (SLOW_TIMEOUT, 'SECONDBRAIN_TEST_TIMEOUT_SLOW') if slow else (TEST_TIMEOUT, 'SECONDBRAIN_TEST_TIMEOUT')
+    if not limit or not hasattr(signal, 'SIGALRM'):
         yield
         return
 
     def expire(signum, frame):
-        pytest.fail(f'the test ran longer than {TEST_TIMEOUT} s (SECONDBRAIN_TEST_TIMEOUT)')
+        pytest.fail(f'the test ran longer than {limit} s ({name})')
     previous = signal.signal(signal.SIGALRM, expire)
-    signal.alarm(TEST_TIMEOUT)
+    signal.alarm(limit)
     try:
         yield
     finally:
