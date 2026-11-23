@@ -43,7 +43,7 @@ ROLES = {
                                   ('nt-concepts', 'producer'), ('dg01', 'producer'), ('nc-c01', 'reviewer'))],
     'export': [('u01', 'reviewer' if step == 'review' else 'producer', step) for step in export.STEPS],
     **{kind: [(None, 'producer', 'produce'), (None, 'reviewer', 'review')]
-       for kind in ('classification', 'curation', 'relocation', 'domcreate', 'explain')},
+       for kind in ('classification', 'curation', 'relocation', 'domcreate', 'explain', 'advice')},
 }
 
 

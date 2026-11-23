@@ -60,6 +60,10 @@ class Service:
         waiting = self.needs_review()
         owner = Counter(i['owner_reason'] for i in self.owner_items(scanned=items, conflicts=conflicts))
         topic_hints = hints(s)
+        from .advise import lookup
+        for h in topic_hints['oversize']:  # a pillar past the line: the kept advice, or how to ask for it
+            if h.get('level') == 'pillar':
+                h.update(lookup(self.root, s, h['domain'], h['pillar']))
         return {'cards': len(s.cards), 'missing_classification': sum(missing.values()),
                 'owner_items': {r: owner[r] for r in OWNER_REASONS if owner[r]},
                 **({'owner_items_hint': 'what waits for you, one list: sb status --owner-items'} if owner else {}),
@@ -70,7 +74,8 @@ class Service:
                    if any(h.get('level') != 'pillar' for h in topic_hints['oversize']) else {}),
                 **({'pillars_hint': f'pillars without topics of their own at {PILLAR_REVIEW_AT} cards or more: '
                                     'look again whether to split them; each has a proposal by its relations '
-                                    '(the line is a reference, 40 cards stay together)'}
+                                    '(the line is a reference, 40 cards stay together); sb advise asks a model '
+                                    'whether to split into pillars, into a new domain, or not'}
                    if any(h.get('level') == 'pillar' for h in topic_hints['oversize']) else {}),
                 'missing_by_domain': dict(sorted(missing.items())), 'issues': issues,
                 'map_issues': dict(sorted(map_issues.items())),

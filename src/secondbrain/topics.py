@@ -97,6 +97,27 @@ def _graph(snapshot, ids: set):
     return g
 
 
+def partition(snapshot, ids: set, *, seed: int = SEED) -> tuple[list[list[str]], list[str]]:
+    """The groups of a split proposal over the cards ``ids`` (see the module text): ``(groups, scattered)``, each
+    group a sorted list of card ids, largest first; needs networkx (``ImportError`` without it)."""
+    from networkx.algorithms.community import louvain_communities
+    g = _graph(snapshot, ids)
+    communities = sorted((sorted(c) for c in louvain_communities(g, seed=seed)), key=lambda c: (-len(c), c[0]))
+    large = [c for c in communities if len(c) >= MIN_GROUP]
+    small = [c for c in communities if len(c) < MIN_GROUP]
+    members = [set(c) for c in large]
+    scattered = []
+    for group in small:  # to the large group it has most links to; ties go to the larger, earlier group
+        links = [sum(1 for cid in group for other in g.neighbors(cid) if other in m) for m in members]
+        best = max(range(len(members)), key=lambda i: (links[i], -i), default=None)
+        if best is None or links[best] == 0:
+            scattered += group
+        else:
+            members[best] |= set(group)
+    groups = sorted((sorted(m) for m in members), key=lambda m: (-len(m), m[0]))
+    return groups, sorted(scattered)
+
+
 def split_proposal(snapshot, domain: str, pillar: str, topic: str, *, seed: int = SEED) -> dict:
     """How the cards of one topic could split, by their relations (see the module text).
 
@@ -112,23 +133,11 @@ def split_proposal(snapshot, domain: str, pillar: str, topic: str, *, seed: int 
                 'unavailable': f'split proposals need networkx ({install_hint("curate", "en")})'}
     ids = {cid for cid, c in snapshot.cards.items()
            if (c.domain, c.fm.get('pillar'), c.fm.get('topic')) == (domain, pillar, topic)}
-    g = _graph(snapshot, ids)
-    communities = sorted((sorted(c) for c in louvain_communities(g, seed=seed)), key=lambda c: (-len(c), c[0]))
-    large = [c for c in communities if len(c) >= MIN_GROUP]
-    small = [c for c in communities if len(c) < MIN_GROUP]
-    members = [set(c) for c in large]
-    scattered = []
-    for group in small:  # to the large group it has most links to; ties go to the larger, earlier group
-        links = [sum(1 for cid in group for other in g.neighbors(cid) if other in m) for m in members]
-        best = max(range(len(members)), key=lambda i: (links[i], -i), default=None)
-        if best is None or links[best] == 0:
-            scattered += group
-        else:
-            members[best] |= set(group)
+    members, scattered = partition(snapshot, ids, seed=seed)
 
     def shown(cid):
         return {'id': cid, 'title': snapshot.cards[cid].title}
-    groups = sorted(([shown(c) for c in sorted(m)] for m in members), key=lambda g: (-len(g), g[0]['id']))
+    groups = [[shown(c) for c in m] for m in members]
     return {'domain': domain, 'pillar': pillar, 'topic': topic, 'cards': len(ids), 'seed': seed,
             'groups': [{'size': len(g), 'cards': g,
                         'needs_second_round': len(g) > (PILLAR_REVIEW_AT if topic == pillar else MAX_TOPIC)}

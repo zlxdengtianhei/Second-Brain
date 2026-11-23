@@ -31,6 +31,22 @@ its bytes stay in the rollback journal. The result lists `topics_before` per car
 its cards group by their relations (the method of the topic split proposals). 40 cards stay together. The number
 is a reference for looking again, not a limit.
 
+Whether it should split, and how, depends on what the cards say. `sb advise` asks a model:
+
+```bash
+sb advise --pillar <pillar> [--domain <domain>] --executor api
+```
+
+The program freezes the evidence: the domain's question and pillars, the pillar's `why`, its cards in the groups of
+the proposal (title and essence), and for each group how many of its links stay inside, go to the other groups, to
+other pillars and to other domains. The writer of `sb explain` answers `keep`, `split_pillars` (the groups put into
+a few new pillars of the domain, each with a name and what it answers) or `new_domain` (some groups leave for a new
+domain, with its question), with an argument citing the evidence; the program checks the answer (every group in one
+pillar, no name taken by another pillar or domain), and the reviewer of `sb explain` judges it against the evidence.
+Nothing is split: the advice is kept with the job, and `sb status` shows it in the pillar's `topics.oversize` entry
+(`advice`) until the pillar's cards or links change; before that the entry names the command (`advise`). The vault
+grows sideways (pillars into pillars, a part into a new domain) and keeps three levels.
+
 ## The graph of pillars
 
 A card sits under one pillar, so the pillars of a map form a list. The relations of the cards cross pillars and

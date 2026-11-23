@@ -79,11 +79,21 @@ def explain_job(tmp_path):
     return root, state['job_id'], FakeExecutor('gpt-test', responder=te.writer), wrong
 
 
+def advice_job(tmp_path):
+    import shutil
+    from secondbrain import advise
+    from tests import test_advise as ta
+    root = shutil.copytree(ta.EXAMPLE, tmp_path / 'vault')
+    state = advise.prepare(root, domain=ta.DOMAIN, pillar=ta.PILLAR)
+    wrong = lambda candidate: {'items': [{'id': 'another item', 'decision': 'accept', 'reason': 'supported'}]}
+    return root, state['job_id'], FakeExecutor('gpt-test', responder=ta.writer(ta.SPLIT)), wrong
+
+
 #: Each maintenance kind: a job whose producer gives a lawful proposal, and a review of the right schema that does
 #: not cover it (classification: an item left out; curation: the domain written ``Attention`` for ``attention``;
 #: relocation: its one item left out; domain creation: another domain).
 JOBS = {'classification': classification, 'curation': curation_job, 'relocation': relocation_job,
-        'domcreate': domcreate_job, 'explain': explain_job}
+        'domcreate': domcreate_job, 'explain': explain_job, 'advice': advice_job}
 
 
 def test_every_maintenance_kind_has_a_row():
@@ -127,6 +137,8 @@ def test_a_host_review_that_does_not_cover_the_proposal_is_refused_and_the_run_c
 
 
 def covering(kind, candidate):
+    if kind == 'advice':
+        return {'items': [{'id': 'advice', 'decision': 'accept', 'reason': 'the counts are the evidence'}]}
     if kind == 'explain':
         return {'items': [{'id': row['id'], 'decision': 'accept', 'reason': 'checked against the cards'}
                           for row in candidate['nodes']]}
