@@ -41,7 +41,7 @@ export SECONDBRAIN_VAULT=~/sb-example
 The example vault has 42 cards in three domains (how we learn, reasoning with data, computing foundations), 8 of them with a diagram. They were made from 7 short notes by the Agent Skill below, and five reviews were logged with `sb review log`. Every `sb` command prints JSON. Look around:
 
 ```sh
-sb status                         # cards, inbox, review totals, problems found
+sb status                         # cards, inbox, review totals, cross-domain bridges, problems found
 sb search "spaced repetition"     # lexical search over all cards
 sb review status                  # learned, due and new cards per domain
 sb review queue --limit 5         # what to review now

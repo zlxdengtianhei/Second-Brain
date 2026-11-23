@@ -1230,15 +1230,20 @@ def queue_report(review_dir: Path, cards: Iterable[CardMeta], now: datetime, *,
                  read_card: Callable[[CardMeta], str] | None = None,
                  limit: int | None = None, section: str = DEFAULT_REVIEW_SECTION,
                  taxonomy: Mapping[str, PillarInfo] | None = None,
-                 cache_dir: Path | None = None) -> dict[str, Any]:
+                 cache_dir: Path | None = None, waiting: Sequence[str] = ()) -> dict[str, Any]:
     """Queue as JSON-ready data. With ``read_card`` each entry carries its questions.
 
     Pass ``taxonomy`` (from ``build_taxonomy``) so new cards come in the same order as in the
     Obsidian plugin: study domain, then pillar order, then topic position.
+
+    ``waiting`` names the cards to be looked at again before anything else: their kind is ``"reread"`` and they
+    come first, due or not (a bridge whose canonical card changed after the bridge was written; the rows are of
+    :mod:`secondbrain.pointers`).
     """
     result = load(review_dir, cache_dir=cache_dir)
     metas = rank_cards(cards, taxonomy, domains) if taxonomy is not None else list(cards)
     q = build_queue(metas, result, now, new_per_day=new_per_day, domains=domains)
+    wanted = set(waiting)
 
     def entry(meta: CardMeta, kind: str) -> dict[str, Any]:
         st = result.states.get(meta.id)
@@ -1252,12 +1257,17 @@ def queue_report(review_dir: Path, cards: Iterable[CardMeta], now: datetime, *,
                                 for i in extract_review_items(read_card(meta), section)]
         return row
 
-    rows = [entry(m, "due") for m in q["due"]] + [entry(m, "new") for m in q["new"]]
+    # a record is not read, so it never waits here; a needs-review card does (this list is not the learning
+    # queue: the owner reads the narrow card again, whatever its status keeps it out of)
+    reread = [m for m in metas if m.id in wanted and m.kind != "record"]
+    rows = ([entry(m, "reread") for m in reread] +
+            [entry(m, "due") for m in q["due"] if m.id not in wanted] +
+            [entry(m, "new") for m in q["new"] if m.id not in wanted])
     if limit is not None:
         rows = rows[:limit]
     return {"today": q["today"], "due_count": len(q["due"]), "new_count": len(q["new"]),
             "new_quota": q["new_quota"], "new_available": q["new_available"],
-            "cycle_breaks": len(q["cycle_breaks"]), "cards": rows}
+            "cycle_breaks": len(q["cycle_breaks"]), "reread_count": len(reread), "cards": rows}
 
 
 def log_review(review_dir: Path, card: str, *, device: str, now: datetime, mode: str = "agent",

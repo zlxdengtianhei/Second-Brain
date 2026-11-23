@@ -83,6 +83,13 @@ def _safe_segment(value, fallback):
     return text
 
 
+def _essence_line(body) -> str:
+    """The card's one sentence, as a map page shows it (single line, clipped): read from the card, never stored."""
+    from .cards import essence_of
+    text = ' '.join((essence_of(body) or '').split())
+    return text if len(text) <= 200 else text[:199] + '…'
+
+
 def _pillar_stem(name):
     return _safe_segment(_WS_RE.sub("", name), _FALLBACK)
 
@@ -459,7 +466,7 @@ def _render_root(moc_title, moc_domains, narrative, pillars, pillar_counts,
 # --------------------------------------------------------------------------
 # Per-MOC build
 # --------------------------------------------------------------------------
-def _process_moc(snapshot, moc_title, moc_domains, domain_to_moc, issues, graph=None):
+def _process_moc(snapshot, moc_title, moc_domains, domain_to_moc, issues, graph=None, pointers=()):
     domain_set = set(moc_domains)
     cards = [c for c in snapshot.cards.values() if c.domain in domain_set]
     ordered, _ = learning_order(cards)  # cycles are reported once for the whole vault (build_mocs)
@@ -469,6 +476,23 @@ def _process_moc(snapshot, moc_title, moc_domains, domain_to_moc, issues, graph=
     taxonomy = snapshot.taxonomies.get(moc_title)
     pillars, pillar_topics, narrative, bridges = _taxonomy_structure(
         taxonomy, moc_title, issues)
+    # the pointers of this map, by the pillar whose page carries them; a pointer at a pillar the taxonomy no
+    # longer holds is listed so that it does not vanish
+    pillars_here = {p[0] for p in pillars}
+    here_pointers: dict = {}
+    for row in pointers or ():
+        if row.get('domain') not in domain_set:
+            continue
+        if row.get('pillar') not in pillars_here:
+            issues.append({"code": "pointer_pillar_missing", "card": row.get('into'),
+                           "domain": row.get('domain'), "pillar": row.get('pillar'),
+                           "detail": "a pointer names a pillar the map's taxonomy does not hold"})
+            continue
+        target = snapshot.cards.get(row.get('into'))
+        here_pointers.setdefault(row.get('pillar'), []).append({
+            'into': row.get('into'),
+            **({'path': target.path, 'title': target.title, 'domain': target.domain,
+                'essence': _essence_line(target.body)} if target is not None else {})})
 
     buckets = {}
     missing = []
@@ -513,7 +537,8 @@ def _process_moc(snapshot, moc_title, moc_domains, domain_to_moc, issues, graph=
             rel = prefix + _pillar_filename(order, stem, pi)
             text = _render_pillar_pages_here(
                 rel, moc_title, name, why, pg, pi, total, root_rel, ctx, domain_to_moc,
-                order, stem, flat=flat_pillar, neighbours=graph.neighbours(moc_title, name))
+                order, stem, flat=flat_pillar, neighbours=graph.neighbours(moc_title, name),
+                pointers=here_pointers.get(name, ()))
             files[rel] = text.encode("utf-8")
             links.append(rel)
             cards_n = sum(len(c) for _, c in pg)
@@ -578,7 +603,8 @@ def _process_moc(snapshot, moc_title, moc_domains, domain_to_moc, issues, graph=
 
 
 def _render_pillar_pages_here(rel, moc_title, pname, why, pg, page_idx, total,
-                              root_rel, ctx, domain_to_moc, order, stem, *, flat=False, neighbours=None):
+                              root_rel, ctx, domain_to_moc, order, stem, *, flat=False, neighbours=None,
+                              pointers=()):
     L = labels.moc()
     text = [BC_FRONTMATTER + "# %s · %s" % (moc_title, pname), ""]
     if total > 1:
@@ -586,6 +612,17 @@ def _render_pillar_pages_here(rel, moc_title, pname, why, pg, page_idx, total,
         text.append("")
     if why and page_idx == 1:
         text.append(why)
+        text.append("")
+    if pointers and page_idx == 1:  # one concept, one description: the canonical card stands in another domain
+        text.append(L["pointers"])
+        text.append("")
+        for row in pointers:
+            if not row.get("title"):
+                text.append(L["pointer_missing"] % ("`%s`" % row.get("into")))
+                continue
+            # what the canonical card says is read from that one card at build time: nothing is stored twice
+            text.append(L["pointer_line"] % (_link(row["path"], row["title"]), row["domain"],
+                                             row.get("essence") or ""))
         text.append("")
     if neighbours and page_idx == 1:
         G = labels.moc_graph()
@@ -719,11 +756,15 @@ class _PageLink:
 # --------------------------------------------------------------------------
 # Public entry point
 # --------------------------------------------------------------------------
-def build_mocs(snapshot, *, affected_domains=None):
+def build_mocs(snapshot, *, affected_domains=None, pointers=None):
     """Deterministically project in-scope MOCs into a byte change set.
 
     Never writes to disk, never calls a model, never edits taxonomy. Returns a
     :class:`Projection` (files + metrics + issues).
+
+    ``pointers`` are the rows of :mod:`secondbrain.pointers` (read from the vault when not given). A domain that
+    points at a card which changed after the pointer was written is built again, whatever ``affected_domains``
+    says: the pointer names that card by its title, so its page would otherwise keep the old name.
     """
     catalog = snapshot.catalog if isinstance(snapshot.catalog, dict) else {}
     cat_domains = catalog.get("domains", {}) if isinstance(catalog, dict) else {}
@@ -758,6 +799,20 @@ def build_mocs(snapshot, *, affected_domains=None):
                                "detail": "domain is not in catalog.domains"})
                 continue
             scoped.add(moc)
+    # one concept, one description, in another domain: a pointer names the canonical card by its title, so a map
+    # that holds a pointer at a card which changed since is built again (the caller named another domain)
+    if pointers is None:
+        from . import pointers as pointer_store
+        pointers = pointer_store.load(snapshot.root) if getattr(snapshot, 'root', None) else []
+    for row in pointers:
+        if row.get('kind') != 'pointer':
+            continue
+        card = snapshot.cards.get(row.get('into'))
+        if card is not None and card.sha256 == row.get('into_sha'):
+            continue
+        moc = domain_to_moc.get(row.get('domain'))
+        if moc is not None:
+            scoped.add(moc)
 
     files = {}
     metrics_mocs = {}
@@ -765,7 +820,8 @@ def build_mocs(snapshot, *, affected_domains=None):
     total_pages = 0
     graph = PillarGraph(snapshot)
     for moc in sorted(scoped):
-        res = _process_moc(snapshot, moc, moc_to_domains[moc], domain_to_moc, issues, graph)
+        res = _process_moc(snapshot, moc, moc_to_domains[moc], domain_to_moc, issues, graph,
+                           [r for r in pointers if r.get('kind') == 'pointer'])
         files.update(res["files"])
         metrics_mocs[moc] = res["metrics"]
         covered.update(res["metrics"]["card_ids"])

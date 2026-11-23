@@ -27,6 +27,7 @@ import re
 from pathlib import Path
 
 from . import config, jobs, labels
+from . import bridges
 from . import layout as layouts
 from .cards import essence_of, flashcards_of, propositions_of
 from .moc import learning_order
@@ -104,9 +105,56 @@ def _clip(text: str, n: int) -> str:
     return text if len(text) <= n else text[:n - 1] + '…'
 
 
-def _card_content(card) -> dict:
+def _card_content(card, snapshot=None) -> dict:
+    found = _bridged(snapshot, card) if snapshot is not None else []
+    pointed = _pointed(snapshot, card) if snapshot is not None else []
     return {'card_id': card.id, 'title': card.title, 'domain': card.domain, 'pillar': card.fm.get('pillar'),
-            'essence': essence_of(card.body), 'propositions': (propositions_of(card.body) or [])[:10]}
+            'essence': essence_of(card.body), 'propositions': (propositions_of(card.body) or [])[:10],
+            **({'bridges': found} if found else {}), **({'pointers': pointed} if pointed else {})}
+
+
+def _pointed(snapshot, card) -> list[str]:
+    """The domains whose pillar page points at ``card``: the same concept, with no description of its own there."""
+    from . import pointers as pointer_store
+    rows = pointer_store.pointers(pointer_store.load(snapshot.root), )
+    domains = snapshot.catalog.get('domains') or {}
+    return list(dict.fromkeys((domains.get(row['domain']) or {}).get('moc') or row['domain']
+                              for row in rows if row.get('into') == card.id))
+
+
+def _bridged(snapshot, card) -> list[dict]:
+    """The bridges this card is one end of: the same concept standing in another domain.
+
+    Read from both directions, because a bridge is written on the card the merge check kept apart, and the card
+    it was kept apart from -- written earlier, or by another source -- names nothing. ``domain_title`` is what a
+    reader calls the domain (its map's title).
+    """
+    domains = snapshot.catalog.get('domains') or {}
+    domain_of = {cid: c.domain for cid, c in snapshot.cards.items()}
+
+    def show(other_id, other_domain, bridge):
+        other = snapshot.cards.get(other_id)
+        return {'target': other_id, 'title': (other.title if other is not None else other_id),
+                'domain': other_domain,
+                'domain_title': (domains.get(other_domain) or {}).get('moc') or other_domain,
+                'strength': bridge['strength'], 'type': bridge['type'],
+                # what that side says: the sentence a reader gets is "this concept is also used there, and there
+                # it says ..." (the canonical card names the narrow card, the narrow card the canonical one)
+                **({'essence': _clip(essence_of(other.body), 160)} if other is not None else {})}
+
+    out = [show(b['target'], b['domain'], b)
+           for b in bridges.crossing(card.fm.get('relations'), domain_of.get, card.domain)
+           if isinstance(b.get('target'), str)]
+    seen = {b['target'] for b in out}
+    for other in snapshot.cards.values():  # the other end: it names this card, in its own domain
+        if other.id == card.id or other.domain == card.domain or other.id in seen:
+            continue
+        for b in bridges.crossing(other.fm.get('relations'), domain_of.get, other.domain):
+            if b['target'] == card.id:
+                out.append(show(other.id, other.domain, b))
+                seen.add(other.id)
+                break
+    return out
 
 
 def _down(card) -> list[tuple[str, str]]:
@@ -187,7 +235,7 @@ def build(snapshot, anchor: dict, *, depth: int = 3, max_children: int = 5, max_
                 if t in placed:
                     add('ref', node['id'], target=placed[t], title=snapshot.cards[t].title)
                     continue
-                child = add('card', node['id'], **_card_content(snapshot.cards[t]))
+                child = add('card', node['id'], **_card_content(snapshot.cards[t], snapshot))
                 seen_here.append(child)
             queue += [(c, level + 1) for c in seen_here]
 
@@ -202,7 +250,7 @@ def build(snapshot, anchor: dict, *, depth: int = 3, max_children: int = 5, max_
             if key not in pillars:
                 parent = root['id'] if card.domain == first.domain else domain_node(card.domain)['id']
                 pillars[key] = pillar_node(card.domain, key[1], parent)
-            node = add('card', pillars[key]['id'], anchor=True, **_card_content(card))
+            node = add('card', pillars[key]['id'], anchor=True, **_card_content(card, snapshot))
         for cid in anchor['ids']:
             expand(by_id[placed[cid]])
     elif kind == 'pillar':
@@ -220,7 +268,7 @@ def build(snapshot, anchor: dict, *, depth: int = 3, max_children: int = 5, max_
                                                              for i in members])['id']
             shown = members[:max_children]
             for cid in shown:
-                add('card', parent, **_card_content(snapshot.cards[cid]))
+                add('card', parent, **_card_content(snapshot.cards[cid], snapshot))
             if len(members) > len(shown):
                 by_id[parent]['more'] = [snapshot.cards[i].title for i in members[len(shown):]]
     else:
@@ -233,7 +281,7 @@ def build(snapshot, anchor: dict, *, depth: int = 3, max_children: int = 5, max_
             degree = {i: sum(1 for r in snapshot.cards[i].fm.get('relations') or []
                              if isinstance(r, dict) and r.get('target') in ids) for i in ids}
             for cid in ordered(sorted(ids, key=lambda i: (-degree[i], i))[:3]):
-                add('card', pnode['id'], **_card_content(snapshot.cards[cid]))
+                add('card', pnode['id'], **_card_content(snapshot.cards[cid], snapshot))
     return nodes
 
 
@@ -434,6 +482,22 @@ def _once(page, text) -> str:
     return ''.join(out)
 
 
+def _bridge_words(w, node) -> list[str]:
+    """One sentence per bridge or pointer of a card node: which domain also uses this concept, and what it says there.
+
+    A bridge says what the narrow card of the other domain says (its essence); a pointer says that the other
+    domain has no description of its own and points here (:mod:`secondbrain.pointers`).
+    """
+    out = []
+    for b in node.get('bridges') or []:
+        where = b.get('domain_title') or b.get('domain') or ''
+        says = b.get('essence') or b.get('title') or ''
+        out.append((w['bridge_same'] if b.get('strength') == 'same' else w['bridge_close']) % (where, says))
+    for where in node.get('pointers') or []:
+        out.append(w['pointer_note'] % where)
+    return out
+
+
 def _md_text(page, text) -> str:
     text = _once(page, text)
     return MARKER.sub(lambda m: f"**{_label(page, m.group(1))}**" if m.group(1) in page['nodes'] else m.group(0), text)
@@ -455,7 +519,8 @@ def to_markdown(page: dict) -> str:
             parent_pillar = page['nodes'][n['parent']].get('pillar')
             if n['pillar'] != parent_pillar:
                 where = w['elsewhere'] % n['pillar']
-        out.extend([f"{head} {number} {w[n['kind']]} · {n['title']}{where}", ''])
+        lines = ''.join(f" {line}" for line in _bridge_words(w, n))
+        out.extend([f"{head} {number} {w[n['kind']]} · {n['title']}{where}{lines}", ''])
         if n.get('unresolved'):
             out.extend([f"> {w['unreviewed'] % n['unresolved']}", ''])
         out.extend([_md_text(page, n['explain']), ''])
@@ -536,7 +601,9 @@ def to_html(page: dict) -> str:
             where = f' <span class="where">{esc(w["elsewhere"] % n["pillar"])}</span>'
         opened = ' open' if n['depth'] <= 2 else ''
         parts.append(f'<details id="{nid}"{opened}><summary><span class="kind">{esc(w[n["kind"]])}</span>'
-                     f'<span class="title">{esc(n["title"])}</span>{where}</summary>')
+                     f'<span class="title">{esc(n["title"])}</span>{where}'
+                     + ''.join(f' <span class="where bridge">{esc(line)}</span>' for line in _bridge_words(w, n))
+                     + '</summary>')
         if n.get('unresolved'):
             parts.append(f'<p class="warn">{esc(w["unreviewed"] % n["unresolved"])}</p>')
         parts.append(f'<p class="explain">{_html_text(page, n["explain"])}</p>')

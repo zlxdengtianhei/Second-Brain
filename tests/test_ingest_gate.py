@@ -12,7 +12,7 @@ from secondbrain.executors import FakeExecutor
 from secondbrain.pipelines import answerfix, ingest
 from secondbrain.service import Service
 from secondbrain.vault import read_snapshot
-from tests.helpers import DOMAIN, EXISTING
+from tests.helpers import DOMAIN, EXISTING, PILLAR, TOPIC
 from tests.ingest_helpers import (CARDS, FIXED_DIMMING, OTHER_CARD, OTHER_DOMAIN, OTHER_PILLAR, OTHER_TOPIC,
                                   SOURCE_NAME, build_ingest_vault, first_candidate, first_review, repair_candidate,
                                   repair_review, scripted)
@@ -28,6 +28,23 @@ def with_domain_words(root):
     catalog['inverse_relations'].update({'tool_for': 'used_by', 'used_by': 'tool_for'})
     path.write_text(json.dumps(catalog), encoding='utf-8')
     return root
+
+
+def add_same_domain_card(root, cid='card_plain-note'):
+    """An existing card of the first domain: a card judged ``same`` as it is still a drop, and its links move there.
+
+    The second domain's card (``OTHER_CARD``) is no duplicate any more: a card whose level names a card of another
+    domain keeps a card of its own, joined by a bridge (``tests/test_cross_domain_bridge.py``).
+    """
+    lay = layouts.DEFAULT
+    path = root / lay.card_path(DOMAIN, 'Plain note.md')
+    path.write_text(f'---\nid: {cid}\ntitle: Plain note\ndomain: {DOMAIN}\npillar: {PILLAR}\ntopic: {TOPIC}\n'
+                    f'---\n## Essence\nA plain note.\n', encoding='utf-8')
+    registry = json.loads((root / lay.registry).read_text(encoding='utf-8'))
+    registry['notes'].append({'id': cid, 'path': lay.card_path(DOMAIN, 'Plain note.md'), 'title': 'Plain note',
+                              'domain': DOMAIN})
+    (root / lay.registry).write_text(json.dumps(registry), encoding='utf-8')
+    return cid
 
 
 def check(root, candidate):
@@ -243,11 +260,12 @@ def test_a_slug_whose_id_an_existing_card_has_is_refused(tmp_path):
 # --- drill-log P6: links to cards that were not written ---------------------------------------
 def test_a_link_to_a_card_judged_a_duplicate_goes_to_the_card_it_repeats(tmp_path):
     root = build_ingest_vault(tmp_path / 'vault')
+    note = add_same_domain_card(root)
     candidate = first_candidate()
     candidate['cards'][0] = {**candidate['cards'][0], 'relations': candidate['cards'][0]['relations'] + [
         {'type': 'depends_on', 'target': 'queue-order', 'note': 'order comes first'}]}
     review = first_review()
-    review['cards'][3]['with'] = [OTHER_CARD]  # queue-order is the same as the pebble card (for the test)
+    review['cards'][3]['with'] = [note]  # queue-order is the same as another card of its own domain (for the test)
     produce, respond, _ = scripted([candidate, repair_candidate()], [review, repair_review()])
     job = ingest.prepare(root, root / '00_Inbox' / SOURCE_NAME)
     result = ingest.advance(root, job['job_id'], producer=FakeExecutor('gpt-test', responder=produce),
@@ -255,8 +273,8 @@ def test_a_link_to_a_card_judged_a_duplicate_goes_to_the_card_it_repeats(tmp_pat
     assert result['status'] == 'applied' and result['skipped_relations'] == []
     cards = {c.id: c for c in read_snapshot(root).cards.values()}
     queue = next(c for c in cards.values() if c.title == 'Lantern queue')
-    assert {'type': 'depends_on', 'target': OTHER_CARD, 'note': 'order comes first'} in queue.fm['relations']
-    assert {'type': 'depends_on', 'target': queue.id} in cards[OTHER_CARD].fm['relations']  # back link
+    assert {'type': 'depends_on', 'target': note, 'note': 'order comes first'} in queue.fm['relations']
+    assert {'type': 'depends_on', 'target': queue.id} in cards[note].fm['relations']  # back link
 
 
 def pending_link(root, placement=None):
@@ -328,14 +346,15 @@ def test_a_carried_link_the_new_card_already_makes_is_reported_as_linked(tmp_pat
 
 def test_a_carried_link_to_a_card_judged_a_duplicate_goes_to_the_card_it_repeats(tmp_path):
     root = build_ingest_vault(tmp_path / 'vault')
+    note = add_same_domain_card(root)
     job_id, cost_id, repair = pending_link(root)
-    done = retried(root, job_id, [repair], [verdict('accept', overlap='same', **{'with': [OTHER_CARD]})])
+    done = retried(root, job_id, [repair], [verdict('accept', overlap='same', **{'with': [note]})])
     assert done['status'] == 'applied' and done['produced'] == []
     assert done['restored_relations'] == [{'from': cost_id, 'type': 'similar_to', 'target_slug': 'marker-dimming',
-                                           'target': OTHER_CARD, 'redirected_from': 'marker-dimming'}]
+                                           'target': note, 'redirected_from': 'marker-dimming'}]
     cards = read_snapshot(root).cards
-    assert {'type': 'similar_to', 'target': OTHER_CARD} in cards[cost_id].fm['relations']
-    assert {'type': 'similar_to', 'target': cost_id} in cards[OTHER_CARD].fm['relations']
+    assert {'type': 'similar_to', 'target': note} in cards[cost_id].fm['relations']
+    assert {'type': 'similar_to', 'target': cost_id} in cards[note].fm['relations']
 
 
 def test_a_carried_link_whose_target_is_dropped_is_listed_and_not_carried_again(tmp_path):

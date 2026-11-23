@@ -43,6 +43,7 @@ import re
 from typing import Any, Callable
 
 from .. import decisions
+from .. import bridges
 from ..overlap import LEVELS, TOPIC_LEVELS, with_problem
 from ..schemas import AnswerError, shape_checked
 from ..store import Halt
@@ -705,6 +706,24 @@ def _row_items(rows: dict, slug: str, key: str) -> list:
     return list(((rows.get(slug) or {}).get('carry') or {}).get(key) or [])
 
 
+def _domain_of(frozen: dict) -> dict:
+    """``{card id: domain}`` of the cards the merge check judged, and of the existing cards of its patch set."""
+    out = {c['slug']: c['domain'] for c in frozen.get('cards') or []}
+    for group in frozen.get('patch_set') or []:
+        card = group.get('card') or {}
+        if card.get('id') and card.get('domain'):
+            out[card['id']] = card['domain']
+    return out
+
+
+def _open_types(frozen: dict):
+    """A function giving the relation types a domain lets its cards hold, from the packet's views."""
+    general = set(frozen.get('relation_types') or {})
+    per_domain = {domain: general | set(types or {})
+                  for domain, types in (frozen.get('domain_relation_types') or {}).items()}
+    return lambda domain: per_domain.get(domain, general)
+
+
 def link_candidates(card: dict, frozen: dict | None = None) -> list:
     """The existing cards a card of the frozen input may link, each with its view from ``candidate_cards``
     (inputs frozen before it carry the view in the row; before ``candidates``, the rows are ``near_existing``)."""
@@ -893,7 +912,8 @@ def record(frozen: dict, answer: dict, entries: list, *, slot: str, run: str | N
                          role=ROLE, slot=slot, run=run)
 
 
-def apply(settled: list[dict], frozen: dict, entries: list) -> tuple[list[dict], dict]:
+def apply(settled: list[dict], frozen: dict, entries: list,
+          inverse: dict | None = None) -> tuple[list[dict], dict]:
     """``(settled, report)`` with the merge check's final values applied; nothing in ``settled`` is changed in place.
 
     The values come only from the decision record (``entries``); the
@@ -909,6 +929,11 @@ def apply(settled: list[dict], frozen: dict, entries: list) -> tuple[list[dict],
     - Either way, relations to it point to the card it went to, and its own
       relations move there, except where that card already links the target
       (in either direction) or would link itself.
+    - Two cards of two different domains are never merged, whatever the level
+      says: each domain keeps its own narrow card, and the pair gets a bridge
+      relation of the strongest type both domains accept, and whose back link is open to the other domain
+      (:func:`secondbrain.bridges.settle`). The program records the
+      card as written (``outcome.program``) and says so in the report.
     - a topic ``same`` as another: its cards are filed under that topic (domain,
       pillar and topic), and it is not added to the taxonomy.
     """
@@ -922,7 +947,26 @@ def apply(settled: list[dict], frozen: dict, entries: list) -> tuple[list[dict],
     if lacking:
         raise ValueError(f'the decision record has no level against the source for {", ".join(lacking)}')
     rows = {c['slug']: levels[c['slug']]['data'] for c in frozen['cards']}  # in the frozen order: one result
-    merged = {s: r['with'][0] for s, r in rows.items() if r['overlap'] != 'distinct'}
+    # one concept in two domains: the level stands, the merge does not. Each domain keeps its narrow card, and a
+    # bridge joins the pair; the program records the card as written and the bridge as its own step
+    rows, split_off = bridges.keep_apart(rows, _domain_of(frozen).get, _open_types(frozen), inverse)
+    # ``point``: one concept in two domains, one description -- the card is not written and the pillar page of its
+    # domain gets a pointer to the card in ``with``; ``apart``: a narrow card of its own, joined by a bridge
+    pointed = {k['slug']: k for k in split_off if k['how'] == 'point'}
+    retyped = []
+    for kept in (k for k in split_off if k['how'] == 'apart'):
+        chunk = next((c['chunk'] for c in frozen['cards'] if c['slug'] == kept['slug']), None)
+        decisions.record(entries, 'outcome.program', kept['slug'],
+                         {'outcome': 'write', 'how': 'bridge', 'target': kept['into'], 'chunk': chunk,
+                          'reason': kept['reason']}, role='program', slot=SLOT)
+        if kept['type']:
+            done = decisions.bridge_step(entries, kept['slug'], kept['into'], kept['type'], slot=SLOT,
+                                         note=(rows[kept['slug']] or {}).get('reason'))
+            if done['op'] == 'retype':
+                retyped.append({'card': kept['slug'], 'target': kept['into'], 'was': done['was'],
+                                'now': kept['type']})
+    merged = {s: r['with'][0] for s, r in rows.items()
+              if r['overlap'] != 'distinct' and s not in pointed}
     topic_rows = decisions.values(entries, 'topic.same')
     place_of = {topic_key(t['domain'], t['pillar'], t['name']): (t['domain'], t['pillar'], t['name'])
                 for t in frozen['new_topics']}
@@ -930,7 +974,8 @@ def apply(settled: list[dict], frozen: dict, entries: list) -> tuple[list[dict],
               if k in place_of and e['data']['overlap'] == 'same'}
     original = {s: c for o in settled for s, c in o['accepted'].items()}
     repeats = {s: c for o in settled for s, c in (o.get('repeats') or {}).items()}  # they go into existing cards
-    kept = {s: dict(c) for o in settled for s, c in o['accepted'].items() if s not in merged}
+    kept = {s: dict(c) for o in settled for s, c in o['accepted'].items()
+            if s not in merged and s not in pointed}
     held_carries = {s: e['data'] for s, e in decisions.values(entries, 'carry.held').items()}
     for slug, row in held_carries.items():  # its carry did not pass the program checks: written as it is, for review
         if slug in kept:
@@ -983,7 +1028,9 @@ def apply(settled: list[dict], frozen: dict, entries: list) -> tuple[list[dict],
                      for r in decisions.fold(entries, 'relations', e['object']))]
     # [[links]] in the text of the cards that stay go to the card a merged card went to (J4: a contrast line
     # still named a merged card); a link that would point at the card itself becomes plain text
-    retitle = {original[s]['title']: (kept.get(into) or repeats[into])['title'] for s, into in merged.items()}
+    retitle = {original[s]['title']: (kept.get(into) or repeats[into])['title']
+               for s, into in {**merged, **{s: p['into'] for s, p in pointed.items()}}.items()
+               if (kept.get(into) or repeats.get(into)) is not None}
     rewritten = sum(_retitle_card(card, retitle) for card in kept.values()) if retitle else 0
     for slug in kept if retitle else ():  # and in the notes of their relations
         for r in decisions.fold(entries, 'relations', slug):
@@ -999,7 +1046,13 @@ def apply(settled: list[dict], frozen: dict, entries: list) -> tuple[list[dict],
         split_merges = {s: {**original[s], '_with': too_large[s]['into'],  # its swaps are listed, not made
                             '_carry': {k: v for k, v in too_large[s]['carry'].items() if k != 'flashcard_replace'}}
                         for s in o['accepted'] if s in too_large}
-        out.append({**o, 'accepted': accepted, 'topics': topics, 'split_merges': split_merges})
+        # a card judged the same across two domains is not written: it is listed with the cards that repeat one
+        pointed_here = [{'slug': s, 'title': pointed[s].get('title') or o['accepted'][s].get('title'),
+                         'with': [pointed[s]['into']], 'reason': pointed[s]['reason'], 'chunk': o['chunk'],
+                         'by': 'merge_check', 'how': 'point'}
+                        for s in o['accepted'] if s in pointed]
+        out.append({**o, 'accepted': accepted, 'topics': topics, 'split_merges': split_merges,
+                    'duplicates': list(o.get('duplicates') or []) + pointed_here})
     by_key = {(t['domain'], t['pillar'], t['name']): t for t in frozen['new_topics']}
     report = {
         'status': 'checked', 'cards': len(frozen['cards']),
@@ -1028,6 +1081,11 @@ def apply(settled: list[dict], frozen: dict, entries: list) -> tuple[list[dict],
                            for k, v in refile.items() if k in by_key],
         'moved_relations': moved,
         'merged_into': dict(merged),
+        'bridges': [k for k in split_off if k['how'] == 'apart'],
+        # one concept in two domains, one description: no second card, a pointer on its domain's pillar page
+        'pointers': [k for k in split_off if k['how'] == 'point'],
+        # the program changed the type of a relation the producer wrote (the bridge took its place)
+        'retyped_relations': retyped,
         'patches': {t: e['data'] for t, e in decisions.values(entries, 'patch').items()},
         'disputes': {s: e['data']['reason'] for s, e in decisions.values(entries, 'dispute').items()},
         'held': {t: e['data'] for t, e in decisions.values(entries, 'patch.held').items()},

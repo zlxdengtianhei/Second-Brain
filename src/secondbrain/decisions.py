@@ -99,9 +99,11 @@ STEPS = {
         Step('reviewer', ('add_relation', 'retype_relation', 'remove_relation'),
              'the reviewer amends them (mechanical fixes)'),
         Step('merge_check', ('add',), 'the merge check adds links, never removes one'),
-        Step('program', ('filter', 'redirect', 'move', 'renote'),
-             'the program drops illegal links and links to unwritten cards, and points links to a repeated '
-             'card at the card it repeats'),
+        Step('program', ('filter', 'redirect', 'move', 'renote', 'retype_relation', 'add'),
+             'the program drops illegal links and links to unwritten cards, points links to a repeated '
+             'card at the card it repeats, and writes the bridge that joins two cards it kept apart in '
+             'two domains (changing the type of a relation the card already holds to that card, else adding '
+             'one)'),
     ),
     'classification': (
         Step('owner', ('constrain',), "the owner's placement (--domain, --pillar, --topic) constrains it"),
@@ -356,6 +358,38 @@ FOLDS: dict[str, Callable[[list], object]] = {'relations': _relations, 'classifi
 def fold(entries: list, value: str, obj: str):
     """The final ``value`` of ``obj``: its current chain of steps applied in order."""
     return FOLDS[value](chain(entries, value, obj))
+
+
+def bridge_step(entries: list, slug: str, target: str, kind: str, *, slot: str | None = None,
+                note: str | None = None) -> dict:
+    """Record the bridge of type ``kind`` from card ``slug`` to ``target``, as the program's own step.
+
+    ``note`` is what the bridge says about the pair: the judge's words on how the two differ (the note of a
+    close concept), or the plain "the same concept in another domain" when there are none.
+
+    One relation per target survives a fold (:func:`_relations`), so a card that already holds a relation toward
+    ``target`` gets that relation's type changed instead of a second one added: the bridge the job reports is the
+    one the card then holds (:func:`secondbrain.bridges.settle`).
+
+    Returns what the step did (``{'op', 'was'}``): ``'add'`` for a relation added, ``'retype'`` for one whose type
+    changed -- ``was`` names the types it held, so the caller can say in the job result that the program changed
+    them (a card that named the other card ``depends_on`` would otherwise lose that quietly) -- and ``'none'`` when
+    the card holds the bridge already.
+    """
+    note = ' '.join(str(note or '').split()) or 'the same concept in another domain'
+    held = [r for r in fold(entries, 'relations', slug) if r.get('target') == target]
+    if held:
+        was = sorted({str(r.get('type')) for r in held})
+        if all(r.get('type') == kind for r in held):
+            return {'op': 'none', 'was': was}
+        step(entries, 'relations', slug, 'retype_relation', role='program', slot=slot,
+             data={'target': target, 'type': kind, 'note': note,
+                   'why': f'the card named that card as {", ".join(was)}; the bridge took that relation\'s place',
+                   'was': was})
+        return {'op': 'retype', 'was': was}
+    step(entries, 'relations', slug, 'add', role='program', slot=slot,
+         data={'relation': {'type': kind, 'target': target, 'note': note}})
+    return {'op': 'add', 'was': []}
 
 
 # --------------------------------------------------------------------------

@@ -81,6 +81,15 @@ class VaultLayout:
         return f'{self.data}/secondbrain/conflicts.jsonl'
 
     @property
+    def pointers(self) -> str:
+        """The pointers a domain's pillar page carries to a canonical card, and the bridges between two cards.
+
+        See :mod:`secondbrain.pointers`: one concept in two domains has one description, in the domain that had it
+        first; the other domain points at it.
+        """
+        return f'{self.data}/secondbrain/pointers.jsonl'
+
+    @property
     def review_events(self) -> str:
         return f'{self.data}/review_events.jsonl'
 

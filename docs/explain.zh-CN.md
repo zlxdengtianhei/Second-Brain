@@ -49,7 +49,7 @@ sb explain "<concept>" --executor api     # [explain.writer] and [explain.review
 
 页面（Markdown 与 HTML，写在 `[layout] articles/explain/` 或 `--out`）有两部分：
 
-- 下钻讲解，从上到下（HTML 里每层可折叠）；
+- 下钻讲解，从上到下（HTML 里每层可折叠）；作为桥的一端的卡，在它那一行里写出同一概念还在哪个领域用到、那边讲的是什么（同一个概念用 `same_concept_as`，只是相近用 `similar_to`：写窄卡的本质）；别的领域挂着指针指向的卡，写出“那边只挂指针，讲的就是这里”；
 - 复习路径，从下到上：卡上复核过的问答，前提在前；每学完一组子节点，回到它们的上一层读那句串起来的话，最后回到领域。
 
 不往知识目录写任何东西。
