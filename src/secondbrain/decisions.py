@@ -99,10 +99,11 @@ STEPS = {
         Step('reviewer', ('add_relation', 'retype_relation', 'remove_relation'),
              'the reviewer amends them (mechanical fixes)'),
         Step('merge_check', ('add',), 'the merge check adds links, never removes one'),
-        Step('program', ('filter', 'redirect', 'move', 'renote', 'add'),
+        Step('program', ('filter', 'redirect', 'move', 'renote', 'retype_relation', 'add'),
              'the program drops illegal links and links to unwritten cards, points links to a repeated '
-             'card at the card it repeats, and adds the bridge that joins two cards it kept apart in '
-             'two domains'),
+             'card at the card it repeats, and writes the bridge that joins two cards it kept apart in '
+             'two domains (changing the type of a relation the card already holds to that card, else adding '
+             'one)'),
     ),
     'classification': (
         Step('owner', ('constrain',), "the owner's placement (--domain, --pillar, --topic) constrains it"),
@@ -357,6 +358,25 @@ FOLDS: dict[str, Callable[[list], object]] = {'relations': _relations, 'classifi
 def fold(entries: list, value: str, obj: str):
     """The final ``value`` of ``obj``: its current chain of steps applied in order."""
     return FOLDS[value](chain(entries, value, obj))
+
+
+def bridge_step(entries: list, slug: str, target: str, kind: str, *, slot: str | None = None) -> None:
+    """Record the bridge of type ``kind`` from card ``slug`` to ``target``, as the program's own step.
+
+    One relation per target survives a fold (:func:`_relations`), so a card that already holds a relation toward
+    ``target`` gets that relation's type changed instead of a second one added: the bridge the job reports is the
+    one the card then holds (:func:`secondbrain.bridges.settle`).
+    """
+    note = 'the same concept in another domain'
+    held = [r for r in fold(entries, 'relations', slug) if r.get('target') == target]
+    if held:
+        if all(r.get('type') == kind for r in held):
+            return
+        step(entries, 'relations', slug, 'retype_relation', role='program', slot=slot,
+             data={'target': target, 'type': kind, 'note': note})
+        return
+    step(entries, 'relations', slug, 'add', role='program', slot=slot,
+         data={'relation': {'type': kind, 'target': target, 'note': note}})
 
 
 # --------------------------------------------------------------------------

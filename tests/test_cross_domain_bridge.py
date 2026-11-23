@@ -10,7 +10,7 @@ import json
 
 import pytest
 
-from secondbrain import bridges, cli, service
+from secondbrain import bridges, cli, decisions, overlap, service
 from secondbrain.executors import FakeExecutor
 from secondbrain.pipelines import ingest, source_check
 from secondbrain.vault import read_snapshot
@@ -204,3 +204,127 @@ def test_status_reads_the_cross_domain_line(tmp_path):
     assert status['cross_domain']['strong'] == 1 and status['cross_domain']['weak'] == 0
     assert status['cross_domain']['by_domain_pair'] == {'attention|pebbles': 1}
     assert status['cross_domain']['candidates'] == 0
+
+
+# --- the rule stays in one place, and each step that judges a repeat asks it -------------------------------
+
+def second_domain_card(relations=None):
+    """A card of the second domain on the same point, with the relation its producer guessed (``similar_to``)."""
+    return {**CARDS['queue-order'], 'slug': 'tide-order', 'title': 'Tide order in lantern queues',
+            'domain': OTHER_DOMAIN, 'pillar': OTHER_PILLAR, 'topic': OTHER_TOPIC,
+            'relations': [{'type': 'similar_to', 'target': EXISTING, 'note': 'the same point'}]
+            if relations is None else list(relations),
+            'propositions': ['A lantern queue keeps every item in arrival order.'],
+            'flashcards': [{'q': 'Which order is kept?', 'a': 'Arrival order.'},
+                           {'q': 'Does a lantern queue reorder items?', 'a': 'No.'}],
+            'source_quotes': [ORDER_QUOTE]}
+
+
+def one_chunk(tmp_path, level, *, relations=None, strong=True):
+    """One chunk writes the second domain's card; the chunk reviewer judges it ``level`` against the existing card."""
+    root = build_ingest_vault(tmp_path / 'vault')
+    if strong:
+        add_strong_bridge_type(root)
+    settings(chunk_chars=1000)
+    (root / '00_Inbox' / SOURCE_NAME).write_text(SOURCE, encoding='utf-8')
+    card = second_domain_card(relations)
+
+    def producer(task):
+        text = task.packet['chunk']['text']
+        cards = [card] if ORDER_QUOTE in text else []
+        rows = [{'source_quote': c['source_quotes'][0], 'disposition': 'card', 'cards': [c['slug']], 'reason': 'r'}
+                for c in cards]
+        rows.append({'source_quote': text.strip().splitlines()[-1].strip(), 'disposition': 'out_of_scope',
+                     'reason': 'rest'})
+        return {'cards': cards, 'new_topics': [], 'coverage': rows}
+
+    def reviewer(task):
+        if is_source_check_task(task):  # one chunk only: it never runs, but keeps the answer shape
+            return keep_all(task.packet)
+        return {'cards': [{'slug': 'tide-order', 'decision': 'accept', 'overlap': level, 'with': [EXISTING],
+                           'reason': 'the same point said in the second domain'}],
+                'new_topics': [], 'coverage': {'decision': 'accept', 'reason': 'ok'}}
+    job = ingest.prepare(root, root / '00_Inbox' / SOURCE_NAME)
+    result = ingest.advance(root, job['job_id'], producer=FakeExecutor('gpt-test', responder=with_diagrams(producer)),
+                            reviewer=FakeExecutor('claude-test', responder=reviewer))
+    return root, result
+
+
+def test_the_chunk_reviewer_judging_same_across_two_domains_writes_the_second_card_and_a_bridge(tmp_path):
+    """The bad sample one level up: the chunk reviewer says ``same``, and the card it repeats is of another domain.
+
+    Before the one rule, :func:`secondbrain.overlap.route` turned every ``same`` into a drop whatever the domains,
+    so the second domain lost its card and got no bridge.
+    """
+    root, result = one_chunk(tmp_path, 'same')
+    assert result['status'] == 'applied'
+    # the card is written and not listed as a duplicate of the other domain's card
+    assert [p['slug'] for p in result['produced']] == ['tide-order'] and result['duplicates'] == []
+    [produced] = result['produced']
+    assert produced['domain'] == OTHER_DOMAIN
+    [bridge] = result['bridges']
+    assert bridge['into'] == EXISTING and bridge['domains'] == [OTHER_DOMAIN, DOMAIN]
+    cards = read_snapshot(root).cards
+    held = [r for r in cards[produced['id']].fm['relations'] if r.get('target') == EXISTING]
+    assert [r['type'] for r in held] == [bridge['type']] == ['same_concept_as']
+    assert EXISTING in cards and cards[EXISTING].domain == DOMAIN  # the other domain's card stays as it was
+    cross = service.Service(root).status()['cross_domain']
+    assert cross['bridges'] == 1 and cross['strong'] == 1 and cross['weak'] == 0
+
+
+def test_the_bridge_the_result_reports_is_the_one_the_card_holds(tmp_path):
+    """The card links its existing card by its own guess: the program changes that one relation's type, so the
+    report and the card agree (one relation per target survives the fold)."""
+    root, result = one_chunk(tmp_path, 'extends')
+    assert result['status'] == 'applied'
+    [bridge] = result['bridges']
+    cards = read_snapshot(root).cards
+    [produced] = result['produced']
+    held = [r for r in cards[produced['id']].fm['relations'] if r.get('target') == EXISTING]
+    assert [r['type'] for r in held] == [bridge['type']] == ['same_concept_as']
+    assert service.Service(root).status()['cross_domain']['strong'] == 1
+
+
+def test_route_keeps_a_same_in_one_domain_a_drop_and_a_same_across_two_domains_a_patch():
+    """The control for the level the chunk reviewer gives: only two domains change ``same`` from a drop."""
+    entries: list = []
+    decisions.record(entries, 'overlap.existing', 'card-a', {'overlap': 'same', 'with': ['card-b'], 'reason': 'r'},
+                     role='reviewer', slot='c01')
+    assert overlap.route(entries, 'card-a')['outcome'] == 'drop'  # no domains told: as before bridges
+    assert overlap.route(entries, 'card-a', {'card-a': DOMAIN, 'card-b': DOMAIN}.get)['outcome'] == 'drop'
+    apart = overlap.route(entries, 'card-a', {'card-a': DOMAIN, 'card-b': OTHER_DOMAIN}.get)
+    assert apart['outcome'] == 'patch' and apart['with'] == ['card-b']
+    assert overlap.outcome(entries, 'card-a', checked=False)['outcome'] == 'drop'
+    assert overlap.outcome(entries, 'card-a', checked=False,
+                           domain_of={'card-a': DOMAIN, 'card-b': OTHER_DOMAIN}.get)['outcome'] == 'patch'
+
+
+def test_settle_gives_one_answer_for_every_level_and_both_domains():
+    strong = lambda domain: ('similar_to', 'same_concept_as')  # noqa: E731
+    assert bridges.settle('existing', 'distinct', 'other', DOMAIN, OTHER_DOMAIN, strong)['how'] == 'distinct'
+    assert bridges.settle('existing', 'same', 'other', DOMAIN, DOMAIN, strong) == \
+        {'how': 'drop', 'type': None, 'reason': None}
+    assert bridges.settle('existing', 'extends', 'other', DOMAIN, DOMAIN, strong)['how'] == 'merge'
+    assert bridges.settle('source', 'same', 'other', DOMAIN, DOMAIN, strong)['how'] == 'merge'
+    apart = bridges.settle('existing', 'same', 'other', DOMAIN, OTHER_DOMAIN, strong)
+    assert apart['how'] == 'apart' and apart['type'] == 'same_concept_as'
+    assert 'one concept in two domains' in apart['reason'] and '(same_concept_as)' in apart['reason']
+    assert bridges.settle('source', 'extends', 'other', DOMAIN, OTHER_DOMAIN, strong)['how'] == 'apart'
+    weak = bridges.settle('existing', 'same', 'other', DOMAIN, OTHER_DOMAIN, lambda domain: ('similar_to',))
+    assert weak['how'] == 'apart' and weak['type'] == 'similar_to'
+    none = bridges.settle('existing', 'same', 'other', DOMAIN, OTHER_DOMAIN, lambda domain: ())
+    assert none['how'] == 'apart' and none['type'] is None and 'no bridge type' in none['reason']
+    # no domain known (a card the vault does not hold): the level's own outcome holds
+    assert bridges.settle('existing', 'same', 'other', None, OTHER_DOMAIN, strong)['how'] == 'drop'
+    assert bridges.settle('existing', 'same', None, DOMAIN, OTHER_DOMAIN, strong)['how'] == 'drop'
+
+
+def test_a_bridge_type_whose_back_link_the_other_domain_forbids_is_not_chosen():
+    """``choose`` asks what :func:`secondbrain.pipelines.ingest._closed_relation` asks: both ends must be open."""
+    pair = {'same_concept_as': 'similar_to', 'similar_to': 'same_concept_as'}
+    assert bridges.choose(('same_concept_as',), ('same_concept_as',)) == 'same_concept_as'
+    assert bridges.choose(('same_concept_as',), ('same_concept_as',), pair) is None
+    assert bridges.choose(('similar_to', 'same_concept_as'), ('similar_to', 'same_concept_as'), pair) == \
+        'same_concept_as'  # strong first, and its back link is open to both
+    # a weak type whose back link is the strong one, open to neither domain: no bridge this catalog allows
+    assert bridges.choose(('similar_to',), ('similar_to',), pair) is None

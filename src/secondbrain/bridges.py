@@ -17,7 +17,9 @@ card hold (``relation_types`` in the catalog, or ``domain_relations`` for one do
 type gets weak bridges, and the program says so rather than inventing a type the vault does not know.
 
 Nothing here calls a model and nothing here decides whether two cards are one concept: the merge check judges
-that, and the program only refuses to fold cards of two domains and joins them instead (:func:`keep_apart`).
+that, and the program only refuses to fold cards of two domains and joins them instead. That one rule lives here
+(:func:`settle`): every step that weighs a judged level against two domains asks it, so the levels of the chunk
+reviewer and of the merge check cannot disagree about what a repeat across two domains becomes.
 """
 from __future__ import annotations
 
@@ -53,18 +55,55 @@ def is_bridge(kind) -> bool:
     return strength(kind) is not None
 
 
-def choose(open_from, open_into) -> str | None:
+def choose(open_from, open_into, inverse=None) -> str | None:
     """The bridge type to write between a card of one domain and a card of another, or None.
 
     ``open_from`` and ``open_into`` are the relation types each domain lets its cards hold. A bridge is
-    symmetric (both cards name the other), so the type must be open to both. A strong bridge is preferred; a
+    symmetric (both cards name the other), so the type must be open to both, and the back link the target gets
+    (``inverse``: type -> its inverse type) must be open to the other domain too. A strong bridge is preferred; a
     vault that declares no strong type gets a weak one, which claims less.
     """
     both = set(open_from) & set(open_into)
+    back_of = inverse or {}
     for kind in TYPES:
-        if kind in both:
+        if kind in both and back_of.get(kind, kind) in both:
             return kind
     return None
+
+
+def settle(side: str, level, into, here, there, open_types=None, inverse=None) -> dict:
+    """What becomes of a card judged ``level`` against ``into``: the one rule for a repeat, with its bridge.
+
+    ``side`` is where the level was judged: ``'existing'`` (the chunk reviewer, against the vault's cards) or
+    ``'source'`` (the merge check, against the other cards of the source). ``level`` is one of
+    :data:`secondbrain.overlap.LEVELS`, or None for a card of the patch set whose level the caller has already
+    settled (it is a repeat, whatever the level is called). ``here`` and ``there`` are the domains of the card and
+    of ``into``; ``open_types(domain)`` gives the relation types a domain lets its cards hold, and ``inverse`` the
+    catalog's pairs of inverse types. Both are asked only when a bridge is to be written.
+
+    Returns ``{'how', 'type', 'reason'}``. ``how`` is
+
+    - ``'distinct'``: the level's own outcome, the card stands on its own;
+    - ``'merge'``: it goes into ``into`` (a patch, a carry, or nothing to carry), as the level says;
+    - ``'drop'``: it is not written at all (``same`` against the vault, in the same domain);
+    - ``'apart'``: one concept in two domains -- both keep a narrow card of their own and a bridge of ``type``
+      joins them (None when the catalog opens no type to both), ``reason`` says why.
+
+    Two cards of two domains are never merged, whatever the level says; two cards of one domain are never kept
+    apart.
+    """
+    if level == 'distinct':
+        return {'how': 'distinct', 'type': None, 'reason': None}
+    if into and here is not None and there is not None and here != there:
+        kind = choose(open_types(here) or (), open_types(there) or (), inverse) if open_types else None
+        return {'how': 'apart', 'type': kind,
+                'reason': (f'{into} stands in domain {there!r} and this card in {here!r}: one concept in two domains '
+                           'keeps a narrow card in each, joined by a bridge' +
+                           (f' ({kind})' if kind else
+                            ' -- the catalog opens no bridge type to both domains, so no bridge was written'))}
+    if side == 'existing' and level == 'same':
+        return {'how': 'drop', 'type': None, 'reason': None}
+    return {'how': 'merge', 'type': None, 'reason': None}
 
 
 def crossing(relations, domain_of, own_domain) -> list[dict]:
@@ -195,13 +234,14 @@ def _all_candidates(cards) -> list[dict]:
     return candidate_pairs(cards, limit=10 ** 6)
 
 
-def keep_apart(rows: dict, domain_of, open_types) -> tuple[dict, list[dict]]:
+def keep_apart(rows: dict, domain_of, open_types, inverse=None) -> tuple[dict, list[dict]]:
     """Levels of the merge check with every merge across two domains turned into a keep, and the bridges to write.
 
     ``rows`` maps a card's slug to its level against the other cards of the source (``overlap.source``: ``overlap``
     and ``with``). ``domain_of`` maps a slug to the domain its card stands in, ``open_types`` a domain to the
-    relation types it lets its cards hold. A card judged ``extends`` or ``same`` as a card of *another* domain is
-    not merged: both stay narrow cards, and the pair gets a bridge of the strongest type both domains accept.
+    relation types it lets its cards hold, ``inverse`` the catalog's inverse types. A card judged ``extends`` or
+    ``same`` as a card of *another* domain is not merged: both stay narrow cards, and the pair gets a bridge of
+    the strongest type both domains accept (:func:`settle`).
 
     Returns ``(rows, bridges)``: the rows with those levels rewritten to ``distinct`` (a ``bridges`` list names the
     card it keeps beside, and ``reason`` says why), and ``[{'slug', 'into', 'domains', 'type', 'reason'}]``. A
@@ -215,13 +255,11 @@ def keep_apart(rows: dict, domain_of, open_types) -> tuple[dict, list[dict]]:
         if level == 'distinct' or not into:
             continue
         here, there = domain_of(slug), domain_of(into)
-        if here is None or there is None or here == there:
+        settled = settle('source', level, into, here, there, open_types, inverse)
+        if settled['how'] != 'apart':
             continue
-        kind = choose(open_types(here) or (), open_types(there) or ())
-        reason = (f'{into} stands in domain {there!r} and this card in {here!r}: one concept in two domains keeps '
-                  f'a narrow card in each, joined by a bridge' + (f' ({kind})' if kind else
-                                                                  ' -- no bridge type is open to both domains'))
         out[slug] = {'overlap': 'distinct', 'with': [], 'bridges': [into],
-                     'kept_from': level, 'reason': reason}
-        found.append({'slug': slug, 'into': into, 'domains': [here, there], 'type': kind, 'reason': reason})
+                     'kept_from': level, 'reason': settled['reason']}
+        found.append({'slug': slug, 'into': into, 'domains': [here, there], 'type': settled['type'],
+                      'reason': settled['reason']})
     return out, found

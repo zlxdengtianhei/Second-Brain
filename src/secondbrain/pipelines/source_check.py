@@ -912,7 +912,8 @@ def record(frozen: dict, answer: dict, entries: list, *, slot: str, run: str | N
                          role=ROLE, slot=slot, run=run)
 
 
-def apply(settled: list[dict], frozen: dict, entries: list) -> tuple[list[dict], dict]:
+def apply(settled: list[dict], frozen: dict, entries: list,
+          inverse: dict | None = None) -> tuple[list[dict], dict]:
     """``(settled, report)`` with the merge check's final values applied; nothing in ``settled`` is changed in place.
 
     The values come only from the decision record (``entries``); the
@@ -930,7 +931,8 @@ def apply(settled: list[dict], frozen: dict, entries: list) -> tuple[list[dict],
       (in either direction) or would link itself.
     - Two cards of two different domains are never merged, whatever the level
       says: each domain keeps its own narrow card, and the pair gets a bridge
-      relation of the strongest type both domains accept (:mod:`secondbrain.bridges`). The program records the
+      relation of the strongest type both domains accept, and whose back link is open to the other domain
+      (:func:`secondbrain.bridges.settle`). The program records the
       card as written (``outcome.program``) and says so in the report.
     - a topic ``same`` as another: its cards are filed under that topic (domain,
       pillar and topic), and it is not added to the taxonomy.
@@ -947,16 +949,14 @@ def apply(settled: list[dict], frozen: dict, entries: list) -> tuple[list[dict],
     rows = {c['slug']: levels[c['slug']]['data'] for c in frozen['cards']}  # in the frozen order: one result
     # one concept in two domains: the level stands, the merge does not. Each domain keeps its narrow card, and a
     # bridge joins the pair; the program records the card as written and the bridge as its own step
-    rows, kept_apart = bridges.keep_apart(rows, _domain_of(frozen).get, _open_types(frozen))
+    rows, kept_apart = bridges.keep_apart(rows, _domain_of(frozen).get, _open_types(frozen), inverse)
     for kept in kept_apart:
         chunk = next((c['chunk'] for c in frozen['cards'] if c['slug'] == kept['slug']), None)
         decisions.record(entries, 'outcome.program', kept['slug'],
                          {'outcome': 'write', 'how': 'bridge', 'target': kept['into'], 'chunk': chunk,
                           'reason': kept['reason']}, role='program', slot=SLOT)
         if kept['type']:
-            decisions.step(entries, 'relations', kept['slug'], 'add', role='program', slot=SLOT,
-                           data={'relation': {'type': kept['type'], 'target': kept['into'],
-                                              'note': 'the same concept in another domain'}})
+            decisions.bridge_step(entries, kept['slug'], kept['into'], kept['type'], slot=SLOT)
     merged = {s: r['with'][0] for s, r in rows.items() if r['overlap'] != 'distinct'}
     topic_rows = decisions.values(entries, 'topic.same')
     place_of = {topic_key(t['domain'], t['pillar'], t['name']): (t['domain'], t['pillar'], t['name'])

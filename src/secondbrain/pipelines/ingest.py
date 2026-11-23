@@ -695,17 +695,13 @@ def _relation_views(catalog: dict, domains) -> dict:
     return {'relation_types': relation_meanings(catalog, types=general), 'domain_relation_types': extra}
 
 
-def _bridge_kind(catalog: dict, here, there) -> str | None:
-    """The relation type that joins two narrow cards of two domains, or None when the vault opens none to both.
+def _bridge_types(catalog: dict):
+    """How :func:`secondbrain.bridges.settle` asks the catalog which relation types a domain lets its cards hold.
 
-    A bridge is symmetric, so both domains must let their cards hold it (``_closed_relation`` checks that, and
-    that its back link is open to the other domain). A strong bridge ("the same concept", transitive) is
-    preferred; a vault that declares none gets the weak one ("close", never transitive).
+    The pair of a bridge is judged by :func:`secondbrain.bridges.choose`, which also asks whether the back link
+    the other card gets is open to its domain -- the same rule :func:`_closed_relation` gives.
     """
-    for kind in bridgemap.TYPES:
-        if _closed_relation(catalog, kind, here, there) is None:
-            return kind
-    return None
+    return lambda domain: open_relation_types(catalog, domain)
 
 
 def _closed_relation(catalog: dict, kind: str, domain, target_domain) -> str | None:
@@ -2154,23 +2150,29 @@ def _question_of(row: dict) -> dict:
     return {'_question': q.strip()} if isinstance(q, str) and q.strip() else {}
 
 
-def _routed(state: dict, settled: list[dict]) -> list[dict]:
+def _routed(state: dict, settled: list[dict], domain_of=None) -> list[dict]:
     """The settled chunks with each accepted card sent where the chunk reviewer's level against the vault puts it.
 
-    ``same``: not written, listed under ``duplicates`` (``by: reviewer``).
+    ``same``: not written, listed under ``duplicates`` (``by: reviewer``) -- unless the card it repeats stands in
+    another domain: then it is written next to it (the patch set) and the write step joins the two with a bridge.
     ``extends``: ``repeats`` (the patch set), with the existing card it extends.
     ``distinct``: stays in ``accepted``, the merge check's decision set.
+
+    ``domain_of`` maps a card id to the domain it stands in (:func:`_vault_domains`); without it, two domains are
+    not told apart, as before bridges.
     """
     entries = state.get('decisions') or []
     # a disputed card whose judgement again kept failing the program's checks: it waits for the owner, out of the
     # merge check's patch set (:func:`_for_merge`), with the dispute and the last refusal
     given_up = {name.split('-', 1)[1]: info for name, info in (state.get('chunks') or {}).items()
                 if _is_rejudge(name) and info.get('given_up') and not info.get('review')}
+    here = _domains(entries, {s: c for o in settled for s, c in o['accepted'].items()}, domain_of or {}) \
+        if domain_of is not None else None
     out = []
     for o in settled:
         accepted, repeats, dups = {}, {}, list(o['duplicates'])
         for slug, card in o['accepted'].items():
-            first = overlap.route(entries, slug)
+            first = overlap.route(entries, slug, here)
             if first['outcome'] == 'drop':
                 dups.append({'slug': slug, 'title': card.get('title'), 'with': first['with'],
                              'reason': first['reason'], 'chunk': o['chunk'], 'by': 'reviewer'})
@@ -2184,6 +2186,27 @@ def _routed(state: dict, settled: list[dict]) -> list[dict]:
                 accepted[slug] = card
         out.append({**o, 'accepted': accepted, 'repeats': repeats, 'duplicates': dups})
     return out
+
+
+def _vault_domains(root: Path) -> dict:
+    """``{card id: domain}`` of the vault's cards: where a card the reviewer repeats stands (:func:`_routed`)."""
+    return {cid: card.domain for cid, card in read_snapshot(root).cards.items()}
+
+
+def _here_domain(entries: list, slug: str, card: dict):
+    """The domain of the card this job writes: the reviewer's final place when the record holds one, else the
+    producer's."""
+    return decisions.fold(entries, 'classification', slug).get('domain') or card.get('domain')
+
+
+def _domains(entries: list, cards: dict, vault: dict):
+    """``domain_of(card id)`` for :func:`overlap.route`: a card of this job from its final place in ``entries`` (else
+    its own field), any other from the vault."""
+    def domain_of(cid):
+        if cid in cards:
+            return _here_domain(entries, cid, cards[cid])
+        return vault.get(cid)
+    return domain_of
 
 
 def _for_merge(root: Path, packet: dict, routed: list[dict]) -> list[dict]:
@@ -2676,7 +2699,7 @@ def _source_check_stage(root: Path, job_id: str, packet: dict, settled: list[dic
     rules = jobs.policy_of(packet)
     while True:
         state = jobs.load(root, job_id)
-        routed = _for_merge(root, packet, _routed(state, settled))
+        routed = _for_merge(root, packet, _routed(state, settled, _vault_domains(root)))
         if not _merge_due(state, routed):
             return []
         n = max(0, _merge_round(state))
@@ -2715,7 +2738,7 @@ def _source_check_stage(root: Path, job_id: str, packet: dict, settled: list[dic
                     state = jobs.load(root, job_id)
             slot = source_check.round_slot(n + 1)
             info = {}
-            routed = _for_merge(root, packet, _routed(state, settled))
+            routed = _for_merge(root, packet, _routed(state, settled, _vault_domains(root)))
             if not _merge_due(state, routed):
                 return []
         if not info.get('candidate'):
@@ -3056,7 +3079,8 @@ def _skip_source_check(root: Path, job_id: str, *, reason: str) -> dict:
         settled = [chunk_outcome(root, state, packet, c['chunk_id']) for c in effective_chunks(packet, state)]
         info = (state.get('chunks') or {}).get(source_check.SLOT) or {}
         if not all(o['settled'] for o in settled) or not _merge_due(
-                state, _for_merge(root, packet, _routed(state, settled))) or not info.get('candidate'):
+                state, _for_merge(root, packet, _routed(state, settled, _vault_domains(root)))) or \
+                not info.get('candidate'):
             raise IngestError(f'{job_id} has no source check waiting; run `sb job advance`')
         if info.get('review') or info.get('skipped'):
             raise IngestError(f'The source check of {job_id} is already done')
@@ -3085,7 +3109,7 @@ def _checked(root: Path, state: dict, packet: dict, settled: list[dict],
     (a copy of the job's when not given).
     """
     entries = list(state.get('decisions') or []) if entries is None else entries
-    routed = _routed(state, settled)
+    routed = _routed(state, settled, _vault_domains(root))
     judged = _for_merge(root, packet, routed)
     if not _merge_due(state, judged):
         return routed, None
@@ -3097,7 +3121,8 @@ def _checked(root: Path, state: dict, packet: dict, settled: list[dict],
         raise Conflict('The source check is not finished; run `sb job advance`')
     frozen = jobs.artifact(root, state, 'candidate', slot)
     try:
-        out, report = source_check.apply(judged, frozen, entries)
+        out, report = source_check.apply(judged, frozen, entries,
+                                         inverse=packet['catalog'].get('inverse_relations') or {})
     except ValueError as exc:
         raise Conflict(str(exc)) from exc
     return [{**o, 'repeats': r.get('repeats', {})} for o, r in zip(out, routed)], {**report, 'round': slot}
@@ -3280,7 +3305,7 @@ def _apply_job(root: Path, job_id: str, settled: list[dict] | None = None) -> di
     entries = list(state.get('decisions') or [])
     chunks_settled = settled
     settled, check = _checked(root, state, packet, settled, entries)
-    outcomes = _outcomes_of(entries, chunks_settled, settled, check)
+    outcomes = _outcomes_of(entries, chunks_settled, settled, check, _vault_domains(root))
     lay = layouts.of(root)
     settings = packet['settings']
     language = settings['language']
@@ -3298,9 +3323,7 @@ def _apply_job(root: Path, job_id: str, settled: list[dict] | None = None) -> di
     for slug, fate in sorted(bridged.items()):  # the bridge is the program's own step on the kept card
         kind = fate.get('type')
         if kind:
-            decisions.step(entries, 'relations', slug, 'add', role='program', slot='write',
-                           data={'relation': {'type': kind, 'target': fate['target'],
-                                              'note': 'the same concept in another domain'}})
+            decisions.bridge_step(entries, slug, fate['target'], kind, slot='write')
     for s, f in sorted(fates.items()):
         decisions.record(entries, 'outcome.program', s, _fate_record(f, outcomes[s]), role='program', slot='write')
     ran = bool(check) and check.get('status') == 'checked'
@@ -3832,12 +3855,15 @@ def _repeat_fates(root: Path, state: dict, packet: dict, settled: list[dict], ch
 
     ``patched``: its existing card takes the merge check's patch (the card is
     not written). ``split``: the patch would make that card too long; the
-    split slot's accepted card is written instead (``card``). ``written``: the
+    split slot's accepted card is written instead (``card``). ``bridge``: the
+    existing card stands in another domain, so the card is written next to it
+    and a bridge joins the two (:func:`secondbrain.bridges.settle`). ``written``: the
     existing card cannot take a patch (not in sb format, gone, or the job does
     not merge: ``merge_into_existing`` off), so the card is written next to it,
     needs-review. ``pending``: disputed by the merge check's last round, or its
     split card was not accepted.
     """
+    catalog = packet['catalog']
     patches = (check or {}).get('patches') or {}
     disputes = (check or {}).get('disputes') or {}
     held = (check or {}).get('held') or {}
@@ -3850,17 +3876,15 @@ def _repeat_fates(root: Path, state: dict, packet: dict, settled: list[dict], ch
             target = card['_with']
             fate = {'target': target, 'chunk': o['chunk']}
             old = snapshot.cards.get(target)
+            here = _here_domain(state.get('decisions') or [], slug, card)
+            apart = bridgemap.settle('source', 'extends', target, here, old.domain if old is not None else None,
+                                     _bridge_types(catalog), catalog.get('inverse_relations') or {})
             if card.get('_given_up'):  # its judgement again, after a dispute, kept failing the program's checks
                 fate.update(how='pending', reason=card['_given_up'])
-            elif old is not None and old.domain != card.get('domain'):
+            elif apart['how'] == 'apart':
                 # one concept in two domains: each keeps its narrow card, joined by a bridge; never merged
-                here = card.get('domain')
-                kind = _bridge_kind(packet['catalog'], here, old.domain)
-                fate.update(how='bridge', type=kind, domain=here, target_domain=old.domain,
-                            reason=(f'{target} stands in domain {old.domain!r} and this card in {here!r}: '
-                                    'one concept in two domains keeps a narrow card in each, joined by a bridge' +
-                                    (f' ({kind})' if kind else
-                                     ' -- the catalog opens no bridge type to both domains, so no bridge was written')))
+                fate.update(how='bridge', type=apart['type'], domain=here, target_domain=old.domain,
+                            reason=apart['reason'])
             elif slug in disputes:
                 fate.update(how='pending', reason=f'the merge check could not add it to {target}: {disputes[slug]}')
             elif target in held:  # D-20: written next to its card, needs-review, with what the program found
@@ -4022,10 +4046,15 @@ def _relink_card(card: dict, relinks: dict, known: set, own: str) -> tuple[list,
     return fix.moved, list(dict.fromkeys(fix.gone))
 
 
-def _outcomes_of(entries: list, chunks: list[dict], routed: list[dict], check: dict | None) -> dict:
+def _outcomes_of(entries: list, chunks: list[dict], routed: list[dict], check: dict | None,
+                 domain_of=None) -> dict:
     """``{slug: outcome}`` of every accepted card from the decision record (``overlap.outcome``), checked against
-    where the cards went: one outcome per card, the same one the write follows."""
+    where the cards went: one outcome per card, the same one the write follows. ``domain_of`` (card id -> domain)
+    tells the two domains apart, so a card the reviewer finds the ``same`` as a card of another domain reads
+    ``patch`` here, as :func:`_routed` sends it."""
     ran = bool(check) and check.get('status') == 'checked'
+    here = _domains(entries, {s: c for o in chunks for s, c in o['accepted'].items()}, domain_of or {}) \
+        if domain_of is not None else None
     merged = (check or {}).get('merged_into') or {}
     written = {s for o in routed for s in o['accepted']}
     patched = {s for o in routed for s in o.get('repeats', {})}
@@ -4034,7 +4063,7 @@ def _outcomes_of(entries: list, chunks: list[dict], routed: list[dict], check: d
     for o in chunks:
         for slug in o['accepted']:
             try:
-                found = overlap.outcome(entries, slug, checked=ran)
+                found = overlap.outcome(entries, slug, checked=ran, domain_of=here)
             except overlap.OutcomeError as exc:
                 raise Conflict(str(exc)) from exc
             went = 'write' if slug in written else 'patch' if slug in patched else 'drop' if slug in dropped else \
