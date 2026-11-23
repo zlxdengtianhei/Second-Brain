@@ -41,7 +41,7 @@ export SECONDBRAIN_VAULT=~/sb-example
 示例库有 52 张中文卡片，分属三个领域（学习、数据推理、计算基础），其中 8 张带图。它们由下文的 Agent Skill 从 7 份中文短笔记做成；另用 `sb review log` 记了 5 次复习。英文示例库在 [`examples/vault/`](examples/vault/)，用法相同。每条 `sb` 命令都输出 JSON。先看看库里有什么：
 
 ```sh
-sb status                         # 卡片数、收件箱、复习统计、发现的问题
+sb status                         # 卡片数、收件箱、复习统计、跨领域桥、发现的问题
 sb search "间隔复习"              # 全库词法检索
 sb review status                  # 各领域已学、到期、新卡
 sb review queue --limit 5         # 现在复习什么

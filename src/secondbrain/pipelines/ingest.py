@@ -33,6 +33,7 @@ from typing import Callable
 
 from .. import cards as cardfmt
 from .. import budget, config, decisions, inbox, jobs, labels, overlap, review_notes, schemas
+from .. import bridges as bridgemap
 from .. import layout as layouts
 from ..catalog import category_pairs, open_relation_types, relation_meanings, taxonomy_packet, validate_catalog
 from ..classification import projection_changes, snapshot_checks, taxonomy_fingerprint, writable_snapshot
@@ -692,6 +693,19 @@ def _relation_views(catalog: dict, domains) -> dict:
         if own:
             extra[domain] = relation_meanings(catalog, types=own)
     return {'relation_types': relation_meanings(catalog, types=general), 'domain_relation_types': extra}
+
+
+def _bridge_kind(catalog: dict, here, there) -> str | None:
+    """The relation type that joins two narrow cards of two domains, or None when the vault opens none to both.
+
+    A bridge is symmetric, so both domains must let their cards hold it (``_closed_relation`` checks that, and
+    that its back link is open to the other domain). A strong bridge ("the same concept", transitive) is
+    preferred; a vault that declares none gets the weak one ("close", never transitive).
+    """
+    for kind in bridgemap.TYPES:
+        if _closed_relation(catalog, kind, here, there) is None:
+            return kind
+    return None
 
 
 def _closed_relation(catalog: dict, kind: str, domain, target_domain) -> str | None:
@@ -3280,6 +3294,13 @@ def _apply_job(root: Path, job_id: str, settled: list[dict] | None = None) -> di
     # record, with why; the outcomes, patch_set, merge_set and the pending list are read back from there, so they
     # never differ (a card written next to its existing card: write; one its card already holds: drop; one waiting
     # for the owner: pending)
+    bridged = {s: f for s, f in fates.items() if f['how'] == 'bridge'}
+    for slug, fate in sorted(bridged.items()):  # the bridge is the program's own step on the kept card
+        kind = fate.get('type')
+        if kind:
+            decisions.step(entries, 'relations', slug, 'add', role='program', slot='write',
+                           data={'relation': {'type': kind, 'target': fate['target'],
+                                              'note': 'the same concept in another domain'}})
     for s, f in sorted(fates.items()):
         decisions.record(entries, 'outcome.program', s, _fate_record(f, outcomes[s]), role='program', slot='write')
     ran = bool(check) and check.get('status') == 'checked'
@@ -3287,7 +3308,8 @@ def _apply_job(root: Path, job_id: str, settled: list[dict] | None = None) -> di
     recorded_fates = {s: e['data'] for s, e in decisions.values(entries, 'outcome.program').items() if s in fates}
     accepted = [(o['chunk'], s, _final_card(entries, s, c)) for o in settled for s, c in o['accepted'].items()]
     accepted += [(o['chunk'], s, {**_final_card(entries, s, c), '_not_merged': fates[s]['reason']})
-                 for o in settled for s, c in o.get('repeats', {}).items() if fates[s]['how'] == 'written']
+                 for o in settled for s, c in o.get('repeats', {}).items()
+                 if fates[s]['how'] in ('written', 'bridge')]
     accepted += [(f['chunk'], f['card']['slug'], {**_final_card(entries, f['card']['slug'], f['card']),
                                                   '_split_of': f['target'], '_from': s})
                  for s, f in fates.items() if f['how'] == 'split']
@@ -3764,6 +3786,11 @@ def _apply_job(root: Path, job_id: str, settled: list[dict] | None = None) -> di
               'split_restated': _split_turned(root, job_id, 'matches'),
               'refused_topics': [t for o in settled for t in o.get('refused_topics') or []],
               'merged_into_existing': merged_into_existing,
+              # one concept in two domains: a narrow card in each, joined by a bridge (never merged)
+              'bridges': [{'slug': s, 'id': ids.get(s), 'into': ids.get(f['target'], into_existing.get(f['target'],
+                                                                                                  f['target'])),
+                           'domains': [f.get('domain'), f.get('target_domain')], 'type': f.get('type'),
+                           'reason': f.get('reason')} for s, f in sorted(bridged.items())],
               'replacements_not_made': replacements_not_made,
               # [[links]] the program pointed at the title a card was written or merged under, and links to cards
               # that were not written, left as plain text (their cards are written needs-review: dangling_link)
@@ -3825,6 +3852,15 @@ def _repeat_fates(root: Path, state: dict, packet: dict, settled: list[dict], ch
             old = snapshot.cards.get(target)
             if card.get('_given_up'):  # its judgement again, after a dispute, kept failing the program's checks
                 fate.update(how='pending', reason=card['_given_up'])
+            elif old is not None and old.domain != card.get('domain'):
+                # one concept in two domains: each keeps its narrow card, joined by a bridge; never merged
+                here = card.get('domain')
+                kind = _bridge_kind(packet['catalog'], here, old.domain)
+                fate.update(how='bridge', type=kind, domain=here, target_domain=old.domain,
+                            reason=(f'{target} stands in domain {old.domain!r} and this card in {here!r}: '
+                                    'one concept in two domains keeps a narrow card in each, joined by a bridge' +
+                                    (f' ({kind})' if kind else
+                                     ' -- the catalog opens no bridge type to both domains, so no bridge was written')))
             elif slug in disputes:
                 fate.update(how='pending', reason=f'the merge check could not add it to {target}: {disputes[slug]}')
             elif target in held:  # D-20: written next to its card, needs-review, with what the program found
@@ -3870,7 +3906,7 @@ def _repeat_fates(root: Path, state: dict, packet: dict, settled: list[dict], ch
 
 #: The outcome a fate of :func:`_repeat_fates` records: written next to its existing card, held by it already, or
 #: waiting for the owner; a card patched or split keeps the outcome its levels give.
-FATE_OUTCOMES = {'written': 'write', 'covered': 'drop', 'pending': 'pending'}
+FATE_OUTCOMES = {'written': 'write', 'bridge': 'write', 'covered': 'drop', 'pending': 'pending'}
 
 
 def _fate_record(fate: dict, levels_say: str) -> dict:
@@ -4032,6 +4068,8 @@ def _check_report(check: dict, ids: dict) -> dict:
     name = lambda slug: ids.get(slug, slug)  # noqa: E731
     return {'status': 'checked', 'cards': check['cards'],
             'merged': [{**m, 'into': name(m['into'])} for m in check['merged']],
+            # one concept in two domains: both cards stay, joined by a bridge (the merge it would have been)
+            'bridges': [{**b, 'into': name(b['into'])} for b in check.get('bridges') or []],
             'rewritten_links': check.get('rewritten_links', 0),
             'added_links': [{**r, 'from': name(r['from']), 'target': name(r['target'])} for r in check['added_links']],
             'alone': [{**a, 'id': name(a['slug'])} for a in check['alone']],

@@ -56,10 +56,12 @@ class Service:
                 map_issues = Counter(i['code'] for i in build_mocs(s).issues)
         from .pipelines.ingest import open_conflicts
         from .topics import PILLAR_REVIEW_AT, hints
+        from . import bridges
         conflicts = open_conflicts(self.root, s)
         waiting = self.needs_review()
         owner = Counter(i['owner_reason'] for i in self.owner_items(scanned=items, conflicts=conflicts))
         topic_hints = hints(s)
+        cross = bridges.report(s.cards)
         from .advise import lookup
         for h in topic_hints['oversize']:  # a pillar past the line: the kept advice, or how to ask for it
             if h.get('level') == 'pillar':
@@ -83,6 +85,13 @@ class Service:
                 'snapshot_fingerprint': s.fingerprint, 'inbox': dict(sorted(inbox_counts.items())),
                 'pending_items': sum(i.get('pending') or 0 for i in items if i['status'] == 'partial'),
                 'conflicts': conflicts,
+                # the same concept standing in two domains: bridges written between the two cards, and the
+                # cross-domain pairs that share a cheap key and have no bridge yet (a merge check judges each)
+                'cross_domain': cross,
+                **({'cross_domain_hint': 'cards of two domains that may be the same concept: the ingest merge check '
+                                         'keeps them apart and joins each pair with a bridge (same_concept_as, or '
+                                         'similar_to when the catalog declares no strong type)'}
+                   if cross['candidates'] else {}),
                 'needs_review': len(waiting),
                 **({'needs_review_hint': 'these cards stay out of the review queue until their status is confirmed; '
                                          'sb status --needs-review lists them'} if waiting else {}),

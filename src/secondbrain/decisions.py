@@ -99,9 +99,10 @@ STEPS = {
         Step('reviewer', ('add_relation', 'retype_relation', 'remove_relation'),
              'the reviewer amends them (mechanical fixes)'),
         Step('merge_check', ('add',), 'the merge check adds links, never removes one'),
-        Step('program', ('filter', 'redirect', 'move', 'renote'),
-             'the program drops illegal links and links to unwritten cards, and points links to a repeated '
-             'card at the card it repeats'),
+        Step('program', ('filter', 'redirect', 'move', 'renote', 'add'),
+             'the program drops illegal links and links to unwritten cards, points links to a repeated '
+             'card at the card it repeats, and adds the bridge that joins two cards it kept apart in '
+             'two domains'),
     ),
     'classification': (
         Step('owner', ('constrain',), "the owner's placement (--domain, --pillar, --topic) constrains it"),

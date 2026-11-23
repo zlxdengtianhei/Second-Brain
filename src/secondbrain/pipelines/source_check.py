@@ -43,6 +43,7 @@ import re
 from typing import Any, Callable
 
 from .. import decisions
+from .. import bridges
 from ..overlap import LEVELS, TOPIC_LEVELS, with_problem
 from ..schemas import AnswerError, shape_checked
 from ..store import Halt
@@ -705,6 +706,24 @@ def _row_items(rows: dict, slug: str, key: str) -> list:
     return list(((rows.get(slug) or {}).get('carry') or {}).get(key) or [])
 
 
+def _domain_of(frozen: dict) -> dict:
+    """``{card id: domain}`` of the cards the merge check judged, and of the existing cards of its patch set."""
+    out = {c['slug']: c['domain'] for c in frozen.get('cards') or []}
+    for group in frozen.get('patch_set') or []:
+        card = group.get('card') or {}
+        if card.get('id') and card.get('domain'):
+            out[card['id']] = card['domain']
+    return out
+
+
+def _open_types(frozen: dict):
+    """A function giving the relation types a domain lets its cards hold, from the packet's views."""
+    general = set(frozen.get('relation_types') or {})
+    per_domain = {domain: general | set(types or {})
+                  for domain, types in (frozen.get('domain_relation_types') or {}).items()}
+    return lambda domain: per_domain.get(domain, general)
+
+
 def link_candidates(card: dict, frozen: dict | None = None) -> list:
     """The existing cards a card of the frozen input may link, each with its view from ``candidate_cards``
     (inputs frozen before it carry the view in the row; before ``candidates``, the rows are ``near_existing``)."""
@@ -909,6 +928,10 @@ def apply(settled: list[dict], frozen: dict, entries: list) -> tuple[list[dict],
     - Either way, relations to it point to the card it went to, and its own
       relations move there, except where that card already links the target
       (in either direction) or would link itself.
+    - Two cards of two different domains are never merged, whatever the level
+      says: each domain keeps its own narrow card, and the pair gets a bridge
+      relation of the strongest type both domains accept (:mod:`secondbrain.bridges`). The program records the
+      card as written (``outcome.program``) and says so in the report.
     - a topic ``same`` as another: its cards are filed under that topic (domain,
       pillar and topic), and it is not added to the taxonomy.
     """
@@ -922,6 +945,18 @@ def apply(settled: list[dict], frozen: dict, entries: list) -> tuple[list[dict],
     if lacking:
         raise ValueError(f'the decision record has no level against the source for {", ".join(lacking)}')
     rows = {c['slug']: levels[c['slug']]['data'] for c in frozen['cards']}  # in the frozen order: one result
+    # one concept in two domains: the level stands, the merge does not. Each domain keeps its narrow card, and a
+    # bridge joins the pair; the program records the card as written and the bridge as its own step
+    rows, kept_apart = bridges.keep_apart(rows, _domain_of(frozen).get, _open_types(frozen))
+    for kept in kept_apart:
+        chunk = next((c['chunk'] for c in frozen['cards'] if c['slug'] == kept['slug']), None)
+        decisions.record(entries, 'outcome.program', kept['slug'],
+                         {'outcome': 'write', 'how': 'bridge', 'target': kept['into'], 'chunk': chunk,
+                          'reason': kept['reason']}, role='program', slot=SLOT)
+        if kept['type']:
+            decisions.step(entries, 'relations', kept['slug'], 'add', role='program', slot=SLOT,
+                           data={'relation': {'type': kept['type'], 'target': kept['into'],
+                                              'note': 'the same concept in another domain'}})
     merged = {s: r['with'][0] for s, r in rows.items() if r['overlap'] != 'distinct'}
     topic_rows = decisions.values(entries, 'topic.same')
     place_of = {topic_key(t['domain'], t['pillar'], t['name']): (t['domain'], t['pillar'], t['name'])
@@ -1028,6 +1063,7 @@ def apply(settled: list[dict], frozen: dict, entries: list) -> tuple[list[dict],
                            for k, v in refile.items() if k in by_key],
         'moved_relations': moved,
         'merged_into': dict(merged),
+        'bridges': kept_apart,
         'patches': {t: e['data'] for t, e in decisions.values(entries, 'patch').items()},
         'disputes': {s: e['data']['reason'] for s, e in decisions.values(entries, 'dispute').items()},
         'held': {t: e['data'] for t, e in decisions.values(entries, 'patch.held').items()},

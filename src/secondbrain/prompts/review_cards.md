@@ -30,6 +30,8 @@ Notes go on the card they are about; they are recorded for the owner and shown t
 - `extends`: what the card adds (its propositions and review cards, word for word) goes into the one card in `with`, which keeps its own words; the card must link that card. When that card cannot take more, the card is rewritten as a narrower card next to it.
 - `distinct`: the card is written; `with` may name the related existing cards or be empty.
 
+A card of another domain than the one it repeats is never merged into it: each domain needs a card of its own. Answer the level that fits, and the program keeps both cards narrow and joins them with a bridge (`same_concept_as` for one concept, `similar_to` for a close one); give the card that relation to the card in `with` when the level is `distinct`.
+
 <!-- overlap.definition -->
 
 A relation note of the card saying that the other card "already covers" it, or that the two "measure the same thing", points to `same` or `extends`. A level is never a reason to revise: revise only when the card itself is wrong; judge its level once it is right.
