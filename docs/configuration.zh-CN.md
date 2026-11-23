@@ -92,6 +92,7 @@ commit = false
 [export]
 mode = "sequential"          # sequential | parallel
 # [export.writer] 和 [export.reviewer]：写文章和复核文章的模型（docs/export.zh-CN.md）
+# [explain.writer] 和 [explain.reviewer]：写下钻讲解和复核讲解的模型（docs/explain.zh-CN.md）
 ```
 
 ## 配置项
@@ -197,6 +198,8 @@ mode = "sequential"          # sequential | parallel
 | `mode` | `sequential` | `sequential` 按写作单位逐个写文章，每个写作者能看到上一单位的末尾；`parallel` 所有单位同时写。`sb export --mode` 可以在单次运行里覆盖它。 |
 | `[export.writer]` | 无 | 写文章的模型，配置项与 `[executor.producer]` 相同。没设时用 `[executor.producer]`。 |
 | `[export.reviewer]` | 无 | 复核文章的模型，配置项相同。没设时用 `[executor.reviewer]`。API 模式下它必须和写作者属于不同模型家族。 |
+| `[explain.writer]` | 无 | 写下钻讲解的模型（`sb explain`，[explain.zh-CN.md](explain.zh-CN.md)），配置项同端点。没设时用 `[export.writer]`，再没有用 `[executor.producer]`。 |
+| `[explain.reviewer]` | 无 | 复核讲解的模型。没设时用 `[export.reviewer]`，再没有用 `[executor.reviewer]`。API 模式下它必须和写作者属于不同模型家族。 |
 
 细节见 [export.zh-CN.md](export.zh-CN.md)。
 

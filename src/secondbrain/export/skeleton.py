@@ -162,7 +162,7 @@ def build(snapshot, *, domain: str | None = None, moc: str | None = None, ids: l
             if not group:
                 continue
             ordered, _ = moc_module.learning_order(group)
-            if len(group) < SMALL_TOPIC:
+            if len(group) < SMALL_TOPIC or topics == [name]:  # a flat pillar has no sub-sections (levels)
                 small.extend(ordered)
             else:
                 parts.append((topic, ordered))

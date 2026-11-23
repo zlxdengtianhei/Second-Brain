@@ -22,8 +22,9 @@ from .classification import writable_snapshot
 from .curation import _normalise_taxonomy, _projection_changes, _serialise_taxonomy
 from .relocate import _relocated_bytes, _registry_change
 from .schemas import AnswerError
+from .levels import is_flat, normalise_taxonomy
 from .store import Change, Conflict, digest, read_bytes
-from .vault import read_snapshot
+from .vault import read_snapshot, with_topic
 
 KIND = 'domcreate'
 
@@ -73,9 +74,12 @@ def prepare(root: Path, *, domain: str, moc: str, question: str, track: str,
                       'relation_count': len(rels)})
     if missing:
         raise ValueError(f'Evidence cards do not exist: {missing[:8]}')
+    flat = [is_flat(p) for t in snapshot.taxonomies.values() if isinstance(t, dict)
+            for p in t.get('pillars') or [] if isinstance(p, dict)]
     packet = {
         'kind': KIND,
         'method_version': 'domcreate/1',
+        **({'levels': 3} if flat and all(flat) else {}),
         'domain': domain, 'moc': moc, 'question': question, 'track': track,
         'reason': reason,
         'catalog': catalog,
@@ -96,6 +100,9 @@ def validate(packet: dict, proposal: dict) -> dict:
     _normalise_taxonomy(tx, packet['domain'], packet['moc'])
     pairs = set()
     for p in tx.get('pillars', []):
+        if packet.get('levels') == 3 and not is_flat(p):
+            raise AnswerError(f'The vault keeps three levels: pillar {p["name"]!r} must have topics [{p["name"]!r}] '
+                              'and no other')
         for t in p.get('topics', []):
             pairs.add((p['name'], t))
     evidence = {c['id'] for c in packet['evidence_cards']}
@@ -209,6 +216,8 @@ def apply(root: Path, job_id: str) -> dict:
     changes.append(Change(pillar_rel, None, _serialise_taxonomy(proposal['taxonomy'])))
 
     domain = packet['domain']
+    new_taxonomy = normalise_taxonomy(proposal['taxonomy'])
+    new_pillars = {p['name']: p for p in new_taxonomy['pillars'] if isinstance(p, dict) and p.get('name')}
     updated = dict(snapshot.cards)
     moved = []
     affected = set(evidence_domains) | {domain}
@@ -223,13 +232,13 @@ def apply(root: Path, job_id: str) -> dict:
         changes.append(Change(new_path, None, new_raw))
         changes.append(Change(card.path, card.sha256, None))
         updated[card.id] = replace(card, path=new_path, domain=domain, raw=new_raw,
-                                   fm=new_fm, body=new_body, sha256=digest(new_raw))
+                                   fm=with_topic(new_fm, new_pillars), body=new_body, sha256=digest(new_raw))
         moved.append((card, domain))
     if moved:
         changes.append(_registry_change(root, moved))
 
     projected = replace(snapshot, cards=updated, catalog=new_catalog,
-                        taxonomies={**snapshot.taxonomies, packet['moc']: proposal['taxonomy']})
+                        taxonomies={**snapshot.taxonomies, packet['moc']: new_taxonomy})
     projection = build_mocs(projected, affected_domains=affected)
     changes.extend(_projection_changes(root, projection))
 

@@ -5,6 +5,8 @@ BC-list-note-field: down
 
 How real machines hide slow storage behind fast storage.
 
+Connected pillars: [[20_MOCs/Computing Foundations/02Datastructures--01.md|Data structures]] (1 relations)
+
 ## Caching
 
 - [[10_Knowledge/computing/Cache as a small fast copy of a larger slower store.md|Cache as a small fast copy of a larger slower store]] · required_by→ [[10_Knowledge/computing/Cache invalidation and stale copies.md|Cache invalidation and stale copies]]; [[10_Knowledge/computing/Hit ratio and average access time.md|Hit ratio and average access time]]; [[10_Knowledge/computing/Locality of reference.md|Locality of reference]]; [[10_Knowledge/computing/LRU eviction and its implementation.md|LRU eviction and its implementation]]

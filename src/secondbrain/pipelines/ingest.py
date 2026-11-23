@@ -41,7 +41,8 @@ from ..executors.base import CHUNK_TOO_LARGE, INVALID_OUTPUT, ExecutorFailure
 from ..locks import job_lock
 from ..store import Change, Conflict, Halt, digest, read_bytes
 from ..textnorm import plain, same_text
-from ..vault import Card, append_list_items, parse_note, read_snapshot
+from .. import levels
+from ..vault import Card, append_list_items, parse_note, pillars_of, read_snapshot, with_topic
 from .. import retrieval
 from . import amend as amends
 from . import answerfix, cardlint, card_diagrams, chunking, notecheck, notes, source_check, split
@@ -1224,6 +1225,10 @@ def validate_candidate(packet: dict, payload: dict, *, slot: str, other_cards: l
                           'pillar. For material that needs a new pillar or domain, write a coverage row with '
                           'disposition needs_taxonomy instead; the vault owner adds pillars and domains '
                           '(sb curate, sb domcreate)')
+            continue
+        if levels.is_flat(pillars[pillar]):
+            errors.append(f'{where}.pillar {pillar!r} files its cards directly (three levels: domain, pillar, '
+                          f'card); it takes no topics. File the cards under topic {pillar!r}, the pillar itself')
             continue
         if not isinstance(name, str) or not name.strip() or '\n' in name:
             errors.append(f'{where}.name must be a one-line string')
@@ -3532,7 +3537,8 @@ def _apply_job(root: Path, job_id: str, settled: list[dict] | None = None) -> di
             raise Conflict(f'{target} could not take its patch: {exc}; run `sb job advance` again') from exc
         fm2, body2 = parse_note(raw2)
         changes.append(Change(old.path, old.sha256, raw2))
-        updated[target] = replace(old, raw=raw2, fm=fm2, body=body2, sha256=digest(raw2))
+        updated[target] = replace(old, raw=raw2, fm=with_topic(fm2, pillars_of(snapshot, old.domain)), body=body2,
+                                  sha256=digest(raw2))
         for m in moved:  # back links: on a new card of this job before it is written, else on the existing card
             inv = inverse.get(m['type'])
             if inv and m['target'] in by_id:
@@ -3582,6 +3588,7 @@ def _apply_job(root: Path, job_id: str, settled: list[dict] | None = None) -> di
         raw = cardfmt.render_card(meta, card, relations, language=language,
                                   diagram=drawn['diagrams'].get(slug))
         fm, body = parse_note(raw)
+        fm = with_topic(fm, pillars_of(snapshot, card['domain']))
         rel = lay.card_path(card['domain'], f'{title}.md')
         if read_bytes(root, rel) is not None:
             raise Conflict(f'A file already exists at {rel}')
@@ -3590,8 +3597,9 @@ def _apply_job(root: Path, job_id: str, settled: list[dict] | None = None) -> di
                             body=body, sha256=digest(raw))
         produced.append({'id': cid, 'slug': slug, 'title': title, 'domain': card['domain'], 'path': rel,
                          'chunk': chunk})
-        notes.append({'id': cid, 'path': rel, 'title': title, 'domain': card['domain'],
-                      'pillar': card['pillar'], 'topic': card['topic'], 'source_hash': source['sha256']})
+        notes.append({'id': cid, 'path': rel, 'title': title, 'domain': card['domain'], 'pillar': card['pillar'],
+                      **({'topic': card['topic']} if levels.stored_topic(card['pillar'], card['topic']) else {}),
+                      'source_hash': source['sha256']})
     # inverse edges into existing cards: frontmatter list and related section; other bytes stay
     to_add: dict = {}
     for target, edge in extra_edges + patch_edges:
@@ -3627,7 +3635,8 @@ def _apply_job(root: Path, job_id: str, settled: list[dict] | None = None) -> di
         fm2, body2 = parse_note(raw2)
         changes = [c for c in changes if c.relative_path != existing.path]
         changes.append(Change(existing.path, snapshot.cards[target].sha256, raw2))
-        updated[target] = replace(existing, raw=raw2, fm=fm2, body=body2, sha256=digest(raw2))
+        updated[target] = replace(existing, raw=raw2, fm=with_topic(fm2, pillars_of(snapshot, existing.domain)),
+                                  body=body2, sha256=digest(raw2))
     # accepted new topics
     new_taxonomies = {}
     by_moc: dict = {}

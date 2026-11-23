@@ -20,6 +20,8 @@ from typing import Optional
 
 import yaml
 
+from . import levels
+
 # Relative paths inside the vault. ``/`` separators are used so they double as
 # the identity keys stored in registry notes and in Card.path.
 REGISTRY_RELPATH = "_data/notes_registry.json"
@@ -297,6 +299,28 @@ def append_list_items(raw: bytes, key: str, items: list) -> bytes:
     return out
 
 
+#: The value of :func:`patch_frontmatter` that removes a key.
+DELETE = object()
+
+
+def placement_updates(pillar, topic) -> dict:
+    """The frontmatter updates that file a card under ``pillar`` and ``topic``: a flat pillar's implicit topic is
+    not stored, so it removes ``topic`` (:mod:`secondbrain.levels`)."""
+    stored = levels.stored_topic(pillar, topic)
+    return {'pillar': pillar, 'topic': DELETE if stored is None else stored}
+
+
+def pillars_of(snapshot, domain: str) -> dict:
+    """``{pillar name: pillar}`` of the (normalised) taxonomy of ``domain``'s map in ``snapshot``."""
+    return _pillars_by_domain(snapshot.catalog, snapshot.taxonomies).get(domain, {})
+
+
+def with_topic(fm: dict, pillars: dict) -> dict:
+    """``fm`` as the snapshot holds it: with the implicit topic of a flat pillar (``pillars``: :func:`pillars_of`)."""
+    topic = levels.card_topic(fm, pillars)
+    return fm if topic == fm.get('topic') else {**fm, 'topic': topic}
+
+
 def patch_frontmatter(raw: bytes, updates: dict) -> bytes:
     """Return ``raw`` with only the top-level ``updates`` keys changed.
 
@@ -304,8 +328,9 @@ def patch_frontmatter(raw: bytes, updates: dict) -> bytes:
     other byte of the file (other frontmatter fields, comments, blank lines,
     newlines, the body, and any spaced-repetition section) is preserved
     verbatim. Keys not already present are appended at the end of the
-    frontmatter. ``updates[key] is None`` writes YAML ``null``; *deleting* a
-    key is not supported and raises.
+    frontmatter. ``updates[key] is None`` writes YAML ``null``;
+    ``updates[key] is DELETE`` removes the key's whole block (nothing happens
+    when the key is absent).
     """
     if not isinstance(updates, dict) or not updates:
         raise VaultError("updates must be a non-empty dict")
@@ -349,7 +374,8 @@ def patch_frontmatter(raw: bytes, updates: dict) -> bytes:
                 break
         if matched is not None:
             key, ben = matched
-            out += _dump_key(key, updates[key], nl)
+            if updates[key] is not DELETE:
+                out += _dump_key(key, updates[key], nl)
             remaining.pop(key, None)
             while idx < len(lines) and lines[idx][0] < ben:
                 idx += 1
@@ -363,7 +389,8 @@ def patch_frontmatter(raw: bytes, updates: dict) -> bytes:
         if not new_fm.endswith(b"\n"):
             new_fm += nl
         for key in sorted(remaining):
-            new_fm += _dump_key(key, updates[key], nl)
+            if updates[key] is not DELETE:
+                new_fm += _dump_key(key, updates[key], nl)
 
     return raw[:fm_content_start] + new_fm + raw[closer_pos:]
 
@@ -581,9 +608,21 @@ def _load_taxonomies(root, issues, taxonomy_rel=PILLARS_RELPATH):
         title = parsed.get("title") or name[:-5]
         if not isinstance(title, str):
             title = name[:-5]
-        taxonomies[title] = parsed
+        taxonomies[title] = levels.normalise_taxonomy(parsed)
         raw_hashes[taxonomy_rel + '/' + name] = _sha256(raw)
     return taxonomies, raw_hashes
+
+
+def _pillars_by_domain(catalog_data, taxonomies) -> dict:
+    """``{domain: {pillar name: pillar}}`` from the catalog's maps and the normalised taxonomies."""
+    out = {}
+    domains = catalog_data.get("domains") if isinstance(catalog_data, dict) else None
+    for slug, meta in (domains.items() if isinstance(domains, dict) else []):
+        tax = taxonomies.get(meta.get("moc")) if isinstance(meta, dict) else None
+        pillars = tax.get("pillars") if isinstance(tax, dict) else None
+        out[slug] = {p["name"]: p for p in (pillars if isinstance(pillars, list) else [])
+                     if isinstance(p, dict) and isinstance(p.get("name"), str)}
+    return out
 
 
 def read_snapshot(root, *, catalog=None, use_cache=None) -> Snapshot:
@@ -612,6 +651,7 @@ def read_snapshot(root, *, catalog=None, use_cache=None) -> Snapshot:
     read_hashes = {lay.registry: _sha256(registry_raw)} if registry_raw else {}
     catalog_data = _load_catalog(root, issues, catalog, read_hashes, lay.catalog)
     taxonomies, taxonomy_hashes = _load_taxonomies(root, issues, lay.taxonomy)
+    pillars_by_domain = _pillars_by_domain(catalog_data, taxonomies)
 
     # Index registry notes by id and by path.
     reg_by_id = {}
@@ -694,6 +734,7 @@ def read_snapshot(root, *, catalog=None, use_cache=None) -> Snapshot:
             issues.append({"code": "duplicate_id", "path": rel,
                            "detail": "card id %r already seen" % (card_id,)})
             continue
+        fm = with_topic(fm, pillars_by_domain.get(domain, {}))  # a flat pillar's implicit topic: read, never stored
         card = Card(id=card_id, title=title, domain=domain, path=rel,
                     raw=raw, fm=fm, body=body, sha256=sha)
         cards[card_id] = card

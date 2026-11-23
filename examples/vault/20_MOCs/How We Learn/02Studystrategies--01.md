@@ -5,6 +5,8 @@ BC-list-note-field: down
 
 Which ways of studying lead to knowledge that lasts.
 
+Connected pillars: [[20_MOCs/How We Learn/01Memory--01.md|Memory]] (4 relations)
+
 ## Spacing
 
 - [[10_Knowledge/learning/Why a delayed review raises stability more.md|Why a delayed review raises stability more]] · depends_on→ [[10_Knowledge/learning/Memory stability.md|Memory stability]] · part_of→ [[10_Knowledge/learning/The spacing effect.md|The spacing effect]] · required_by→ [[10_Knowledge/learning/Spacing needs active recall.md|Spacing needs active recall]]

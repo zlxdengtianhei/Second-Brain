@@ -4,6 +4,7 @@ Output: `{"domain", "moc", "question", "track", "taxonomy": {"title", "narrative
 
 - `domain`, `moc`, `question` and `track` must equal the values given in the packet.
 - `taxonomy` is the complete taxonomy of the new domain (same rules as taxonomy curation: narrative, unique pillars with a concrete why, non-empty topics; no one-card pillars or synonym topics).
+- When the packet has `"levels": 3`, the vault keeps three levels (domain, pillar, card): give each pillar `"topics": [<its own name>]` and each migration `"topic": <its pillar>`.
 - `migrations` gives the new pillar/topic for each evidence card that moves. Use only evidence card ids from the packet and categories from your taxonomy. Do not move cards that do not belong.
 - Add `relation_words` only when the existing relation vocabulary cannot express a relation of this domain; each needs an inverse and a gloss.
 - `boundary_reason`: which cards come in, which stay, and the criterion. `difference_reason`: why this cannot stay a pillar of the current domain. `impact_reason`: broken links, review progress, projections.

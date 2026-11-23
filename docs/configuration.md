@@ -92,6 +92,7 @@ commit = false
 [export]
 mode = "sequential"          # sequential | parallel
 # [export.writer] and [export.reviewer]: the models that write and review articles (docs/export.md)
+# [explain.writer] and [explain.reviewer]: the models that write and review drill-down explanations (docs/explain.md)
 ```
 
 ## Keys
@@ -197,6 +198,8 @@ Maps a substring of a model name to a family, for the independent-review check. 
 | `mode` | `sequential` | `sequential` writes an article unit after unit, each writer seeing the end of the unit before; `parallel` writes every unit at once. `sb export --mode` overrides it for one run. |
 | `[export.writer]` | none | The model that writes articles, with the keys of `[executor.producer]`. Unset: `[executor.producer]`. |
 | `[export.reviewer]` | none | The model that reviews articles, with the same keys. Unset: `[executor.reviewer]`. In API mode it must be of another model family than the writer. |
+| `[explain.writer]` | none | The model that writes drill-down explanations (`sb explain`, [explain.md](explain.md)), with the keys of an endpoint. Unset: `[export.writer]`, then `[executor.producer]`. |
+| `[explain.reviewer]` | none | The model that reviews them. Unset: `[export.reviewer]`, then `[executor.reviewer]`. In API mode it must be of another model family than the writer. |
 
 Details: [export.md](export.md).
 

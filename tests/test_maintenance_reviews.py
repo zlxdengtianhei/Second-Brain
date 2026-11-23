@@ -20,6 +20,7 @@ from secondbrain.executors import ExecutorFailure, FakeExecutor
 from secondbrain.executors.host import HostExecutor
 from secondbrain.schemas import AnswerError
 from secondbrain.service import Service
+from secondbrain.vault import read_snapshot
 from tests import helpers, test_curation as tc, test_relocate as tr
 from tests.test_refusal_gate import classification_job
 
@@ -67,11 +68,22 @@ def domcreate_job(tmp_path):
     return root, 'dc', FakeExecutor('gpt-test', responder=lambda t: copy.deepcopy(body)), lambda candidate: wrong
 
 
+def explain_job(tmp_path):
+    import shutil
+    from secondbrain import explain
+    from tests import test_explain as te
+    root = shutil.copytree(te.EXAMPLE, tmp_path / 'vault')
+    state = explain.prepare(root, ids=[te._deep_card(read_snapshot(root)).id], out=tmp_path / 'out')
+    wrong = lambda candidate: {'items': [{'id': r['id'], 'decision': 'accept', 'reason': 'supported'}
+                                         for r in candidate['nodes'][1:]]}  # one node left out
+    return root, state['job_id'], FakeExecutor('gpt-test', responder=te.writer), wrong
+
+
 #: Each maintenance kind: a job whose producer gives a lawful proposal, and a review of the right schema that does
 #: not cover it (classification: an item left out; curation: the domain written ``Attention`` for ``attention``;
 #: relocation: its one item left out; domain creation: another domain).
 JOBS = {'classification': classification, 'curation': curation_job, 'relocation': relocation_job,
-        'domcreate': domcreate_job}
+        'domcreate': domcreate_job, 'explain': explain_job}
 
 
 def test_every_maintenance_kind_has_a_row():
@@ -115,6 +127,9 @@ def test_a_host_review_that_does_not_cover_the_proposal_is_refused_and_the_run_c
 
 
 def covering(kind, candidate):
+    if kind == 'explain':
+        return {'items': [{'id': row['id'], 'decision': 'accept', 'reason': 'checked against the cards'}
+                          for row in candidate['nodes']]}
     if kind in ('classification', 'relocation'):
         return {'items': [{'id': row['id'], 'decision': 'accept', 'reason': 'checked against the card'}
                           for row in candidate['items']]}

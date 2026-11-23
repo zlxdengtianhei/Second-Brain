@@ -74,6 +74,10 @@ def parser():
         q.add_argument('--parallel', type=int, default=1, help='Concurrent batches (1-3)')
         q.add_argument('--max-batches', type=int)
         q.add_argument('--executor', choices=['api', 'host'], help='Override [executor].default')
+    flatten = sub.add_parser('flatten', help="Move a domain's map to three levels (domain, pillar, card); "
+                             'preview unless --apply')
+    flatten.add_argument('--domain', required=True); flatten.add_argument('--apply', action='store_true')
+    flatten.add_argument('--job')
     refresh = sub.add_parser('refresh', help='Deterministic MOC projection; preview unless --apply')
     refresh.add_argument('--domain', action='append'); refresh.add_argument('--apply', action='store_true'); refresh.add_argument('--job')
     for name, text in [('today', "Today's review page"),
@@ -133,6 +137,18 @@ def parser():
     diagrams = sub.add_parser('diagrams', help='Diagram batch tools (python -m secondbrain.diagrams)',
                               add_help=False)
     diagrams.add_argument('args', nargs=argparse.REMAINDER)
+    explain = sub.add_parser('explain', help='A drill-down explanation of one concept (domain, pillar, card, '
+                             'prerequisites) and a review path back up; Markdown and HTML')
+    explain.add_argument('query', nargs='?', help='A concept, card id, pillar or domain')
+    explain.add_argument('--ids', nargs='+', help='These cards')
+    explain.add_argument('--pillar', help='A whole pillar (with --domain when the name is in several)')
+    explain.add_argument('--domain', help='A whole domain, or the domain of --pillar')
+    explain.add_argument('--depth', type=int, default=3, help='Levels below a card: prerequisites and parts (1-5)')
+    explain.add_argument('--max-children', type=int, default=5, help='Children shown under one node (1-8)')
+    explain.add_argument('--out', type=Path, help='Folder for the pages (default: [layout] articles/explain)')
+    explain.add_argument('--job', help='Continue this explain job (after host sub-agents submitted)')
+    explain.add_argument('--executor', choices=['api', 'host'], help='Override [executor].default')
+    explain.add_argument('--prepare-only', action='store_true', help='Freeze the tree; no model call')
     export = sub.add_parser('export', help="Write one map's cards up as an article (Markdown, optional HTML)")
     scope = export.add_mutually_exclusive_group()
     scope.add_argument('--domain', help='The map (MOC) of this domain')
@@ -201,6 +217,26 @@ def export_executors(args, root: Path):
         settings = replace(settings, producer=chosen.writer or settings.producer,
                            reviewer=chosen.reviewer or settings.reviewer)
     return build(settings, getattr(args, 'executor', None), vault=str(root))
+
+
+def _explain(args, root: Path) -> dict:
+    from . import explain
+    from .executors.factory import build
+    from .runner import run_job
+    if args.job:
+        job_id = args.job
+    else:
+        job_id = explain.prepare(root, query=args.query, ids=args.ids, pillar=args.pillar, domain=args.domain,
+                                 depth=args.depth, max_children=args.max_children, out=args.out)['job_id']
+    if args.prepare_only:
+        return {**jobs.load(root, job_id), 'nodes': jobs.read_input(root, job_id)['nodes']}
+    settings = config.current()
+    writer = settings.explain.writer or settings.export.writer
+    reviewer = settings.explain.reviewer or settings.export.reviewer
+    if writer or reviewer:
+        settings = replace(settings, producer=writer or settings.producer, reviewer=reviewer or settings.reviewer)
+    producer, review = build(settings, args.executor, vault=str(root))
+    return run_job(root, job_id, producer=producer, reviewer=review)
 
 
 def _ingest(args, root: Path) -> list:
@@ -496,6 +532,9 @@ def main(argv=None):
             result = service.read_cards(args.ids)
         elif cmd in MODEL_KINDS:
             result = _run_model_command(args, root)
+        elif cmd == 'flatten':
+            from .flatten import run as flatten
+            result = flatten(root, domain=args.domain, apply=args.apply, job_id=args.job)
         elif cmd == 'refresh':
             from .service import refresh
             result = refresh(root, job_id=args.job or f'moc-{uuid.uuid4().hex[:16]}', domains=args.domain, apply=args.apply)
@@ -534,6 +573,8 @@ def main(argv=None):
             result = _doctor(args, root)
         elif cmd == 'export':
             result = _export(args, root)
+        elif cmd == 'explain':
+            result = _explain(args, root)
         print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
         return 0
     except ExecutorFailure as exc:

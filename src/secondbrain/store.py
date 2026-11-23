@@ -546,6 +546,9 @@ def _validate_moves(rows: list[dict], lay) -> None:
       ``flashcards/<domain>`` tag may differ; id, body and review data stay;
     * an inbox archive: an inbox file is removed only when the same
       transaction writes byte-identical content into the sources folder.
+
+    Besides moves, a generated pillar page may be removed (a rebuilt map that
+    no longer has it, :mod:`secondbrain.flatten`); its bytes stay in the journal.
     """
     removed = [r for r in rows if r['after'] is None]
     if not removed:
@@ -558,6 +561,10 @@ def _validate_moves(rows: list[dict], lay) -> None:
             if not any(lay.is_source(r['path']) and r['after'] == old['before'] for r in rows):
                 raise ValueError('an inbox file can be removed only when the same transaction stores identical bytes in the sources folder')
             continue
+        if old['before'] is not None and lay.is_moc_page(old['path']):
+            from .flatten import generated_page  # a generated page the rebuilt map no longer has
+            if generated_page(lay, old['path'], _unb64(old['before'])):
+                continue
         path = relative(old['path'])
         if not lay.is_card(old['path']) or old['before'] is None:
             raise ValueError('only existing cards can be moved; files are never deleted directly')

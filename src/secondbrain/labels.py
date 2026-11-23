@@ -91,6 +91,53 @@ MOC = {
     },
 }
 
+
+#: How the pillars connect, on map pages (:class:`secondbrain.moc.PillarGraph`); a table of its own so the
+#: recorded map pages of :data:`MOC` stay as they were for maps whose pillars have no relations between them.
+MOC_GRAPH = {
+    'zh': {
+        'pillar_links': '## 支柱之间的连接',
+        'pillar_links_note': '_按卡片之间的关系汇总。一张卡只放在一个支柱下，跨支柱、跨域的关系把支柱连成图。→ 有方向，照关系读（左 depends_on 右：左边要先懂右边；左 part_of 右：左边是右边的一部分），↔ 没有方向。_',
+        'pillar_links_more': '- ……另有 %d 对',
+        'pillar_link_line': '- %s %s %s：%s',
+        'pillar_neighbours': '相连的支柱：%s',
+        'pillar_neighbour': '%s（%d 条关系）',
+        'neighbour_sep': ' · ',
+        'type_count_sep': '、',
+    },
+    'en': {
+        'pillar_links': '## How the pillars connect',
+        'pillar_links_note': '_Summed from the relations between cards. A card sits under one pillar; relations across pillars and maps link the pillars into a graph. → has a direction, read as the relation (left depends_on right: learn the right one first; left part_of right: the left one is a part of the right one); ↔ has none._',
+        'pillar_links_more': '- ... %d more pairs',
+        'pillar_link_line': '- %s %s %s: %s',
+        'pillar_neighbours': 'Connected pillars: %s',
+        'pillar_neighbour': '%s (%d relations)',
+        'neighbour_sep': ' · ',
+        'type_count_sep': ', ',
+    },
+}
+
+#: `sb explain` page text (:mod:`secondbrain.explain`).
+EXPLAIN = {
+    'zh': {'domain': '领域', 'pillar': '支柱', 'group': '知识点', 'card': '卡', 'ref': '见上',
+           'title': '讲解：%s', 'lead': '从领域一层层下到细节卡与前提；讲解由 `sb explain` 写，另一位复核者按卡片内容核过。',
+           'drill': '下钻讲解', 'path': '复习：由细到粗',
+           'path_lead': '先复习最底下的卡（前提在前），每学完一组就回到上一层，用一句话串起来，最后回到领域。',
+           'back': '回到上一层「%s」：这几张卡怎样合起来？', 'elsewhere': '（在「%s」支柱）', 'seen': '已在上文：%s',
+           'unreviewed': '复核没过：%s', 'more': '同组还有：%s', 'more_sep': '、', 'q': '问', 'a': '答',
+           'qa_sep': '：', 'show': '看答案', 'step': '第 %d / %d 步', 'prev': '上一步', 'next': '下一步',
+           'tab_drill': '讲解', 'tab_path': '复习', 'quote': '「%s」'},
+    'en': {'domain': 'Domain', 'pillar': 'Pillar', 'group': 'Group', 'card': 'Card', 'ref': 'see above',
+           'title': 'Explained: %s',
+           'lead': 'From the domain down to the detail cards and their prerequisites; written by `sb explain`, checked against the cards by another reviewer.',
+           'drill': 'Drill-down', 'path': 'Review: from the details up',
+           'path_lead': 'Review the lowest cards first (prerequisites first); after each group go back up one level and tie it together in a sentence; end at the domain.',
+           'back': 'Back up to "%s": how do these cards fit together?', 'elsewhere': ' (pillar "%s")', 'seen': 'Above: %s',
+           'unreviewed': 'Not passed by the review: %s', 'more': 'Also in this group: %s', 'more_sep': ', ',
+           'q': 'Q', 'a': 'A', 'qa_sep': ': ', 'show': 'Show the answer', 'step': 'Step %d of %d',
+           'prev': 'Previous', 'next': 'Next', 'tab_drill': 'Explanation', 'tab_path': 'Review', 'quote': '"%s"'},
+}
+
 PAGES = {
     'zh': {
         'review_page': '今日复习-{date}',
@@ -107,6 +154,15 @@ PAGES = {
         'due_cards': '到期卡',
         'new_today': '今日新卡',
         'none': '本项暂无。',
+        'back_up': '学完以上的卡，回到高层',
+        'back_up_intro': '每个支柱一段：先想一想它要回答什么，再用一句话把今天这几张卡串起来。',
+        'back_up_pillar': '- **「{pillar}」**（{page}今天 {n} 张：{titles}）',
+        'back_up_page': '[[{page}|支柱页]]，',
+        'back_up_why': '  - 它回答：{why}',
+        'back_up_recap': '  - 串起来：{recap}',
+        'back_up_links': '  - 这几张怎样连：{links}',
+        'back_up_alone': '  - 这几张之间没有直接关系；在支柱页里看它们各连到哪几张。',
+        'back_up_link': '「{a}」{type}「{b}」',
         'new_left': '未开始的新卡共 {available} 张，排入 {n} 张。这一页是 {date} 这个复习日（{hour:02d}:00 起算）的队列，'
                     '与这个复习日里 `sb review queue` 给出的相同。',
         'inventory': '当前库存（{date} 现算）：**{cards:,} 张概念卡**，{domains} 个域；空分类字段 {missing:,} 张。',
@@ -176,6 +232,15 @@ PAGES = {
         'due_cards': 'Due cards',
         'new_today': "Today's new cards",
         'none': 'Nothing here.',
+        'back_up': 'After these cards, back up to the higher level',
+        'back_up_intro': 'One part per pillar: recall what it answers, then tie today\'s cards together in one sentence.',
+        'back_up_pillar': '- **{pillar}** ({page}today {n}: {titles})',
+        'back_up_page': '[[{page}|pillar page]]; ',
+        'back_up_why': '  - It answers: {why}',
+        'back_up_recap': '  - Together: {recap}',
+        'back_up_links': '  - How they connect: {links}',
+        'back_up_alone': '  - These cards link to none of the others; the pillar page shows what each one links to.',
+        'back_up_link': '"{a}" {type} "{b}"',
         'new_left': "New cards not started yet: {available}; {n} of them are in this day's queue. "
                     'This page is the queue of review day {date} (days start at {hour:02d}:00), '
                     'the same as `sb review queue` gives during that day.',
@@ -369,6 +434,16 @@ def install_hint(extra: str, lang: str | None = 'en') -> str:
 def moc(lang: str | None = None) -> dict:
     """Map page text for ``lang`` (default: the configured language)."""
     return MOC[lang or language()]
+
+
+def moc_graph(lang: str | None = None) -> dict:
+    """The text of how pillars connect on map pages, for ``lang`` (default: the configured language)."""
+    return MOC_GRAPH[lang or language()]
+
+
+def explain(lang: str | None = None) -> dict:
+    """`sb explain` page text for ``lang`` (default: the configured language)."""
+    return EXPLAIN[lang or language()]
 
 
 def export(lang: str | None = None) -> dict:

@@ -197,6 +197,14 @@ class ExportConfig:
 
 
 @dataclass(frozen=True)
+class ExplainConfig:
+    #: The models that write and review a drill-down explanation (`sb explain`); unset, [export.writer] and
+    #: [export.reviewer], then [executor.producer] and [executor.reviewer].
+    writer: 'EndpointConfig | None' = None
+    reviewer: 'EndpointConfig | None' = None
+
+
+@dataclass(frozen=True)
 class Settings:
     vault: Path | None = None
     layout: VaultLayout = field(default_factory=VaultLayout)
@@ -206,6 +214,7 @@ class Settings:
     review: ReviewPolicy = field(default_factory=ReviewPolicy)
     ingest: IngestConfig = field(default_factory=IngestConfig)
     export: ExportConfig = field(default_factory=ExportConfig)
+    explain: ExplainConfig = field(default_factory=ExplainConfig)
     card_language: str = 'en'         # en | zh (card headings and the text of generated pages)
     card_language_set: bool = False   # the config file sets [cards] language (else the vault's is used)
     card_diagrams: bool = True        # run the diagram step after review (secondbrain.diagrams)
@@ -234,7 +243,7 @@ def _dataclass(cls, values: dict, name: str):
 
 def parse(data: dict, *, source: Path | None = None) -> Settings:
     top = {'vault', 'layout', 'executor', 'review', 'model_families', 'ingest', 'cards',
-           'taxonomy', 'git', 'state_dir', 'export'}
+           'taxonomy', 'git', 'state_dir', 'export', 'explain'}
     unknown = sorted(set(data) - top)
     if unknown:
         raise ValueError(f'Unknown config sections or keys: {unknown}')
@@ -263,6 +272,12 @@ def parse(data: dict, *, source: Path | None = None) -> Settings:
     models = {role: export.pop(role, None) for role in ('writer', 'reviewer')}
     export = _dataclass(ExportConfig, {**export, **{role: _dataclass(EndpointConfig, value, f'export.{role}')
                                                     for role, value in models.items() if value}}, 'export')
+    explain = dict(_section(data, 'explain'))
+    explain_models = {role: explain.pop(role, None) for role in ('writer', 'reviewer')}
+    if explain:
+        raise ValueError(f'Unknown [explain] keys: {sorted(explain)}')
+    explain = ExplainConfig(**{role: _dataclass(EndpointConfig, value, f'explain.{role}')
+                               for role, value in explain_models.items() if value})
     vault = data.get('vault')
     state = data.get('state_dir')
     return Settings(
@@ -274,6 +289,7 @@ def parse(data: dict, *, source: Path | None = None) -> Settings:
         review=review,
         ingest=_dataclass(IngestConfig, _ingest_keys(_section(data, 'ingest')), 'ingest'),
         export=export,
+        explain=explain,
         card_language=language,
         card_language_set='language' in cards,
         card_diagrams=diagrams,
