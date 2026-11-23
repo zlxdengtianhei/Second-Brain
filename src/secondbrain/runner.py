@@ -91,6 +91,10 @@ def _spec(kind: str) -> KindSpec:
         from . import explain as m
         return KindSpec('explain_write.md', 'explain_review.md', m.SCHEMA, m.REVIEW_SCHEMA,
                         m.validate, m.apply, m.check_review)
+    if kind == 'advice':
+        from . import advise as m
+        return KindSpec('advise.md', 'review_advise.md', m.SCHEMA, m.REVIEW_SCHEMA,
+                        m.validate, m.apply, m.check_review)
     raise ValueError(f'This job kind has no model steps: {kind}')
 
 

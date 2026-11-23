@@ -149,6 +149,13 @@ def parser():
     explain.add_argument('--job', help='Continue this explain job (after host sub-agents submitted)')
     explain.add_argument('--executor', choices=['api', 'host'], help='Override [executor].default')
     explain.add_argument('--prepare-only', action='store_true', help='Freeze the tree; no model call')
+    advise = sub.add_parser('advise', help="A model's advice whether one large pillar splits (into pillars, a new "
+                            'domain, or not); kept for sb status, nothing is split')
+    advise.add_argument('--pillar', required=True, help='The pillar')
+    advise.add_argument('--domain', help='Its domain (when the pillar name is in several)')
+    advise.add_argument('--job', help='Continue this advice job (after host sub-agents submitted)')
+    advise.add_argument('--executor', choices=['api', 'host'], help='Override [executor].default')
+    advise.add_argument('--prepare-only', action='store_true', help='Freeze the evidence; no model call')
     export = sub.add_parser('export', help="Write one map's cards up as an article (Markdown, optional HTML)")
     scope = export.add_mutually_exclusive_group()
     scope.add_argument('--domain', help='The map (MOC) of this domain')
@@ -230,6 +237,24 @@ def _explain(args, root: Path) -> dict:
                                  depth=args.depth, max_children=args.max_children, out=args.out)['job_id']
     if args.prepare_only:
         return {**jobs.load(root, job_id), 'nodes': jobs.read_input(root, job_id)['nodes']}
+    settings = config.current()
+    writer = settings.explain.writer or settings.export.writer
+    reviewer = settings.explain.reviewer or settings.export.reviewer
+    if writer or reviewer:
+        settings = replace(settings, producer=writer or settings.producer, reviewer=reviewer or settings.reviewer)
+    producer, review = build(settings, args.executor, vault=str(root))
+    return run_job(root, job_id, producer=producer, reviewer=review)
+
+
+def _advise(args, root: Path) -> dict:
+    """`sb advise`: the models of `sb explain` (cheap ones in the examples; [explain], else [export], else
+    [executor]) write and review the advice."""
+    from . import advise
+    from .executors.factory import build
+    from .runner import run_job
+    job_id = args.job or advise.prepare(root, domain=args.domain, pillar=args.pillar)['job_id']
+    if args.prepare_only:
+        return {**jobs.load(root, job_id), 'evidence': jobs.read_input(root, job_id)}
     settings = config.current()
     writer = settings.explain.writer or settings.export.writer
     reviewer = settings.explain.reviewer or settings.export.reviewer
@@ -575,6 +600,8 @@ def main(argv=None):
             result = _export(args, root)
         elif cmd == 'explain':
             result = _explain(args, root)
+        elif cmd == 'advise':
+            result = _advise(args, root)
         print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
         return 0
     except ExecutorFailure as exc:
