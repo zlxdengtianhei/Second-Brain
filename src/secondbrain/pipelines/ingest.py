@@ -1592,15 +1592,16 @@ def focused_problems(review: dict) -> list[str]:
 
 def _made_amends(root: Path, packet: dict, state: dict, chunk: str, candidate: dict, review: dict,
                  existing_domains: dict) -> dict:
-    """The review with each accepted card's mechanical fixes checked (:mod:`amend`); a card whose fixes are not legal
-    is revised instead. A malformed ``amend``, one on a revised card, or any when the job takes none, is refused."""
+    """The review with each accepted card's mechanical fixes checked (:mod:`amend`); a card whose fixes are not legal,
+    or are out of form (an operation without a field it needs), is revised instead: that card goes to a repair round
+    and the rest of the review stands. Any fix on a card that is not accepted, or any when the job takes none, is
+    refused with the whole review."""
     rows = review.get('cards') or []
     given = [r for r in rows if r.get('amend')]
     if not given:
         return review
-    errors = [p for r in given for p in amends.shape_problems(r['slug'], r['amend'])]
-    if not jobs.policy_of(packet).amend:
-        errors.append('this job takes no mechanical fixes ([review] amend is off): revise the card instead')
+    errors = [] if jobs.policy_of(packet).amend else [
+        'this job takes no mechanical fixes ([review] amend is off): revise the card instead']
     errors += [f'{r["slug"]}: a mechanical fix comes only with accept' for r in given if r.get('decision') != 'accept']
     if errors:
         raise IngestAnswerError('Review rejected by validation:\n- ' + '\n- '.join(errors))
@@ -1617,9 +1618,11 @@ def _made_amends(root: Path, packet: dict, state: dict, chunk: str, candidate: d
             out.append(row)
             continue
         card = cards[row['slug']]
-        why = amends.problems(card, row['amend'], closed=lambda kind, domain, target: _closed_relation(
-            packet['catalog'], kind, domain, target), legal=legal, domain_of=domains.get,
-            keep_link=(row.get('with') or [None])[0] if row.get('overlap') == 'extends' else None)
+        why = amends.shape_problems(row['slug'], row['amend'])
+        if not why:
+            why = amends.problems(card, row['amend'], closed=lambda kind, domain, target: _closed_relation(
+                packet['catalog'], kind, domain, target), legal=legal, domain_of=domains.get,
+                keep_link=(row.get('with') or [None])[0] if row.get('overlap') == 'extends' else None)
         out.append(amends.refused(row, why) if why else row)
     return {**review, 'cards': out}
 

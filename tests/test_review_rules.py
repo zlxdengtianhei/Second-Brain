@@ -5,6 +5,7 @@ These tests run with the defaults: two repair rounds, two format retries per slo
 from __future__ import annotations
 
 import copy
+import json
 from dataclasses import replace
 
 import pytest
@@ -13,6 +14,7 @@ from secondbrain import config, decisions, jobs
 from secondbrain.executors import FakeExecutor
 from secondbrain.pipelines import amend as amends
 from secondbrain.pipelines import ingest
+from secondbrain.store import read_state
 from secondbrain.vault import read_snapshot
 from tests.helpers import EXISTING, PILLAR, TOPIC
 from tests.ingest_helpers import (CARDS, SOURCE_NAME, build_ingest_vault, first_candidate, first_review,
@@ -84,7 +86,7 @@ def test_an_answer_that_fails_the_checks_in_a_repair_round_is_asked_again_withou
 
 
 def test_a_review_that_keeps_failing_the_checks_leaves_its_cards_pending(tmp_path):
-    bad = with_rows(first_review(), **{COST: {'amend': [{'op': 'rewrite'}]}})
+    bad = with_rows(first_review(), **{'marker-dimming': {'amend': [{'op': 'drop_flashcard', 'q': 'x'}]}})
     root, job_id, done, seen = run(tmp_path, [first_candidate()], [bad] * 3)
     assert len(seen['reviewer']) == 3 and done['status'] == 'failed'
     assert {p['slug'] for p in done['error']['pending']} == set(CARDS)
@@ -158,6 +160,13 @@ def test_a_review_card_dropped_by_the_reviewer_is_not_written(tmp_path):
     ([{'op': 'add_relation', 'type': 'contrasts_with', 'target': 'marker-dimming'}], 'the relation contrasts_with'),
     ([{'op': 'retype_relation', 'target': 'marker-dimming', 'type': 'part_of'}], 'no relation to marker-dimming'),
     ([{'op': 'refile', 'pillar': PILLAR, 'topic': 'Nowhere'}], 'is not a curated topic'),
+    # out of form: the card goes back as a revise, the review's other cards stand (a reviewer model that leaves out
+    # the new type of a retype_relation, as one did on every try of a chunk, no longer costs the whole review)
+    ([{'op': 'retype_relation', 'target': 'lantern-queue', 'note': 'it is the other way round'}],
+     'amend[0] (retype_relation) needs type'),
+    ([{'op': 'add_relation', 'target': 'marker-dimming'}], 'amend[0] (add_relation) needs type'),
+    ([{'op': 'refile', 'pillar': PILLAR}], 'amend[0] (refile) needs topic'),
+    ([{'op': 'rewrite', 'text': 'x'}], 'amend[0].op must be one of'),
     ([{'op': 'drop_flashcard', 'q': CARDS[COST]['flashcards'][0]['q']},
       {'op': 'drop_flashcard', 'q': CARDS[COST]['flashcards'][1]['q']}], 'fewer than 2 review cards'),
 ])
@@ -190,16 +199,54 @@ def test_an_extends_card_may_get_its_link_by_a_fix_but_not_lose_it():
 
 
 @pytest.mark.parametrize('rows, problem', [
-    ({COST: {'amend': [{'op': 'add_relation', 'target': 'x'}]}}, 'needs type'),
-    ({COST: {'amend': [{'op': 'rewrite', 'text': 'x'}]}}, 'op must be one of'),
     ({'marker-dimming': {'amend': [{'op': 'drop_flashcard', 'q': 'x'}]}}, 'comes only with accept'),
 ])
-def test_a_fix_out_of_form_is_refused_at_submit(tmp_path, rows, problem):
+def test_a_fix_on_a_card_that_is_not_accepted_is_refused_at_submit(tmp_path, rows, problem):
     root = build_ingest_vault(tmp_path / 'vault')
     job = ingest.prepare(root, root / '00_Inbox' / SOURCE_NAME)
     packet, state = jobs.read_input(root, job['job_id']), jobs.load(root, job['job_id'])
     with pytest.raises(ingest.IngestError, match=problem):
         ingest._made_amends(root, packet, state, 'c01', first_candidate(), with_rows(first_review(), **rows), {})
+
+
+def test_a_fix_out_of_form_sends_back_only_its_card_and_the_reviewer_answer_is_not_refused(tmp_path):
+    """The chunk that failed on every try: a ``retype_relation`` with no ``type``. The other cards keep their accept."""
+    broken = [{'op': 'retype_relation', 'target': 'lantern-queue', 'note': 'it is the other way round'}]
+    review = accept_with(broken)
+    fixed = {**CARDS[COST], 'topic': TOPIC, 'relations': [], 'reason': 'PRODUCER-REASON-9 fixed'}
+    rows = [{'source_quote': fixed['source_quotes'][0], 'disposition': 'card', 'cards': [COST], 'reason': 'r'}]
+    accepted = {'cards': [{'slug': COST, 'decision': 'accept', 'overlap': 'distinct', 'reason': 'now right'}],
+                'new_topics': [], 'coverage': {'decision': 'accept', 'reason': 'covered'}}
+    root, job_id, done, seen = run(tmp_path, [first_candidate(), {'cards': [fixed], 'new_topics': [],
+                                                                  'coverage': rows}], [review, accepted])
+    assert [t.chunk for t in seen['reviewer']] == ['c01', 'c01.r1']          # no second ask for the whole chunk
+    assert [t.chunk for t in seen['producer']] == ['c01', 'c01.r1']
+    assert [c['slug'] for c in seen['reviewer'][1].packet['candidate']['cards']] == [COST]  # only that card again
+    first = jobs.artifact(root, jobs.load(root, job_id), 'review', 'c01')
+    by = {r['slug']: r for r in first['cards']}
+    assert by[COST]['decision'] == 'revise' and 'needs type' in by[COST]['reason']
+    assert by['marker-dimming']['decision'] == 'accept'
+    assert done['status'] == 'applied', done.get('pending')
+    assert not any(jobs.load_run(root, job_id, r).get('rejected_submits') for r in jobs.load(root, job_id)['runs'])
+
+
+def test_the_schema_asks_for_the_fields_of_each_operation():
+    needs = {c['if']['properties']['op']['const']: c['then']['required'] for c in amends.SCHEMA['items']['allOf']}
+    assert needs == {op: list(fields) for op, fields in amends._FIELDS.items()}
+    assert needs['retype_relation'] == ['type', 'target']
+
+
+def test_a_refused_review_is_kept_whole_like_a_refused_producer_answer(tmp_path):
+    bad = with_rows(first_review(), **{'marker-dimming': {'amend': [{'op': 'drop_flashcard', 'q': 'x'}]}})
+    root, job_id, done, _ = run(tmp_path, [first_candidate()], [bad, accept_with([])])
+    state = jobs.load(root, job_id)
+    refused = [jobs.load_run(root, job_id, r) for r in state['runs']]
+    [run_] = [r for r in refused if r['role'] == 'reviewer' and r.get('rejected_answers')]
+    kept = json.loads(read_state(root, run_['rejected_answers'][0]))
+    assert 'comes only with accept' in kept['refusal'] and kept['run_id'] == run_['run_id']
+    assert json.loads(kept['reply_text'])['cards'] and kept['payload']['cards']
+    assert run_['output_sha256'] == kept['reply_sha256']
+    assert done['status'] == 'applied'
 
 
 def test_with_amend_off_a_fix_is_refused_and_the_prompt_does_not_offer_it(tmp_path):

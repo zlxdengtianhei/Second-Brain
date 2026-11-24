@@ -516,7 +516,8 @@ def _reply_text(raw, answer, result) -> str | None:
             return None
 
 
-#: Where a refused producer answer is kept, under the job's state (never in the vault, never in an export).
+#: Where a refused answer (a producer's or a reviewer's) is kept, under the job's state (never in the vault, never
+#: in an export).
 REJECTED = 'rejected'
 #: How much of a refused reply is kept: its first 256 KiB, in whole characters, with its length and the hash of all
 #: of it. A producer's reply is far shorter; one refused for its size (over :data:`MAX_ANSWER_BYTES`) is not.
@@ -525,8 +526,8 @@ KEPT_REPLY_BYTES = 256 * 1024
 
 def _keep_rejected(root: Path, job_id: str, state: dict, run: dict, exc: BaseException, step: str, message: str,
                    seen: dict) -> None:
-    """Keep a refused producer answer whole, for reading why it was refused: who gave it (run, slot, attempt,
-    models, the task's and the job input's hashes), the reply as it came, the answer as read, the refusal, and what
+    """Keep a refused answer whole (a producer's or a reviewer's), for reading why it was refused: who gave it (run,
+    slot, attempt, models, the task's and the job input's hashes), the reply as it came, the answer as read, the refusal, and what
     the kind's check reported (``exc.rejected``: the answer before and after the program's repairs, the repairs,
     each error line with its field path and kind, a quote's own text and where it comes closest in the chunk, the
     coverage rows as given). The run's ``output_sha256`` is the reply's."""
@@ -745,8 +746,7 @@ def _refuse_received(root: Path, job_id: str, run_id: str, exc: BaseException, s
     message = str(exc) if fault is None else _record_fault(state, run, fault)
     if fault is not None and isinstance(exc, _Unread):
         message += f' ({exc})'
-    if run['role'] == 'producer':
-        _keep_rejected(root, job_id, state, run, exc, step, message, seen or {})
+    _keep_rejected(root, job_id, state, run, exc, step, message, seen or {})  # a reviewer's too: why it keeps failing
     given_up = _refused_answer(root, job_id, state, run, message,
                                getattr(exc, 'keep', None) if fault is None else None)
     if executor and run['status'] == 'started':  # an API run takes one answer: refused, it is over
