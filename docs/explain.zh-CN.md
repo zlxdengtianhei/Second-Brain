@@ -30,6 +30,20 @@ sb advise --pillar <pillar> [--domain <domain>] --executor api
 
 程序先冻结证据：领域的问题和各支柱，这个支柱的 `why`，它的卡按提议分成的组（标题与本质一句），以及每组的关系有多少留在组内、连到别的组、别的支柱、别的领域。`sb explain` 的写作者回答 `keep`（不拆）、`split_pillars`（把这些组归进同领域的几个新支柱，各有名字和它回答什么）或 `new_domain`（一部分组拆成新领域，附它的问题），并引用证据说明理由；程序核答案（每组只进一个支柱，名字不和别的支柱、领域重），`sb explain` 的复核者对着证据判。不拆任何东西：建议存在这个 job 里，`sb status` 在这个支柱的 `topics.oversize` 一项里显示它（`advice`），直到这个支柱的卡或关系变了；没问过时那一项给出命令（`advise`）。库往宽长（支柱拆成支柱、一部分拆成新领域），始终三层。
 
+### 照建议拆：`sb repillar`
+
+`sb repillar` 把卡改放到同一领域的另一个支柱下。它照复核过的 `split_pillars` 建议拆，也可以挪用户点名的卡：
+
+```sh
+sb repillar --advice <job>                                   # plan: the advice's groups into its new pillars
+sb repillar --advice <job> --apply                           # one recoverable transaction
+sb repillar --ids <id> <id> --to <pillar> [--why "<text>"]   # by hand; a new pillar needs --why
+sb repillar --plan <file.json>                               # {"pillars": [{"name", "why", "ids"}]}
+sb recover <job> --rollback                                  # every byte back
+```
+
+只有复核接受了的建议才照做，而且这个支柱的卡和关系要和建议判时一样；不一样就给出重新问的 `sb advise` 命令。没有分进任何组的卡（`scattered`）留在原处（`kept_in_place`）。这个命令不判内容，不问模型。一次事务只改：每张挪动的卡的 `pillar` 一行（原来有 `topic` 一行的连它一起；其余字节不动，计划逐行核对），登记表里同样的字段，分类文件，地图页，`HOME.md`，以及已有的当天复习页。新支柱直接放卡，排在卡原来所在支柱的位置，后面的支柱各往后挪一号。挪完没有卡的支柱连同它的页一起去掉；原来就没有卡的支柱不动。程序不写的页面里还提到要删或要改号的页时，什么都不写，结果里列出这些文件。`sb relocate` 把卡挪到别的领域；`sb domcreate` 建新领域，并在同一事务里去掉它挪空的支柱。
+
 ## 支柱之间的图
 
 一张卡只在一个支柱下，所以一张地图的支柱是一串列表；卡之间的关系跨支柱、跨地图，把支柱连成图。每张地图的首页有一节“支柱之间的连接”：每对支柱之间的卡片关系，按类型计数（`→` 有方向，照关系读：左 `depends_on` 右；`↔` 没有方向）。别的地图的支柱带上地图名。每个支柱页写出与它相连的支柱。
