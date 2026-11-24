@@ -185,6 +185,7 @@ PAGES = {
         'back_up_cross_close': '  - 跨领域：「{a}」这个概念在「{domain}」领域也有一张卡，侧重不同：{b}',
         'back_up_cross_diff': '；两边的差别：{note}',
         'back_up_cross_pointer': '  - 跨领域：「{a}」这个概念在「{domain}」领域也用到，那边只挂指针，讲的就是这张卡',
+        'back_up_cross_more': '  - 跨领域：还有 {n} 条没列在这里，在支柱页和 `sb explain` 里看全',
         'back_up_cross_held': '  - 跨领域：这个支柱在「{domain}」领域还有概念 {b}，这里只挂指针，正本在那边',
         'new_left': '未开始的新卡共 {available} 张，排入 {n} 张。这一页是 {date} 这个复习日（{hour:02d}:00 起算）的队列，'
                     '与这个复习日里 `sb review queue` 给出的相同。',
@@ -268,6 +269,7 @@ PAGES = {
         'back_up_cross_close': '  - Across domains: the concept of "{a}" also has a card in "{domain}", with another emphasis: {b}',
         'back_up_cross_diff': '; where the two differ: {note}',
         'back_up_cross_pointer': '  - Across domains: the concept of "{a}" is also used in "{domain}", which only points here: the description is this card',
+        'back_up_cross_more': '  - Across domains: {n} more not listed here; the pillar page and `sb explain` show them all',
         'back_up_cross_held': '  - Across domains: this pillar holds the concept {b} of "{domain}" only as a pointer; the card stands there',
         'new_left': "New cards not started yet: {available}; {n} of them are in this day's queue. "
                     'This page is the queue of review day {date} (days start at {hour:02d}:00), '

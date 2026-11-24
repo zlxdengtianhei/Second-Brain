@@ -138,3 +138,31 @@ def test_a_vault_with_no_bridge_or_pointer_has_no_cross_domain_line(tmp_path):
     from tests.ingest_helpers import build_ingest_vault
     root = build_ingest_vault(tmp_path / 'vault')
     assert 'Across domains' not in _back_up(root)
+
+
+def test_the_review_page_ties_the_narrow_card_to_the_canonical_card_of_the_first_domain(tmp_path):
+    """The other end of the bridge: the narrow card (once confirmed, so that it is in today's queue) names the
+    canonical card of the first domain, and where the two differ."""
+    root, result = one_chunk(tmp_path, 'extends')
+    [produced] = result['produced']
+    path = root / read_snapshot(root).cards[produced['id']].path
+    path.write_text(path.read_text(encoding='utf-8').replace('status: needs-review', 'status: confirmed'),
+                    encoding='utf-8')
+    back = _back_up(root)
+    line = next(x for x in back.splitlines() if 'the concept of "Tide order in lantern queues"' in x)
+    assert 'also has a card in "Example Attention Map"' in line
+    assert f'|{read_snapshot(root).cards[EXISTING].title}]]' in line  # a link to the canonical card
+    assert f'where the two differ: {NOTE}' in line
+
+
+def test_more_cross_domain_lines_than_a_pillar_lists_are_counted_not_dropped(tmp_path, monkeypatch):
+    root, result = one_chunk(tmp_path, 'extends')
+
+    def many(snapshot, card):
+        return [{'target': EXISTING, 'title': f'Other {i}', 'domain': 'pebbles', 'domain_title': 'Example Pebble Map',
+                 'strength': 'close', 'type': 'similar_to'} for i in range(6)]
+    monkeypatch.setattr(crossref, 'bridged', many)
+    section = next(x for x in _back_up(root).split('\n- **') if x.startswith('Token routing'))
+    lines = [x for x in section.splitlines() if 'Across domains' in x]
+    assert len([x for x in lines if 'also has a card in' in x]) == 4
+    assert lines[-1].strip() == '- Across domains: 2 more not listed here; the pillar page and `sb explain` show them all'

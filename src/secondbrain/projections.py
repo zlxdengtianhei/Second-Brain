@@ -154,6 +154,10 @@ def review_time(today: date) -> datetime:
 _TIE_TYPES = ('depends_on', 'part_of', 'example_of', 'contrasts_with', 'similar_to')
 
 
+#: Cross-domain lines one pillar's part of the way back up lists; the rest is counted.
+CROSS_LINES = 4
+
+
 def back_up(snapshot, ids, T) -> list[str]:
     """The review page's way back up: for each pillar of today's cards (in queue order), what the pillar answers
     and what ties the cards together: the recap of the newest applied `sb explain --pillar` of that pillar, and
@@ -197,7 +201,9 @@ def back_up(snapshot, ids, T) -> list[str]:
         if links:
             out.append(T['back_up_links'].format(links=T['domain_sep'].join(x[1] for x in links[:4])))
         crossing = _cross_lines(snapshot, domain, pillar, cards, T)
-        out.extend(crossing[:4])
+        out.extend(crossing[:CROSS_LINES])
+        if len(crossing) > CROSS_LINES:  # never dropped without a word
+            out.append(T['back_up_cross_more'].format(n=len(crossing) - CROSS_LINES))
         if not links and not recap and not crossing:
             out.append(T['back_up_alone'])
     return out
