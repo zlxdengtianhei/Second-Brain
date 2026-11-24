@@ -81,16 +81,37 @@ def written_tasks(root, job_id):
 
 @pytest.fixture(scope='module')
 def runs(tmp_path_factory):
-    """Task texts two jobs wrote: one with a split slot and the merge check, one with a focused repair round."""
+    """Task texts two jobs wrote: one with a split slot and the merge check, one with a focused repair round.
+
+    A module-scoped fixture is set up before the autouse fixtures of ``conftest.py`` (they are function-scoped), so it
+    must keep the processing state away from the user's real one itself. Otherwise the jobs write under
+    ``~/.local/state/secondbrain/vaults/<hash of the vault path>``; a job id is a hash of its input, so when the same
+    vault path comes round again, the job is found already done and ``reviewer-*.md`` holds the task texts an earlier
+    version of the prompts wrote: ``render`` (this version) then differs from them."""
+    from secondbrain import config, layout
     from tests.test_patch_set import job, reviewer, run
     from tests.test_review_notes import WRONG, accepted_with
     from tests.test_review_rules import run as run_rules
     from tests.ingest_helpers import first_candidate, repair_candidate, repair_review
-    root, job_id, _ = job(tmp_path_factory.mktemp('split'), n_props=11)
-    run(root, job_id, reviewer())
-    root2, job2, _, _ = run_rules(tmp_path_factory.mktemp('focused'), [first_candidate(), repair_candidate()],
-                                  [accepted_with(WRONG), repair_review()])
-    return written_tasks(root, job_id) + written_tasks(root2, job2)
+    base = tmp_path_factory.mktemp('replay-env')
+    with pytest.MonkeyPatch.context() as env:
+        env.setenv('SECONDBRAIN_STATE_DIR', str(base / 'state'))
+        env.setenv('SECONDBRAIN_CONFIG', str(base / 'no-config.toml'))
+        env.setenv('SECONDBRAIN_LOCK_WAIT', '2')
+        env.setenv('SECONDBRAIN_STRICT_MARKS', '1')
+        env.delenv('SECONDBRAIN_VAULT', raising=False)
+        config.activate(None)
+        layout.unregister_all()
+        try:
+            root, job_id, _ = job(tmp_path_factory.mktemp('split'), n_props=11)
+            run(root, job_id, reviewer())
+            root2, job2, _, _ = run_rules(tmp_path_factory.mktemp('focused'),
+                                          [first_candidate(), repair_candidate()],
+                                          [accepted_with(WRONG), repair_review()])
+            return written_tasks(root, job_id) + written_tasks(root2, job2)
+        finally:
+            config.activate(None)
+            layout.unregister_all()
 
 
 def test_render_gives_back_the_text_a_run_was_given(runs):
