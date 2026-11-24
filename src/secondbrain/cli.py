@@ -78,6 +78,13 @@ def parser():
                              'preview unless --apply')
     flatten.add_argument('--domain', required=True); flatten.add_argument('--apply', action='store_true')
     flatten.add_argument('--job')
+    bridgecmd = sub.add_parser('bridges', help='Bridge strengths the catalog declares; --upgrade adds the strong one '
+                             '(same_concept_as), --undo takes it back; preview unless --apply')
+    step = bridgecmd.add_mutually_exclusive_group()
+    step.add_argument('--upgrade', action='store_true', help='Declare the strong bridge type in the catalog')
+    step.add_argument('--undo', action='store_true',
+                      help='Take it back: strong relations on cards become similar_to, then the catalog loses it')
+    bridgecmd.add_argument('--apply', action='store_true'); bridgecmd.add_argument('--job')
     refresh = sub.add_parser('refresh', help='Deterministic MOC projection; preview unless --apply')
     refresh.add_argument('--domain', action='append'); refresh.add_argument('--apply', action='store_true'); refresh.add_argument('--job')
     for name, text in [('today', "Today's review page"),
@@ -560,6 +567,9 @@ def main(argv=None):
         elif cmd == 'flatten':
             from .flatten import run as flatten
             result = flatten(root, domain=args.domain, apply=args.apply, job_id=args.job)
+        elif cmd == 'bridges':
+            from .bridgetypes import run as bridge_types
+            result = bridge_types(root, upgrade=args.upgrade, undo=args.undo, apply=args.apply, job_id=args.job)
         elif cmd == 'refresh':
             from .service import refresh
             result = refresh(root, job_id=args.job or f'moc-{uuid.uuid4().hex[:16]}', domains=args.domain, apply=args.apply)

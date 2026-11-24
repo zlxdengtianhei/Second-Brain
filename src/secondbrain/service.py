@@ -63,6 +63,8 @@ class Service:
         topic_hints = hints(s)
         from . import pointers as pointer_store
         cross = bridges.report(s.cards, pointer_store.load(self.root))
+        # whether a bridge can be strong at all: a catalog without the strong type writes every bridge weak
+        cross['strong_type'] = bool(bridges.declared(s.catalog or {})['strong'])
         from .advise import lookup
         for h in topic_hints['oversize']:  # a pillar past the line: the kept advice, or how to ask for it
             if h.get('level') == 'pillar':
@@ -92,9 +94,14 @@ class Service:
                 **({'cross_domain_hint': 'cards of two domains that may be the same concept: the ingest merge check '
                                          'decides it in one place (bridges.settle) -- the same concept gets one '
                                          'description and a pointer on the other domain\'s pillar page, a close one '
-                                         'gets a narrow card joined by a bridge (same_concept_as, or similar_to when '
-                                         'the catalog declares no strong type)'}
+                                         'gets a narrow card joined by a strong bridge (same_concept_as, or '
+                                         'similar_to when the catalog declares no strong type)'}
                    if cross['candidates'] else {}),
+                **({'cross_domain_strong_hint': 'the catalog declares no strong bridge type, so every bridge is '
+                                                'weak (similar_to) and one concept in two domains reads like two '
+                                                'alike ones: `sb bridges --upgrade --apply` adds same_concept_as '
+                                                '(`sb bridges --undo --apply` takes it back)'}
+                   if not cross['strong_type'] and len((s.catalog or {}).get('domains') or {}) > 1 else {}),
                 **({'cross_domain_waiting_hint': 'the canonical card of these bridges changed: `sb review queue` '
                                                  'lists the narrow cards to be looked at again (cross_domain.waiting)'}
                    if cross['waiting'] else {}),

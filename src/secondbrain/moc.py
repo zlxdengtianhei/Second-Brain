@@ -30,7 +30,7 @@ import heapq
 import re
 from dataclasses import dataclass
 
-from . import labels
+from . import bridges, labels
 
 _PREREQ_TYPES = frozenset(("depends_on", "follows", "required_by", "precedes"))
 
@@ -385,7 +385,9 @@ def _card_line(card, ctx, cur_moc, domain_to_moc):
         for tgt in sorted(per_type[typ]):
             rpath, rtitle, tdom = ctx[tgt]
             tmoc = domain_to_moc.get(tdom)
-            suffix = "" if tmoc == cur_moc else L["cross_map"] % (tmoc or tdom)
+            # a strong bridge (one concept, another domain's emphasis) reads apart from a weak one (alike)
+            label = L["cross_same"] if bridges.strength(typ) == "same" and tdom != card.domain else L["cross_map"]
+            suffix = "" if tmoc == cur_moc else label % (tmoc or tdom)
             toks.append(_link(rpath, rtitle) + suffix)
         parts.append("%s→ %s" % (typ, L["target_sep"].join(toks)))
     return "- " + L["card_sep"].join(parts)

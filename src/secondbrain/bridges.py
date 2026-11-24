@@ -9,15 +9,23 @@ the two domains:
   concept first), and the description stays in that card: one description cannot drift from itself. When the
   canonical card changes, the pillar page that points at it is built again (:mod:`secondbrain.pointers`,
   :func:`secondbrain.moc.build_mocs`).
-- ``apart`` -- the level is ``extends`` (SKOS ``closeMatch``): the two domains say different things about it.
-  Each keeps a narrow card of its own (the second one written next to the first, with the emphasis of its own
-  domain), and a bridge relation of ``type`` joins them. Close matches are never chained: chaining them is how two
-  different ideas get fused, which SKOS warns against for exactly that reason.
+- ``apart`` -- the level is ``extends`` (SKOS ``closeMatch``): one concept, and the second domain says something
+  about it that the first card does not hold (a new mechanism, condition or conclusion). Each keeps a narrow card of
+  its own (the second one written next to the first, with the emphasis of its own domain), and a *strong* bridge
+  (``same_concept_as``) joins them when the catalog declares it.
+
+A third strength is not this rule's: two cards of two domains that are alike but answer different questions are
+joined by a *weak* bridge (``similar_to``, SKOS ``relatedMatch``), which the producer writes like any relation. A
+weak bridge is never chained: a chain of "alike" is how two different ideas get fused. A strong bridge is the
+program's own step on a pair the judge found one concept (``extends``); a strong type a card names otherwise is
+written as the weak one (:func:`retype_unjudged`).
 - ``drop`` -- ``same`` inside one domain: the card is not written.
 
 A relation type carries the strength of a bridge, so nothing else has to record it. A vault declares the types it
 lets a card hold (``relation_types`` in the catalog, or ``domain_relations`` for one domain); a vault without a
 strong type gets weak bridges, and the program says so rather than inventing a type the vault does not know.
+:func:`upgraded` gives the catalog that declares it and :func:`downgraded` the one that does not
+(``sb bridges --upgrade`` and ``--undo``, :mod:`secondbrain.bridgetypes`).
 
 Nothing here calls a model and nothing here decides whether two cards are one concept: the merge check judges
 that, and the program only refuses to fold cards of two domains. That one rule lives here (:func:`settle`): every
@@ -26,11 +34,13 @@ check cannot disagree about what a repeat across two domains becomes.
 """
 from __future__ import annotations
 
+import json
 import re
 
-#: Relation types that say "the same concept as" (SKOS exactMatch); transitive.
+#: Relation types that say "the same concept as, with the emphasis of another domain" (a judged ``extends``
+#: across two domains); transitive: cards joined by them answer one question.
 STRONG = ('same_concept_as',)
-#: Relation types that say "close to" (SKOS closeMatch); never transitive.
+#: Relation types that say "alike, but another question" (SKOS relatedMatch); never transitive.
 WEAK = ('similar_to',)
 #: Every type that joins two cards of two domains.
 TYPES = STRONG + WEAK
@@ -284,3 +294,96 @@ def keep_apart(rows: dict, domain_of, open_types, inverse=None) -> tuple[dict, l
             found.append({'slug': slug, 'into': into, 'how': 'apart', 'domains': [here, there],
                           'type': settled['type'], 'reason': settled['reason']})
     return out, found
+
+
+def strong_gloss(language: str | None = None) -> str:
+    """What ``sb bridges --upgrade`` writes into a catalog as the strong type's gloss, in ``language`` (the type is
+    its own inverse, so one gloss reads both ways)."""
+    from . import labels
+    return labels.pages(language if language in ('en', 'zh') else 'en')['strong_bridge_gloss']
+
+
+def declared(catalog) -> dict:
+    """The bridge types a catalog declares (open to every domain or to some): ``{'strong': [...], 'weak': [...]}``."""
+    from .catalog import relation_types
+    known = set(relation_types(catalog or {}))
+    return {'strong': [k for k in STRONG if k in known], 'weak': [k for k in WEAK if k in known]}
+
+
+def upgraded(catalog: dict, language: str | None = None) -> dict | None:
+    """``catalog`` with the strong bridge type open to every domain, or None when it declares one already.
+
+    The type joins ``relation_types`` (open to every domain: a bridge needs it on both sides), is its own inverse
+    (a bridge is symmetric) and gets the gloss of ``language`` unless the catalog glosses it already. Nothing else
+    changes, so :func:`downgraded` gives the catalog back.
+    """
+    if declared(catalog)['strong']:
+        return None
+    kind = STRONG[0]
+    out = json.loads(json.dumps(catalog))
+    out.setdefault('relation_types', []).append(kind)
+    out.setdefault('inverse_relations', {})[kind] = kind
+    glosses = out.setdefault('relation_gloss', {})
+    if not (isinstance(glosses.get(kind), str) and glosses[kind].strip()):
+        glosses[kind] = strong_gloss(language)
+    return out
+
+
+def downgraded(catalog: dict) -> dict | None:
+    """``catalog`` with every strong bridge type taken out, or None when it declares none.
+
+    Out of ``relation_types``, every ``domain_relations`` list, ``inverse_relations`` (as a key and as a value) and
+    ``relation_gloss``. Cards that still hold the type are the caller's to retype first (:func:`retyped_relations`).
+    """
+    if not declared(catalog)['strong']:
+        return None
+    out = json.loads(json.dumps(catalog))
+    strong = set(STRONG)
+    out['relation_types'] = [t for t in out.get('relation_types') or [] if t not in strong]
+    for domain, words in list((out.get('domain_relations') or {}).items()):
+        out['domain_relations'][domain] = [w for w in words if w not in strong]
+    out['inverse_relations'] = {k: v for k, v in (out.get('inverse_relations') or {}).items()
+                                if k not in strong and v not in strong}
+    if isinstance(out.get('relation_gloss'), dict):
+        out['relation_gloss'] = {k: v for k, v in out['relation_gloss'].items() if k not in strong}
+        if not out['relation_gloss']:  # the upgrade wrote the only gloss: the catalog had none
+            del out['relation_gloss']
+    return out
+
+
+def retyped_relations(relations) -> tuple[list, int]:
+    """``relations`` with each strong bridge written as the weak type: ``(relations, how many changed)``.
+
+    A strong relation to a target the card names already by the weak type is left out (one relation per pair).
+    """
+    out, changed = [], 0
+    weak_targets = {r.get('target') for r in relations or [] if isinstance(r, dict) and r.get('type') in WEAK}
+    for rel in relations or []:
+        if isinstance(rel, dict) and rel.get('type') in STRONG:
+            changed += 1
+            if rel.get('target') in weak_targets:
+                continue
+            weak_targets.add(rel.get('target'))
+            rel = {**rel, 'type': WEAK[0]}
+        out.append(rel)
+    return out, changed
+
+
+def retype_unjudged(relations, domain: str, domain_of, judged=()) -> tuple[list, list]:
+    """Strong bridges no judge gave, written as the weak type: ``(relations, [{'target', 'was', 'now'}])``.
+
+    ``relations`` are a new card's, ``domain`` its domain, ``domain_of`` maps a card id or slug to its domain, and
+    ``judged`` names the targets the rule (:func:`settle`, ``apart``) joined to this card. A strong type toward any
+    other card of another domain says "one concept" without a judge having said so: it is written as
+    :data:`WEAK`. A strong type inside one domain is left as it is (it is not a bridge).
+    """
+    out, changed = [], []
+    judged = set(judged or ())
+    for rel in relations or []:
+        if isinstance(rel, dict) and rel.get('type') in STRONG and rel.get('target') not in judged:
+            other = domain_of(rel.get('target')) if isinstance(rel.get('target'), str) else None
+            if other is not None and other != domain:
+                changed.append({'target': rel['target'], 'was': rel['type'], 'now': WEAK[0]})
+                rel = {**rel, 'type': WEAK[0]}
+        out.append(rel)
+    return out, changed

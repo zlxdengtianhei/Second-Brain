@@ -514,3 +514,51 @@ def test_a_bridge_type_whose_back_link_the_other_domain_forbids_is_not_chosen():
         'same_concept_as'  # strong first, and its back link is open to both
     # a weak type whose back link is the strong one, open to neither domain: no bridge this catalog allows
     assert bridges.choose(('similar_to',), ('similar_to',), pair) is None
+
+
+def covered_by_the_existing_card(tmp_path, placement):
+    """The producer writes no card: it finds the second domain's passage held already by the existing card."""
+    root = build_ingest_vault(tmp_path / 'vault')
+    add_strong_bridge_type(root)
+    settings(chunk_chars=1000)
+    (root / '00_Inbox' / SOURCE_NAME).write_text(SOURCE, encoding='utf-8')
+
+    def producer(task):
+        text = task.packet['chunk']['text']
+        rows = ([{'source_quote': ORDER_QUOTE, 'disposition': 'same', 'with': [EXISTING],
+                  'reason': 'the existing card says it, in its own setting'}] if ORDER_QUOTE in text else [])
+        rows.append({'source_quote': text.strip().splitlines()[-1].strip(), 'disposition': 'out_of_scope',
+                     'reason': 'rest'})
+        return {'cards': [], 'new_topics': [], 'coverage': rows}
+
+    def reviewer(task):
+        if is_source_check_task(task):
+            return keep_all(task.packet)
+        return {'cards': [], 'new_topics': [], 'coverage': {'decision': 'accept', 'reason': 'ok'}}
+    job = ingest.prepare(root, root / '00_Inbox' / SOURCE_NAME, placement=placement)
+    result = ingest.advance(root, job['job_id'], producer=FakeExecutor('gpt-test', responder=with_diagrams(producer)),
+                            reviewer=FakeExecutor('claude-test', responder=reviewer))
+    return root, result
+
+
+def test_a_passage_the_producer_finds_held_by_a_card_of_another_domain_gets_a_pointer(tmp_path):
+    """The probe S3 case: no card is written, so no judge's level reaches the one rule; the owner's placement names
+    the pillar, and the pillar page points at the card that holds the description."""
+    root, result = covered_by_the_existing_card(tmp_path, {'domain': OTHER_DOMAIN, 'pillar': OTHER_PILLAR})
+    assert result['status'] == 'applied' and result['produced'] == []
+    [pointer] = result['pointers']
+    assert (pointer['into'], pointer['domain'], pointer['pillar'], pointer['by']) == (
+        EXISTING, OTHER_DOMAIN, OTHER_PILLAR, 'producer')
+    [row] = pointers.load(root)
+    assert row['kind'] == pointers.POINTER and row['into'] == EXISTING
+    assert list(moc_pages(root, 'canonical card stands in'))
+    assert service.Service(root).status()['cross_domain']['pointers'] == 1
+
+
+@pytest.mark.parametrize('placement', [None, {'domain': DOMAIN, 'pillar': PILLAR}, {'domain': OTHER_DOMAIN}])
+def test_a_covered_passage_gets_no_pointer_without_a_pillar_of_another_domain(tmp_path, placement):
+    """Controls: no placement (no pillar to point from), the card's own domain (a repeat, as before), or a
+    placement without a pillar."""
+    root, result = covered_by_the_existing_card(tmp_path, placement)
+    assert result['status'] == 'applied' and result['pointers'] == []
+    assert pointers.load(root) == []
