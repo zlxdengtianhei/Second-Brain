@@ -20,13 +20,11 @@ RELATION_OPS = ('add_relation', 'retype_relation', 'remove_relation')
 _FIELDS = {'add_relation': ('type', 'target'), 'retype_relation': ('type', 'target'),
            'remove_relation': ('target',), 'refile': ('pillar', 'topic'), 'drop_flashcard': ('q',)}
 
-#: One conditional per operation: with this ``op``, these fields are required (the same fields :func:`shape_problems`
-#: checks). A model that sees the rule asks for the field; one whose endpoint ignores it is still caught there.
-_NEEDS = [{'if': {'properties': {'op': {'const': op}}, 'required': ['op']}, 'then': {'required': list(fields)}}
-          for op, fields in _FIELDS.items()]
-
+#: The schema names no per-operation requirement: an ``if``/``then`` there makes some providers' structured-output
+#: grammar refuse the whole request (HTTP 400 "Unimplemented keys"). The prompt states each operation's fields and
+#: :func:`shape_problems` checks them, sending back only the card whose fix is out of form.
 SCHEMA = {'type': ['array', 'null'], 'items': {
-    'type': 'object', 'required': ['op'], 'allOf': _NEEDS,
+    'type': 'object', 'required': ['op'],
     'properties': {'op': {'type': 'string', 'enum': list(OPS)}, 'type': {'type': 'string'},
                    'target': {'type': 'string'}, 'note': {'type': ['string', 'null']},
                    'tier': {'type': ['string', 'null']}, 'domain': {'type': ['string', 'null']},

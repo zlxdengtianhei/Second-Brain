@@ -230,10 +230,12 @@ def test_a_fix_out_of_form_sends_back_only_its_card_and_the_reviewer_answer_is_n
     assert not any(jobs.load_run(root, job_id, r).get('rejected_submits') for r in jobs.load(root, job_id)['runs'])
 
 
-def test_the_schema_asks_for_the_fields_of_each_operation():
-    needs = {c['if']['properties']['op']['const']: c['then']['required'] for c in amends.SCHEMA['items']['allOf']}
-    assert needs == {op: list(fields) for op, fields in amends._FIELDS.items()}
-    assert needs['retype_relation'] == ['type', 'target']
+def test_the_schema_has_no_conditional_a_provider_grammar_refuses():
+    # Some structured-output grammars reject if/then outright (HTTP 400 "Unimplemented keys"); shape_problems checks
+    # each operation's fields instead.
+    text = json.dumps(amends.SCHEMA)
+    assert '"if"' not in text and '"then"' not in text and 'allOf' not in text
+    assert amends.shape_problems('x', [{'op': 'retype_relation', 'target': 'y'}])
 
 
 def test_a_refused_review_is_kept_whole_like_a_refused_producer_answer(tmp_path):
