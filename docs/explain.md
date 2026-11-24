@@ -81,9 +81,14 @@ The pages (Markdown and HTML, in `[layout] articles/explain/` or `--out`) have t
 
 - the drill-down, top to bottom (the HTML folds each level); a card that is one end of a bridge says in its line
   which other domain also uses the concept and what that side says (`same_concept_as`, or `similar_to` for a close
-  one: the narrow card's essence), and a card that another domain points at says so (the description stands here);
+  one: the narrow card's essence, and where the two differ when the bridge says so), and a card that another domain
+  points at says so (the description stands here); a pillar that holds a concept of another domain only as a pointer
+  says which card stands where. The program adds these lines from the cards and the pointer rows; the writer's text
+  is not asked for them;
 - the review path, bottom to top: the reviewed questions of the cards, prerequisites first, and after each group of
-  children a step back up to their parent with its recap, ending at the domain.
+  children a step back up to their parent with its recap, ending at the domain. A card that a bridge or a pointer
+  ties to another domain carries the same line at its step ("Across domains: ..."), so the review ties the concept
+  to where else it is used.
 
 Nothing is written into the knowledge folders.
 
@@ -91,4 +96,6 @@ Nothing is written into the knowledge folders.
 
 The daily review page (`sb today`, `sb daily`) ends with *After these cards, back up to the higher level*: for each
 pillar of today's cards, what the pillar answers, the recap of its newest whole-pillar explanation (`sb explain
---pillar`), and how today's cards of that pillar connect.
+--pillar`), and how today's cards of that pillar connect. When one of those cards has a bridge or a pointer, a line
+"Across domains" says which card of the other domain it is, how that side differs, or that the other domain only points
+here; a pillar that holds a concept of another domain only as a pointer says so too.
