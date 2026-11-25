@@ -37,6 +37,44 @@ def generated_page(lay, rel: str, raw: bytes | None) -> bool:
     return len(rest) == 2 and bool(_PAGE_RE.match(rest[1])) and raw.startswith(BC_FRONTMATTER.encode('utf-8'))
 
 
+def stale_pages(root: Path, moc: str, projection) -> list[Change]:
+    """Removals of the generated pillar pages in ``moc``'s folder that ``projection`` no longer writes (a pillar the
+    rebuilt map no longer has, or has under another number); a page the owner wrote stays."""
+    lay = layouts.of(root)
+    folder = Path(root, *lay.mocs.split('/'), _safe_segment(moc, 'moc'))
+    out = []
+    if folder.is_dir():
+        for page in sorted(folder.iterdir()):
+            prel = page.relative_to(root).as_posix()
+            if prel in projection.files or not page.is_file():
+                continue
+            raw = read_bytes(root, prel)
+            if generated_page(lay, prel, raw):
+                out.append(Change(prel, digest(raw), None))
+    return out
+
+
+def referrers(root: Path, removed: list[str], written: dict) -> dict:
+    """``{removed page: [files that name it]}``: the Markdown files of the vault, as ``written`` (path: bytes) will
+    leave them, that still name a page in ``removed`` by its file name; pages without one are left out."""
+    from .relocate import _iter_md
+    if not removed:
+        return {}
+    gone = set(removed)
+    names = {rel: rel.rsplit('/', 1)[-1][:-3] for rel in removed}
+    found = {rel: set() for rel in removed}
+    documents = dict(_iter_md(root))
+    documents.update({rel: raw for rel, raw in written.items() if rel.endswith('.md')})
+    for rel, raw in documents.items():
+        if rel in gone:
+            continue
+        text = raw.decode('utf-8')
+        for page, name in names.items():
+            if name in text:
+                found[page].add(rel)
+    return {page: sorted(files) for page, files in found.items() if files}
+
+
 def _job_id(moc: str, fingerprint: str) -> str:
     return 'flatten-' + digest(json.dumps([moc, fingerprint], ensure_ascii=False).encode('utf-8'))[:16]
 
@@ -100,17 +138,9 @@ def plan(root: Path, domain: str) -> dict:
     projection = build_mocs(projected, affected_domains=set(sharing))
     pages = projection_changes(root, projection)
     changes.extend(pages)
-    folder = Path(root, *lay.mocs.split('/'), _safe_segment(moc, 'moc'))
-    removed = []
-    if folder.is_dir():
-        for page in sorted(folder.iterdir()):
-            prel = page.relative_to(root).as_posix()
-            if prel in projection.files or not page.is_file():
-                continue
-            raw = read_bytes(root, prel)
-            if generated_page(lay, prel, raw):
-                changes.append(Change(prel, digest(raw), None))
-                removed.append(prel)
+    stale = stale_pages(root, moc, projection)
+    changes.extend(stale)
+    removed = [c.relative_path for c in stale]
     return {'snapshot': snapshot, 'changes': changes, 'moc': moc, 'domains': sharing,
             'job_id': _job_id(moc, snapshot.fingerprint),
             'report': {'moc': moc, 'domains': sharing, 'pillars': len(pillars),
