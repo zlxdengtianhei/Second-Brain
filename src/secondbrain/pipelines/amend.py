@@ -20,6 +20,9 @@ RELATION_OPS = ('add_relation', 'retype_relation', 'remove_relation')
 _FIELDS = {'add_relation': ('type', 'target'), 'retype_relation': ('type', 'target'),
            'remove_relation': ('target',), 'refile': ('pillar', 'topic'), 'drop_flashcard': ('q',)}
 
+#: The schema names no per-operation requirement: an ``if``/``then`` there makes some providers' structured-output
+#: grammar refuse the whole request (HTTP 400 "Unimplemented keys"). The prompt states each operation's fields and
+#: :func:`shape_problems` checks them, sending back only the card whose fix is out of form.
 SCHEMA = {'type': ['array', 'null'], 'items': {
     'type': 'object', 'required': ['op'],
     'properties': {'op': {'type': 'string', 'enum': list(OPS)}, 'type': {'type': 'string'},
