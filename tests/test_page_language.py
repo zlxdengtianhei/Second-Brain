@@ -44,8 +44,15 @@ POINTER_ROWS = ({'kind': 'pointer', 'into': 'c001', 'domain': 'da', 'into_sha': 
                  'at': '2026-10-13T09:00:00+00:00'})
 
 
+def with_strong_bridge(snapshot, words):
+    """The fixture with one card of map B that names a card of map A by the strong bridge type: the recorded pages
+    predate that type, so it is added here, where only the labels a build can reach are read."""
+    card = moc_fixture._card(99, 'dc', words['card'] % 99, rels=[{'type': 'same_concept_as', 'target': 'c031'}])
+    return replace(snapshot, cards={**snapshot.cards, card.id: card})
+
+
 def built_pages(words):
-    snapshot = moc_fixture.snapshot(words)
+    snapshot = with_strong_bridge(moc_fixture.snapshot(words), words)
     pillar = words['pillars'][0][0]
     rows = [{**row, 'pillar': pillar} for row in POINTER_ROWS]
     return {k: v.decode('utf-8') for k, v in moc.build_mocs(snapshot, pointers=rows).files.items()}

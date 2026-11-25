@@ -3412,7 +3412,33 @@ def _apply_job(root: Path, job_id: str, settled: list[dict] | None = None) -> di
     def unwritten(slug):
         return 'target card was not written' if slug in open_slugs else \
             'target card was dropped in review; add the link by hand if it still matters'
+    # a strong bridge says "one concept": only the rule writes one, on a pair a judge found one concept
+    # (``extends`` across two domains, recorded as a fate ``bridge``); a strong type toward a card of another domain
+    # that no judge joined is written as the weak type, and the result says so (bridges.retype_unjudged)
+    judged_bridges: dict = {}
+    for s, e in decisions.values(entries, 'outcome.program').items():
+        if (e.get('data') or {}).get('how') == 'bridge' and e['data'].get('target'):
+            judged_bridges.setdefault(s, set()).update({e['data']['target'], ids.get(e['data']['target'],
+                                                                                     e['data']['target'])})
+    slug_domains = {s: c['domain'] for _, s, c in accepted}
+
+    def domain_of_target(target):
+        if target in snapshot.cards:
+            return snapshot.cards[target].domain
+        return slug_domains.get(alias.get(target, target))
     for _, slug, card in accepted:
+        weakened = []
+        if any(isinstance(r, dict) and r.get('type') in bridgemap.STRONG for r in card.get('relations') or []):
+            relations, weakened = bridgemap.retype_unjudged(card.get('relations'), card['domain'], domain_of_target,
+                                                            judged_bridges.get(slug, ()))
+            card = {**card, 'relations': relations}
+        for w in weakened:
+            why = ('a strong bridge says one concept, and no judge found these two cards one concept (`extends` across '
+                   'two domains): written as the weak type')
+            decisions.step(entries, 'relations', slug, 'retype_relation', role='program', slot='write',
+                           data={'target': w['target'], 'type': w['now'], 'why': why, 'was': [w['was']]})
+            retyped_relations.append({'card': slug, 'target': w['target'], 'was': [w['was']], 'now': w['now'],
+                                      'why': why})
         linked = {alias.get(r.get('target'), r.get('target')) for r in card.get('relations') or []}
         for r in card.get('relations') or []:
             target = alias.get(r['target'], r['target'])
@@ -3715,6 +3741,33 @@ def _apply_job(root: Path, job_id: str, settled: list[dict] | None = None) -> di
                              'into_sha': canonical.sha256, 'at': now, 'job_id': job_id})
             written_pointers.append({'slug': row['slug'], 'into': cid, 'domain': place['domain'],
                                      'pillar': place['pillar'], 'reason': row.get('reason')})
+    # a passage the producer found held already by a card of another domain (a coverage row ``same``, which the
+    # reviewer's coverage accept confirmed) is the same concept too, and no card of it is written: with the owner's
+    # placement (a domain and a pillar) that pillar page gets the pointer a card judged ``same`` would give it.
+    # Without a placement the job does not know the pillar, and writes no pointer.
+    owner_place = packet.get('placement') or {}
+    pointed = {(p['domain'], p['pillar'], p['into']) for p in written_pointers}
+    for o in settled:
+        for row in o.get('duplicates') or []:
+            if row.get('by') != 'producer' or not row.get('with'):
+                continue
+            if not owner_place.get('domain') or not owner_place.get('pillar'):
+                break
+            cid = ids.get(row['with'][0], row['with'][0])
+            canonical = updated.get(cid) or snapshot.cards.get(cid)
+            if canonical is None or canonical.domain == owner_place['domain']:
+                continue
+            where = (owner_place['domain'], owner_place['pillar'], cid)
+            if where in pointed:
+                continue
+            pointed.add(where)
+            new_rows.append({'kind': pointer_store.POINTER, 'into': cid,
+                             'domain': owner_place['domain'], 'pillar': owner_place['pillar'],
+                             **({'topic': owner_place['topic']} if owner_place.get('topic') else {}),
+                             'into_sha': canonical.sha256, 'at': now, 'job_id': job_id})
+            written_pointers.append({'slug': None, 'source_quote': row.get('source_quote'), 'into': cid,
+                                     'domain': owner_place['domain'], 'pillar': owner_place['pillar'],
+                                     'reason': row.get('reason'), 'by': 'producer'})
     for _, slug, card in accepted:
         cid = ids[slug]
         for relation in rels[slug]:
@@ -3866,7 +3919,8 @@ def _apply_job(root: Path, job_id: str, settled: list[dict] | None = None) -> di
                            'reason': f.get('reason')} for s, f in sorted(bridged.items())],
               # one concept in two domains with one description: no second card, a pointer on the pillar page
               'pointers': written_pointers,
-              # the program changed the type of a relation the producer wrote (the bridge took its place)
+              # the program changed the type of a relation the producer wrote (the bridge took its place, or a strong
+              # bridge no judge gave was written as the weak type)
               'retyped_relations': [{**r, 'card': ids.get(r['card'], r['card']),
                                      'target': ids.get(r['target'], r['target'])}
                                     for r in retyped_relations + list((check or {}).get('retyped_relations') or [])],
