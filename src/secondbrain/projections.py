@@ -154,6 +154,10 @@ def review_time(today: date) -> datetime:
 _TIE_TYPES = ('depends_on', 'part_of', 'example_of', 'contrasts_with', 'similar_to')
 
 
+#: Cross-domain lines one pillar's part of the way back up lists; the rest is counted.
+CROSS_LINES = 4
+
+
 def back_up(snapshot, ids, T) -> list[str]:
     """The review page's way back up: for each pillar of today's cards (in queue order), what the pillar answers
     and what ties the cards together: the recap of the newest applied `sb explain --pillar` of that pillar, and
@@ -196,8 +200,35 @@ def back_up(snapshot, ids, T) -> list[str]:
                                                                      b=here[rel['target']].title)))
         if links:
             out.append(T['back_up_links'].format(links=T['domain_sep'].join(x[1] for x in links[:4])))
-        elif not recap:
+        crossing = _cross_lines(snapshot, domain, pillar, cards, T)
+        out.extend(crossing[:CROSS_LINES])
+        if len(crossing) > CROSS_LINES:  # never dropped without a word
+            out.append(T['back_up_cross_more'].format(n=len(crossing) - CROSS_LINES))
+        if not links and not recap and not crossing:
             out.append(T['back_up_alone'])
+    return out
+
+
+def _cross_lines(snapshot, domain, pillar, cards, T) -> list[str]:
+    """The lines of the way back up that cross into another domain: for each of today's cards that a bridge joins
+    to a card of another domain, or that another domain points at, which card and how it differs; and the concepts
+    the pillar holds only as a pointer. The lines are read from the cards and the pointer rows (:mod:`secondbrain.crossref`),
+    so the review page says what the explanation pages say."""
+    from . import crossref
+
+    def link(card_id, title):
+        other = snapshot.cards.get(card_id)
+        return f'[[{other.path.removesuffix(".md")}|{title}]]' if other is not None else title
+    out = []
+    for card in cards:
+        for b in crossref.bridged(snapshot, card):
+            line = T['back_up_cross_same' if b['strength'] == 'same' else 'back_up_cross_close'].format(
+                a=card.title, domain=b['domain_title'], b=link(b['target'], b['title']))
+            out.append(line + (T['back_up_cross_diff'].format(note=b['note'].replace('[[', '').replace(']]', '')) if b.get('note') else ''))
+        for where in crossref.pointed(snapshot, card):
+            out.append(T['back_up_cross_pointer'].format(a=card.title, domain=where))
+    for p in crossref.pointed_from(snapshot, domain, pillar):
+        out.append(T['back_up_cross_held'].format(domain=p['domain_title'], b=link(p['target'], p['title'])))
     return out
 
 

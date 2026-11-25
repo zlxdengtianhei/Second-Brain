@@ -18,15 +18,31 @@ HOST_ATTESTATION = 'self_reported'
 
 
 def model_family(model: str | None, families: dict) -> str | None:
-    """Longest configured substring contained in ``model`` decides the family."""
+    """The family of ``model``: the longest configured substring of its name decides.
+
+    The model's own name, the part after the last ``/``, is searched first. A gateway or provider prefix
+    (``ollama-cloud/``, ``openrouter/``, ``magpie/kimi-code/``) is searched only when the own name holds no family,
+    and there a substring counts only where a word starts (after ``/``, ``-``, ``_``, ``.``, ``:`` or a space): the
+    ``llama`` inside ``ollama`` is not Meta's.
+    """
     if not isinstance(model, str) or not model:
         return None
     name = model.lower()
-    best = None
-    for needle, family in families.items():
-        if needle.lower() in name and (best is None or len(needle) > len(best[0])):
-            best = (needle, family)
-    return best[1] if best else None
+    own = name.rstrip('/').rsplit('/', 1)[-1]
+
+    def longest(text, at_word_start):
+        best = None
+        for needle, family in families.items():
+            n = needle.lower()
+            if not n or (best is not None and len(n) <= len(best[0])):
+                continue
+            starts = [i for i in range(len(text)) if text.startswith(n, i)]
+            if at_word_start:
+                starts = [i for i in starts if i == 0 or not text[i - 1].isalnum()]
+            if starts:
+                best = (n, family)
+        return best[1] if best else None
+    return longest(own, False) or longest(name, True)
 
 
 def rule(rules, name: str):

@@ -22,4 +22,10 @@ card's `essence` and `propositions`, and the same of the node's children. Do not
 examples that are not there. Formulas stay as the cards write them (`$…$`). No headings, no lists, no `[[…]]`
 except child ids.
 
+A card may carry `bridges` or `pointers`, a pillar `pointed`: another domain uses the same concept (a bridge joins two
+narrow cards, one per domain; a pointer means the other domain keeps no card of its own and the description stands
+in this one). The program adds one line about it to that node's heading and to the review path, from the cards, so
+do not write it into `explain` or `recap`. It is there so that you do not contradict it: say nothing about the
+card that the other domain's `essence` or `note` denies.
+
 Answer: `{"nodes": [{"id": "n1", "explain": "…", "recap": "…"}, …]}` with one row per node that is not a `ref`.

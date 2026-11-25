@@ -467,7 +467,8 @@ sb job prune --days 30              # 预览旧的回滚日志；加 --apply 才
 | `sb backlog` | 分批对整个领域或整个知识库做分类 |
 | `sb curate --domain <slug>` | 提议修改已有领域的支柱和主题；超过 25 张卡的主题，它会拿到一份怎样拆分的提议（[见上](#待你处理的事)） |
 | `sb relocate --source-job <job>` | 分类复核建议换领域时，把卡片移到另一个领域 |
-| `sb domcreate --domain <slug> ...` | 根据已有卡片提议一个新领域 |
+| `sb repillar --advice <job>` | 把卡改放到同一领域的另一个支柱：照复核过的拆分建议，或用 `--ids … --to <支柱>` 点名（[explain.zh-CN.md](explain.zh-CN.md#照建议拆sb-repillar)） |
+| `sb domcreate --domain <slug> ...` | 根据已有卡片提议一个新领域；挪空的支柱在同一事务里去掉 |
 | `sb resume --job <job>` | 继续上述命令的某个任务 |
 | `sb export --domain <slug>` | 把一张地图的卡片写成一篇文章（[export.zh-CN.md](export.zh-CN.md)） |
 | `sb docs --apply` | 重新生成首页 `HOME.md`（以及 `[layout] entry_docs` 的生成块） |

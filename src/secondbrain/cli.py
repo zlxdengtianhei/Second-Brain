@@ -78,6 +78,16 @@ def parser():
                              'preview unless --apply')
     flatten.add_argument('--domain', required=True); flatten.add_argument('--apply', action='store_true')
     flatten.add_argument('--job')
+    repillar = sub.add_parser('repillar', help='File cards under another pillar of their domain (split a large '
+                              'pillar as `sb advise` advised, or move cards by hand); preview unless --apply')
+    which = repillar.add_mutually_exclusive_group(required=True)
+    which.add_argument('--advice', metavar='JOB', help='An advice job (sb advise) whose reviewed decision is split_pillars')
+    which.add_argument('--ids', nargs='+', help='Card ids to move (with --to)')
+    which.add_argument('--plan', type=Path, help='A JSON file {"pillars": [{"name", "why", "ids"}]}')
+    repillar.add_argument('--to', help='The pillar the --ids cards go to (a new one needs --why)')
+    repillar.add_argument('--why', help='What the --to pillar answers (sets it on an existing pillar too)')
+    repillar.add_argument('--domain', help='The domain (when the cards do not tell it)')
+    repillar.add_argument('--apply', action='store_true'); repillar.add_argument('--job')
     bridgecmd = sub.add_parser('bridges', help='Bridge strengths the catalog declares; --upgrade adds the strong one '
                              '(same_concept_as), --undo takes it back; preview unless --apply')
     step = bridgecmd.add_mutually_exclusive_group()
@@ -567,6 +577,8 @@ def main(argv=None):
         elif cmd == 'flatten':
             from .flatten import run as flatten
             result = flatten(root, domain=args.domain, apply=args.apply, job_id=args.job)
+        elif cmd == 'repillar':
+            result = _repillar(args, root)
         elif cmd == 'bridges':
             from .bridgetypes import run as bridge_types
             result = bridge_types(root, upgrade=args.upgrade, undo=args.undo, apply=args.apply, job_id=args.job)
@@ -623,6 +635,22 @@ def main(argv=None):
     except (ValueError, OSError) as exc:
         print(json.dumps({'error': str(exc)}, ensure_ascii=False), file=sys.stderr)
         return 2
+
+
+def _repillar(args, root: Path) -> dict:
+    from . import repillar
+    from .vault import read_snapshot
+    if args.advice:
+        if args.to or args.why:
+            raise ValueError('--to and --why go with --ids; the advice names its pillars')
+        spec = repillar.spec_from_advice(root, read_snapshot(root), args.advice)
+    elif args.ids:
+        spec = repillar.spec_from_ids(args.ids, args.to, args.why, args.domain)
+    else:
+        if args.to or args.why:
+            raise ValueError('--to and --why go with --ids; the plan file names its pillars')
+        spec = repillar.spec_from_file(args.plan, args.domain)
+    return repillar.run(root, spec, apply=args.apply, job_id=args.job)
 
 
 def _has_state(root: Path, job_id: str) -> bool:

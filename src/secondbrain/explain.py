@@ -24,10 +24,11 @@ from __future__ import annotations
 import html as html_lib
 import json
 import re
+import unicodedata
 from pathlib import Path
 
 from . import config, jobs, labels
-from . import bridges
+from . import crossref
 from . import layout as layouts
 from .cards import essence_of, flashcards_of, propositions_of
 from .moc import learning_order
@@ -106,55 +107,11 @@ def _clip(text: str, n: int) -> str:
 
 
 def _card_content(card, snapshot=None) -> dict:
-    found = _bridged(snapshot, card) if snapshot is not None else []
-    pointed = _pointed(snapshot, card) if snapshot is not None else []
+    found = crossref.bridged(snapshot, card) if snapshot is not None else []
+    pointed = crossref.pointed(snapshot, card) if snapshot is not None else []
     return {'card_id': card.id, 'title': card.title, 'domain': card.domain, 'pillar': card.fm.get('pillar'),
             'essence': essence_of(card.body), 'propositions': (propositions_of(card.body) or [])[:10],
             **({'bridges': found} if found else {}), **({'pointers': pointed} if pointed else {})}
-
-
-def _pointed(snapshot, card) -> list[str]:
-    """The domains whose pillar page points at ``card``: the same concept, with no description of its own there."""
-    from . import pointers as pointer_store
-    rows = pointer_store.pointers(pointer_store.load(snapshot.root), )
-    domains = snapshot.catalog.get('domains') or {}
-    return list(dict.fromkeys((domains.get(row['domain']) or {}).get('moc') or row['domain']
-                              for row in rows if row.get('into') == card.id))
-
-
-def _bridged(snapshot, card) -> list[dict]:
-    """The bridges this card is one end of: the same concept standing in another domain.
-
-    Read from both directions, because a bridge is written on the card the merge check kept apart, and the card
-    it was kept apart from -- written earlier, or by another source -- names nothing. ``domain_title`` is what a
-    reader calls the domain (its map's title).
-    """
-    domains = snapshot.catalog.get('domains') or {}
-    domain_of = {cid: c.domain for cid, c in snapshot.cards.items()}
-
-    def show(other_id, other_domain, bridge):
-        other = snapshot.cards.get(other_id)
-        return {'target': other_id, 'title': (other.title if other is not None else other_id),
-                'domain': other_domain,
-                'domain_title': (domains.get(other_domain) or {}).get('moc') or other_domain,
-                'strength': bridge['strength'], 'type': bridge['type'],
-                # what that side says: the sentence a reader gets is "this concept is also used there, and there
-                # it says ..." (the canonical card names the narrow card, the narrow card the canonical one)
-                **({'essence': _clip(essence_of(other.body), 160)} if other is not None else {})}
-
-    out = [show(b['target'], b['domain'], b)
-           for b in bridges.crossing(card.fm.get('relations'), domain_of.get, card.domain)
-           if isinstance(b.get('target'), str)]
-    seen = {b['target'] for b in out}
-    for other in snapshot.cards.values():  # the other end: it names this card, in its own domain
-        if other.id == card.id or other.domain == card.domain or other.id in seen:
-            continue
-        for b in bridges.crossing(other.fm.get('relations'), domain_of.get, other.domain):
-            if b['target'] == card.id:
-                out.append(show(other.id, other.domain, b))
-                seen.add(other.id)
-                break
-    return out
 
 
 def _down(card) -> list[tuple[str, str]]:
@@ -212,7 +169,8 @@ def build(snapshot, anchor: dict, *, depth: int = 3, max_children: int = 5, max_
         tax = snapshot.taxonomies.get(meta.get('moc')) or {}
         why = next((p.get('why', '') for p in tax.get('pillars') or [] if isinstance(p, dict) and p.get('name') == name), '')
         count = sum(1 for c in snapshot.cards.values() if c.domain == d and c.fm.get('pillar') == name)
-        return add('pillar', parent, title=name, domain=d, why=why, cards=count)
+        held = crossref.pointed_from(snapshot, d, name)
+        return add('pillar', parent, title=name, domain=d, why=why, cards=count, **({'pointed': held} if held else {}))
 
     def ordered(ids):
         if not order_index:
@@ -482,19 +440,35 @@ def _once(page, text) -> str:
     return ''.join(out)
 
 
-def _bridge_words(w, node) -> list[str]:
-    """One sentence per bridge or pointer of a card node: which domain also uses this concept, and what it says there.
+def _without_stop(text: str) -> str:
+    """``text`` without the full stops (and spaces) at its end, so that a sentence joined to another by a separator
+    does not read ``.;``."""
+    while text and (text[-1].isspace() or unicodedata.name(text[-1], '') in ('FULL STOP', 'IDEOGRAPHIC FULL STOP')):
+        text = text[:-1]
+    return text
 
-    A bridge says what the narrow card of the other domain says (its essence); a pointer says that the other
-    domain has no description of its own and points here (:mod:`secondbrain.pointers`).
+
+def _bridge_words(w, node) -> list[str]:
+    """One sentence per bridge or pointer of a node: which domain also uses this concept, and what it says there.
+
+    A bridge says what the narrow card of the other domain says (its essence) and, when the bridge has one, where
+    the two differ; a pointer says that the other domain has no description of its own and points here
+    (:mod:`secondbrain.pointers`). A pillar that holds a concept of another domain only as a pointer says which
+    one and what its card says. The program puts these sentences together from the cards and the pointer rows; the
+    writer's text is not asked for them, so they cannot be left out or changed.
     """
     out = []
     for b in node.get('bridges') or []:
         where = b.get('domain_title') or b.get('domain') or ''
         says = b.get('essence') or b.get('title') or ''
-        out.append((w['bridge_same'] if b.get('strength') == 'same' else w['bridge_close']) % (where, says))
+        line = (w['bridge_same'] if b.get('strength') == 'same' else w['bridge_close']) % (where, says)
+        if b.get('note'):
+            line = _without_stop(line) + w['cross_sep'] + w['bridge_diff'] % b['note']
+        out.append(line)
     for where in node.get('pointers') or []:
         out.append(w['pointer_note'] % where)
+    for p in node.get('pointed') or []:
+        out.append(w['pointer_here'] % (p['title'], p.get('domain_title') or p.get('domain') or '', p.get('essence') or ''))
     return out
 
 
@@ -519,7 +493,7 @@ def to_markdown(page: dict) -> str:
             parent_pillar = page['nodes'][n['parent']].get('pillar')
             if n['pillar'] != parent_pillar:
                 where = w['elsewhere'] % n['pillar']
-        lines = ''.join(f" {line}" for line in _bridge_words(w, n))
+        lines = ''.join(w['wrap'] % line for line in _bridge_words(w, n))
         out.extend([f"{head} {number} {w[n['kind']]} · {n['title']}{where}{lines}", ''])
         if n.get('unresolved'):
             out.extend([f"> {w['unreviewed'] % n['unresolved']}", ''])
@@ -534,12 +508,16 @@ def to_markdown(page: dict) -> str:
         n = page['nodes'][step['node']]
         if step['kind'] == 'card':
             out.append(f"{i}. **{w['card']} · {n['title']}**")
+            for line in _bridge_words(w, n):  # the cross-domain line of the way back up
+                out.append(f"   - {w['cross']}{w['qa_sep']}{line}")
             for fc in n.get('flashcards') or []:
                 out.append(f"   - {w['q']}{w['qa_sep']}{fc.get('q', '')}")
                 out.append(f"     {w['a']}{w['qa_sep']}{fc.get('a', '')}")
         else:
             out.append(f"{i}. **{w['back'] % n['title']}**")
             out.append(f"   {_md_text(page, n['recap'])}")
+            for line in _bridge_words(w, n) if n['kind'] != 'card' else ():  # a card's own line stands at its step
+                out.append(f"   - {w['cross']}{w['qa_sep']}{line}")
         out.append('')
     return '\n'.join(out).rstrip() + '\n'
 
@@ -563,7 +541,7 @@ details{border-left:2px solid var(--line);margin:8px 0 8px 4px;padding:2px 0 2px
 summary{cursor:pointer;list-style:none}summary::-webkit-details-marker{display:none}summary::before{content:"▸ ";color:var(--muted)}details[open]>summary::before{content:"▾ "}
 .kind{display:inline-block;font-size:.75rem;color:var(--accent);border:1px solid var(--accent);border-radius:4px;padding:0 5px;margin-right:6px;vertical-align:1px}
 .title{font-weight:600}.where{color:var(--muted);font-size:.9rem}.explain{margin:4px 0}.recap{background:var(--soft);padding:6px 10px;border-radius:6px;margin:6px 0}
-.seen{color:var(--muted);margin:6px 0}.warn{color:var(--warn);font-size:.9rem}.more{color:var(--muted);font-size:.9rem}a.ref{color:var(--accent);text-decoration:none;border-bottom:1px dotted}
+.cross{color:var(--muted);font-size:.9rem;margin:6px 0}.seen{color:var(--muted);margin:6px 0}.warn{color:var(--warn);font-size:.9rem}.more{color:var(--muted);font-size:.9rem}a.ref{color:var(--accent);text-decoration:none;border-bottom:1px dotted}
 .step{border:1px solid var(--line);border-radius:10px;padding:16px;min-height:180px}.step.back{background:var(--soft)}.count{color:var(--muted);font-size:.9rem;margin-bottom:6px}
 .qa{margin:10px 0}.q{font-weight:600}.a{display:none;margin-top:4px}.a.on{display:block}.nav{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap}
 .nav button,.showa{border:1px solid var(--line);background:none;color:var(--fg);padding:6px 14px;border-radius:8px;cursor:pointer;font:inherit}
@@ -584,6 +562,12 @@ show(0);
 """
 
 
+def _html_cross(w, node) -> str:
+    """The cross-domain lines of a step of the review path, shown with the step (a line of its own, not folded)."""
+    return ''.join(f'<div class="cross">{html_lib.escape(w["cross"] + w["qa_sep"] + line)}</div>'
+                   for line in _bridge_words(w, node))
+
+
 def to_html(page: dict) -> str:
     w = labels.explain(page['language'])
     esc = html_lib.escape
@@ -602,7 +586,7 @@ def to_html(page: dict) -> str:
         opened = ' open' if n['depth'] <= 2 else ''
         parts.append(f'<details id="{nid}"{opened}><summary><span class="kind">{esc(w[n["kind"]])}</span>'
                      f'<span class="title">{esc(n["title"])}</span>{where}'
-                     + ''.join(f' <span class="where bridge">{esc(line)}</span>' for line in _bridge_words(w, n))
+                     + ''.join(f' <span class="where bridge">{esc(w["wrap"] % line)}</span>' for line in _bridge_words(w, n))
                      + '</summary>')
         if n.get('unresolved'):
             parts.append(f'<p class="warn">{esc(w["unreviewed"] % n["unresolved"])}</p>')
@@ -629,11 +613,13 @@ def to_html(page: dict) -> str:
             if not qa:
                 qa = f'<div class="qa"><div class="a">{_html_text(page, n["explain"])}</div></div>'
             steps.append(f'<div class="step" hidden><div class="count">{esc(w["step"] % (i, total))}</div>'
-                         f'<div><span class="kind">{esc(w["card"])}</span><b>{esc(n["title"])}</b></div>{qa}{nav}</div>')
+                         f'<div><span class="kind">{esc(w["card"])}</span><b>{esc(n["title"])}</b></div>'
+                         f'{_html_cross(w, n)}{qa}{nav}</div>')
         else:
             steps.append(f'<div class="step back" hidden><div class="count">{esc(w["step"] % (i, total))}</div>'
                          f'<div class="q">↑ {esc(w["back"] % n["title"])}</div>'
-                         f'<div class="a">{_html_text(page, n["recap"])}</div>{nav}</div>')
+                         f'<div class="a">{_html_text(page, n["recap"])}</div>'
+                         f'{_html_cross(w, n) if n["kind"] != "card" else ""}{nav}</div>')
     lang = 'zh-CN' if page['language'] == 'zh' else 'en'
     return f"""<!doctype html>
 <html lang="{lang}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">

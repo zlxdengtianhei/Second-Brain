@@ -467,7 +467,8 @@ These commands use the same produce, review and gate pattern on cards that are a
 | `sb backlog` | runs classification over a whole domain or vault in batches |
 | `sb curate --domain <slug>` | proposes changes to the pillars and topics of existing domains; for a topic past 25 cards it gets a proposal of how to split it ([above](#what-waits-for-you)) |
 | `sb relocate --source-job <job>` | moves cards to another domain when a classification review suggested it |
-| `sb domcreate --domain <slug> ...` | proposes a new domain from cards that already exist |
+| `sb repillar --advice <job>` | files cards under another pillar of their domain: a reviewed split advice, or cards named with `--ids … --to <pillar>` ([explain.md](explain.md#carrying-out-a-split-sb-repillar)) |
+| `sb domcreate --domain <slug> ...` | proposes a new domain from cards that already exist; a pillar its moves leave without cards is removed in the same transaction |
 | `sb resume --job <job>` | continues one of these jobs |
 | `sb export --domain <slug>` | writes one map's cards up as an article ([export.md](export.md)) |
 | `sb docs --apply` | regenerates the entry page `HOME.md` (and the generated blocks of `[layout] entry_docs`) |

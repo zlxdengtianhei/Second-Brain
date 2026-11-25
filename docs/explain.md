@@ -47,6 +47,30 @@ Nothing is split: the advice is kept with the job, and `sb status` shows it in t
 (`advice`) until the pillar's cards or links change; before that the entry names the command (`advise`). The vault
 grows sideways (pillars into pillars, a part into a new domain) and keeps three levels.
 
+### Carrying out a split: `sb repillar`
+
+`sb repillar` files cards under another pillar of their own domain. It carries out a reviewed `split_pillars` advice,
+or moves cards the owner names:
+
+```sh
+sb repillar --advice <job>                                   # plan: the advice's groups into its new pillars
+sb repillar --advice <job> --apply                           # one recoverable transaction
+sb repillar --ids <id> <id> --to <pillar> [--why "<text>"]   # by hand; a new pillar needs --why
+sb repillar --plan <file.json>                               # {"pillars": [{"name", "why", "ids"}]}
+sb recover <job> --rollback                                  # every byte back
+```
+
+It takes an advice only when its review accepted it and while the pillar's cards and links are the ones it judged;
+otherwise it names the `sb advise` command to ask again. A card that no group took (`scattered`) stays where it was
+(`kept_in_place`). The command judges no meaning and asks no model. One transaction changes only: the `pillar` line
+of each moved card (and its `topic` line, when it had one; every other byte stays, and the plan checks the card line
+by line), the same fields of the registry notes, the taxonomy file, the map pages, `HOME.md`, and today's review page
+when there is one. A new pillar files its cards directly and stands where the pillar its cards came from stood; the
+pillars after it move down one number. A pillar that the move leaves without cards is removed with its page; a
+pillar that had no cards before stays. When a page the program does not write still names a page that the move
+removes or renumbers, nothing is written and the result names the files. `sb relocate` moves cards to another
+domain; `sb domcreate` makes a new domain and removes, in the same transaction, the pillars its moves leave empty.
+
 ## The graph of pillars
 
 A card sits under one pillar, so the pillars of a map form a list. The relations of the cards cross pillars and
@@ -81,9 +105,14 @@ The pages (Markdown and HTML, in `[layout] articles/explain/` or `--out`) have t
 
 - the drill-down, top to bottom (the HTML folds each level); a card that is one end of a bridge says in its line
   which other domain also uses the concept and what that side says (`same_concept_as`, or `similar_to` for a close
-  one: the narrow card's essence), and a card that another domain points at says so (the description stands here);
+  one: the narrow card's essence, and where the two differ when the bridge says so), and a card that another domain
+  points at says so (the description stands here); a pillar that holds a concept of another domain only as a pointer
+  says which card stands where. The program adds these lines from the cards and the pointer rows; the writer's text
+  is not asked for them;
 - the review path, bottom to top: the reviewed questions of the cards, prerequisites first, and after each group of
-  children a step back up to their parent with its recap, ending at the domain.
+  children a step back up to their parent with its recap, ending at the domain. A card that a bridge or a pointer
+  ties to another domain carries the same line at its step ("Across domains: ..."), so the review ties the concept
+  to where else it is used.
 
 Nothing is written into the knowledge folders.
 
@@ -91,4 +120,6 @@ Nothing is written into the knowledge folders.
 
 The daily review page (`sb today`, `sb daily`) ends with *After these cards, back up to the higher level*: for each
 pillar of today's cards, what the pillar answers, the recap of its newest whole-pillar explanation (`sb explain
---pillar`), and how today's cards of that pillar connect.
+--pillar`), and how today's cards of that pillar connect. When one of those cards has a bridge or a pointer, a line
+"Across domains" says which card of the other domain it is, how that side differs, or that the other domain only points
+here; a pillar that holds a concept of another domain only as a pointer says so too.

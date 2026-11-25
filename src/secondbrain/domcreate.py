@@ -6,12 +6,15 @@ submits a proposal (taxonomy, cards to move, relation words, arguments for the
 boundary and the impact), and after an independent review accepts it this
 module only writes: the domain and relation words in catalog.json, the pillar
 taxonomy, each moved card (only domain, pillar, topic and the flashcards tag
-change; body and review data stay), the registry and the affected maps. Models
+change; body and review data stay), the registry and the affected maps; a pillar of
+an existing map that the moves leave without cards is taken out of its taxonomy and its page removed, in the same
+transaction (`sb recover <job> --rollback` puts it back with the rest). Models
 write and review the proposal; the writes make no judgement of meaning.
 """
 from __future__ import annotations
 
 import json
+from collections import Counter
 from dataclasses import replace
 from pathlib import Path
 
@@ -20,6 +23,7 @@ from . import layout as layouts
 from .catalog import validate_catalog
 from .classification import writable_snapshot
 from .curation import _normalise_taxonomy, _projection_changes, _serialise_taxonomy
+from .flatten import referrers, stale_pages
 from .relocate import _relocated_bytes, _registry_change
 from .schemas import AnswerError
 from .levels import is_flat, normalise_taxonomy
@@ -173,6 +177,34 @@ def check_review(packet: dict, candidate: dict, review: dict) -> dict:
     return review
 
 
+def _emptied_pillars(snapshot, updated: dict) -> tuple[dict, dict, dict]:
+    """The pillars of the existing maps that the moves leave without cards, taken out of their taxonomies.
+
+    Returns ``(removed, kept, taxonomies)``: ``{map: [pillar]}`` removed, ``{map: [pillar]}`` kept because it is the
+    map's last pillar, and the changed taxonomies by map. A pillar that had no card before is the owner's and stays.
+    """
+    moc_of = {d: m.get('moc') for d, m in (snapshot.catalog.get('domains') or {}).items() if isinstance(m, dict)}
+    before = Counter((moc_of.get(c.domain), c.fm.get('pillar')) for c in snapshot.cards.values())
+    after = Counter((moc_of.get(c.domain), c.fm.get('pillar')) for c in updated.values())
+    removed, kept, taxonomies = {}, {}, {}
+    for moc in sorted({m for m, _ in before if m}):
+        tax = snapshot.taxonomies.get(moc)
+        if not isinstance(tax, dict) or not isinstance(tax.get('pillars'), list):
+            continue
+        names = [p.get('name') for p in tax['pillars'] if isinstance(p, dict)]
+        empty = [n for n in names if before[(moc, n)] > 0 and after[(moc, n)] == 0]
+        if not empty:
+            continue
+        if len(empty) == len(names):  # a map keeps one pillar
+            kept[moc], empty = empty[:1], empty[1:]
+            if not empty:
+                continue
+        removed[moc] = empty
+        taxonomies[moc] = {**tax, 'pillars': [p for p in tax['pillars']
+                                              if not (isinstance(p, dict) and p.get('name') in empty)]}
+    return removed, kept, taxonomies
+
+
 def apply(root: Path, job_id: str) -> dict:
     from .moc import build_mocs
     state = jobs.load(root, job_id)
@@ -237,15 +269,31 @@ def apply(root: Path, job_id: str) -> dict:
     if moved:
         changes.append(_registry_change(root, moved))
 
+    emptied, kept, taxonomies = _emptied_pillars(snapshot, updated)
+    for moc, tax in taxonomies.items():
+        rel = lay.taxonomy_path(moc)
+        raw = read_bytes(root, rel)
+        changes.append(Change(rel, None if raw is None else digest(raw), _serialise_taxonomy(tax)))
+
     projected = replace(snapshot, cards=updated, catalog=new_catalog,
-                        taxonomies={**snapshot.taxonomies, packet['moc']: new_taxonomy})
-    projection = build_mocs(projected, affected_domains=affected)
+                        taxonomies={**snapshot.taxonomies, **taxonomies, packet['moc']: new_taxonomy})
+    # a removed pillar's page may be named by any map (how the pillars connect), so then every map is rebuilt
+    projection = build_mocs(projected, affected_domains=None if taxonomies else affected)
     changes.extend(_projection_changes(root, projection))
+    stale = [c for moc in sorted(taxonomies) for c in stale_pages(root, moc, projection)]
+    linked = referrers(root, [c.relative_path for c in stale], projection.files)
+    if linked:
+        shown = '; '.join(f'{page} ← {", ".join(files)}' for page, files in linked.items())
+        raise Conflict(f'pages of the pillars this move empties are still named by files the program does not '
+                       f'write: {shown}. Change those links first.')
+    changes.extend(stale)
 
     return jobs.finish_transaction(root, job_id,
         {'status': 'applied', 'pending': [], 'created_domain': domain,
          'moc': packet['moc'], 'migrations': len(proposal['migrations']),
          'relation_words': [w['type'] for w in proposal.get('relation_words') or []],
+         'pillars_removed': emptied, 'empty_pillars_kept': kept,
+         'pages_removed': [c.relative_path for c in stale],
          'projection_metrics': projection.metrics,
          'checks_summary': {'catalog_domains': len(new_catalog.get('domains') or {}),
                             'affected_domains': sorted(affected)}}, changes)
